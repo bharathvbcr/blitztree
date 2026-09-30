@@ -188,9 +188,17 @@ struct CleanupPanel: View {
         }
     }
 
-    /// One click starts Claude Code or Codex in the background; the menu picks which.
+    /// One click starts Claude Code or Codex in the background; the menu picks
+    /// which, or sets up and signs in the one that isn't ready yet.
     @ViewBuilder private var agentButton: some View {
-        if let agent {
+        if let setup = model.agentSetup {
+            SetupProgress(setup: setup) {
+                setup.cancel()
+                model.agentSetup = nil
+            } retry: {
+                model.setUp(setup.kind)
+            }
+        } else if let agent {
             HStack(spacing: 6) {
                 Button {
                     model.startAgent(agent)
@@ -201,27 +209,36 @@ struct CleanupPanel: View {
                 .buttonStyle(.borderedProminent)
                 .controlSize(.large)
                 .help("\(agent.kind.name) reads this scan and suggests what can go. Nothing is removed until you say so.")
-                if model.agentEnv.ready.count > 1 || !model.providerStore.providers.isEmpty {
-                    Menu {
-                        ForEach(model.agentEnv.ready) { other in
-                            Button("Clean up with \(other.kind.name)") { model.startAgent(other) }
-                        }
-                        if !model.providerStore.providers.isEmpty {
-                            Divider()
-                            ForEach(model.providerStore.providers) { provider in
-                                Button("Clean up with \(provider.displayName)") { model.startProvider(provider) }
+                Menu {
+                    ForEach(model.agentEnv.ready) { other in
+                        Button("Clean up with \(other.kind.name)") { model.startAgent(other) }
+                    }
+                    let notReady = AgentKind.allCases.filter { kind in !model.agentEnv.ready.contains { $0.kind == kind } }
+                    if !notReady.isEmpty {
+                        Divider()
+                        ForEach(notReady, id: \.self) { kind in
+                            if model.agentEnv.agents.contains(where: { $0.kind == kind }) {
+                                Button("Sign in to \(kind.name)") { model.setUp(kind) }
+                            } else {
+                                Button("Set up \(kind.name)") { model.setUp(kind) }
                             }
                         }
-                    } label: {
-                        Image(systemName: "chevron.down")
                     }
-                    .menuStyle(.button)
-                    .menuIndicator(.hidden)
-                    .buttonStyle(.bordered)
-                    .controlSize(.large)
-                    .fixedSize()
-                    .help("Choose the agent")
+                    if !model.providerStore.providers.isEmpty {
+                        Divider()
+                        ForEach(model.providerStore.providers) { provider in
+                            Button("Clean up with \(provider.displayName)") { model.startProvider(provider) }
+                        }
+                    }
+                } label: {
+                    Image(systemName: "chevron.down")
                 }
+                .menuStyle(.button)
+                .menuIndicator(.hidden)
+                .buttonStyle(.bordered)
+                .controlSize(.large)
+                .fixedSize()
+                .help("Choose the agent")
             }
             .disabled(model.tree == nil || model.scanning)
         } else if let provider = model.preferredProvider ?? model.providerStore.providers.first {
@@ -240,13 +257,6 @@ struct CleanupPanel: View {
             .controlSize(.large)
             .disabled(model.tree == nil || model.scanning)
             .help("\(provider.displayName) reads this scan and suggests what can go. Nothing is removed until you say so.")
-        } else if let setup = model.agentSetup {
-            SetupProgress(setup: setup) {
-                setup.cancel()
-                model.agentSetup = nil
-            } retry: {
-                model.setUp(setup.kind)
-            }
         } else if model.agentEnv.loaded {
             setupOffer
         }
