@@ -162,21 +162,32 @@ struct CleanupIntegrationChecks {
         let sibling = try directory("work/app-other")
         for path in [modules, project] { try fm.setAttributes([.modificationDate: old], ofItemAtPath: path) }
         let claudeConfig = fixture.appendingPathComponent("claude-config")
-        let sessions = claudeConfig.appendingPathComponent("projects/-work-app")
-        try fm.createDirectory(at: sessions, withIntermediateDirectories: true)
         setenv("CLAUDE_CONFIG_DIR", claudeConfig.path, 1)
         defer { unsetenv("CLAUDE_CONFIG_DIR") }
-        func session(_ cwd: String, modified: Date = Date()) throws {
-            let file = sessions.appendingPathComponent("\(UUID().uuidString).jsonl")
+        // Claude Code files a session under a folder named after the working
+        // folder it started in; subagent and worktree sessions go under the
+        // parent session's folder, which can be an ancestor of their cwd.
+        func session(_ cwd: String, filedUnder started: String, modified: Date = Date()) throws {
+            let encoded = String(String.UnicodeScalarView(started.unicodeScalars.map {
+                CharacterSet.alphanumerics.contains($0) && $0.isASCII ? $0 : "-"
+            }))
+            let folder = claudeConfig.appendingPathComponent("projects/\(encoded)/\(UUID().uuidString)/subagents")
+            try fm.createDirectory(at: folder, withIntermediateDirectories: true)
+            let file = folder.appendingPathComponent("\(UUID().uuidString).jsonl")
             try Data("{\"type\":\"user\",\"cwd\":\"\(cwd)\"}\n".utf8).write(to: file)
             try fm.setAttributes([.modificationDate: modified], ofItemAtPath: file.path)
         }
         precondition(!CleanupGuard.recentlyUsed(modules), "no session: stale project is not in use")
-        try session(sibling)
-        try session(project, modified: old)
-        precondition(!CleanupGuard.recentlyUsed(modules), "sibling prefix or stale session does not count")
-        try session(project + "/src")
+        try session(sibling, filedUnder: sibling)
+        try session(project, filedUnder: project, modified: old)
+        try session(home + "/elsewhere", filedUnder: home)
+        precondition(!CleanupGuard.recentlyUsed(modules), "sibling prefix, stale or unrelated session does not count")
+        try session(project + "/src", filedUnder: project)
         precondition(CleanupGuard.recentlyUsed(modules), "Claude Code session inside the project counts as use")
+        try fm.removeItem(at: claudeConfig)
+        precondition(!CleanupGuard.recentlyUsed(modules))
+        try session(project + "/.claude/worktrees/agent", filedUnder: home + "/work")
+        precondition(CleanupGuard.recentlyUsed(modules), "a session filed under an ancestor folder counts as use")
         print("PASS: scanned plans, final action changes, guarded moves, receipt identity and partial removal")
     }
 }
