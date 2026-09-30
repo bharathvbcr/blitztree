@@ -1,0 +1,44 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  engine:
+    name: Rust engine
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - run: cargo test --release
+      - run: cargo build --release
+
+  cli:
+    name: CLI tests
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: python -m pip install pytest
+      - run: cargo build --release --features cli
+      - run: pytest tests/ -v
+
+  swift:
+    name: Swift build
+    runs-on: macos-15 # Swift 6.1+ for -default-isolation; macos-14 pins Xcode 16.2
+    continue-on-error: true # full compatibility needs Xcode 26; allow older Xcode to fail
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - run: |
+          # The image pins an older default Xcode; the newest one installed
+          # has the Swift 6.1+ that build.sh probes for.
+          LATEST=$(ls -d /Applications/Xcode*.app | sort -V | tail -1)
+          echo "Selecting $LATEST"
+          sudo xcode-select -s "$LATEST/Contents/Developer"
+      - run: ./build.sh

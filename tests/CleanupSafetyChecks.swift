@@ -62,6 +62,21 @@ enum CleanupSafetyChecks {
             }
         }
 
+        // Persistence folders block recursively: no named subfolder is a cache.
+        for relative in ["Library/LaunchAgents", "Library/LaunchAgents/com.example.agent",
+                         "Library/Fonts/node_modules", "Library/Application Scripts/com.example"] {
+            let persistence = home.appendingPathComponent(relative, isDirectory: true)
+            try fm.createDirectory(at: persistence, withIntermediateDirectories: true)
+            expectRejected("persistence folder \(relative)") {
+                _ = try CleanupPathSafety.capture(path: persistence.path, root: home.path, home: home.path)
+            }
+        }
+        let namedCache = home.appendingPathComponent("Library/Caches/com.example.tool", isDirectory: true)
+        try fm.createDirectory(at: namedCache, withIntermediateDirectories: true)
+        expectAllowed("named cache subfolder") {
+            _ = try CleanupPathSafety.capture(path: namedCache.path, root: home.path, home: home.path)
+        }
+
         let mediaArtifact = home.appendingPathComponent("Pictures/project/node_modules", isDirectory: true)
         try fm.createDirectory(at: mediaArtifact, withIntermediateDirectories: true)
         expectRejected("media protected root") {

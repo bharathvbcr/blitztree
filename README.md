@@ -22,6 +22,8 @@ Signed with a Developer ID and notarized by Apple, so it opens like any other ap
 - Zoom into folders, reveal in Finder, or move to Trash (with confirmation)
 - Clean Up panel: finds folders that are safe to delete (caches, `node_modules`, Rust `target`, Xcode DerivedData and more) so you can trash them in one go
 - AI cleanup: click "Clean up with Claude Code" (or Codex) and your own agent plans what can go, live in the panel, while the treemap lights up those folders. BlitzTree does the cleanup itself, in two steps you approve: move to Trash, then delete for good. No agent installed? One click sets up Codex (free with a ChatGPT account) or Claude Code
+- Or clean up with any model: Settings → Model Providers connects any OpenAI- or Anthropic-compatible endpoint — a relay, a self-hosted server (Ollama, LM Studio) or a gateway — by its base URL, protocol and key
+- English, Türkçe, Deutsch, Français, Español, 简体中文 and 日本語, picked in Settings; the agent prompt stays English while the UI follows you
 - Live progress while scanning, and an optional free-space block
 - Native AppKit/SwiftUI, with the Liquid Glass design on macOS 26 and later
 - No telemetry. BlitzTree itself only goes online to check GitHub for updates once a day (installed when you quit); the AI cleanup only runs when you click it, using your own agent, which sends folder paths and sizes from the scan (never file contents) to Anthropic or OpenAI
@@ -53,6 +55,21 @@ The agent runs headless and read-only: it only writes a plan from the scan Blitz
 - Codex chats and projects you used in the last 2 days are left alone
 - Caches of apps that are open are skipped until you quit them
 - "Delete for good" removes only what this cleanup moved to the Trash
+
+## Trust & permissions
+
+BlitzTree asks for Full Disk Access so the scan can read every folder on the
+disk, including the system-protected ones that normally stay out of reach.
+Everything it launches — the agent CLIs and each allowlisted cleanup command —
+inherits that same grant while it runs. The agent CLIs' own sandbox settings
+are a CLI-level policy, not an OS guarantee for anything they spawn.
+
+Cleanup commands (`uv cache clean`, `brew cleanup` and so on) are resolved
+through the shell's PATH, by design: these tools live in Homebrew, `~/.local/bin`,
+nvm and other tool-manager locations, and BlitzTree does not guess where they
+are installed. Only commands matching a small allowlist of tool-specific
+cleanup invocations are ever run, but what runs is whatever the PATH resolves —
+the trust in your own PATH is residual.
 
 ## Build from source
 

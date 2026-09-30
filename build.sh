@@ -31,6 +31,12 @@ rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources" "$APP/Contents/Frameworks"
 
 echo "==> Swift UI"
+# -default-isolation needs Swift 6.1 (Xcode 16.3+). Probe it.
+if ! echo 'func bzProbe() {}' | swiftc -swift-version 6 -default-isolation MainActor -typecheck - >/dev/null 2>&1; then
+    echo "error: the installed Swift predates 6.1 and cannot build the UI;" >&2
+    echo "       default-MainActor isolation needs Xcode 16.3 or newer." >&2
+    exit 1
+fi
 swiftc app/*.swift \
     -import-objc-header app/bz.h \
     -O -parse-as-library -swift-version 6 -default-isolation MainActor \
@@ -66,6 +72,7 @@ cat > "$APP/Contents/Info.plist" <<EOF
     <key>SUPublicEDKey</key><string>WtmMufGnr61vIAeONfQ4650BqnlBZ1uuD1gmngkX+os=</string>
     <key>SUEnableAutomaticChecks</key><true/>
     <key>SUAutomaticallyUpdate</key><true/>
+    <key>CFBundleDevelopmentRegion</key><string>en</string>
 </dict>
 </plist>
 EOF
@@ -76,6 +83,11 @@ echo -n 'APPL????' > "$APP/Contents/PkgInfo"
 xcrun actool "$PWD/assets/AppIcon.icon" --compile "$PWD/$APP/Contents/Resources" \
     --platform macosx --target-device mac --minimum-deployment-target $MIN_MACOS \
     --app-icon AppIcon --output-partial-info-plist "$PWD/build/icon-partial.plist" >/dev/null
+
+# Classic .lproj Localizable.strings tables (swiftc, no Xcode build system).
+for LPROJ in app/*.lproj; do
+    cp -R "$LPROJ" "$APP/Contents/Resources/"
+done
 
 # Prefer a real identity: stable code requirement -> TCC/FDA grants survive
 # rebuilds. Developer ID (paid program) with the hardened runtime and a secure

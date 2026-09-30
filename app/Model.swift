@@ -183,15 +183,49 @@ final class ScanModel {
     /// The first scan after launch opens the Clean Up panel once.
     private var panelOpenedAfterLaunch = false
 
-    /// The agent to use: the one picked last, else Claude Code, else Codex.
+    /// Custom providers, for the panel's picker menu. Shared store: settings
+    /// edits land here immediately, no refresh wiring needed.
+    var providerStore: ProviderStore { ProviderStore.shared }
+
+    /// The planner for the Clean Up panel. `bz.engine` names it: a CLI agent
+    /// ("claude", "codex") or a custom provider ("provider:<id>"). Default:
+    /// the named agent if ready, else Claude Code, else Codex.
     var preferredAgent: InstalledAgent? {
         let ready = agentEnv.ready
-        let picked = UserDefaults.standard.string(forKey: "bz.agent")
+        let picked = UserDefaults.standard.string(forKey: "bz.engine") ?? UserDefaults.standard.string(forKey: "bz.agent")
+        if picked?.hasPrefix("provider:") == true { return nil }
         return ready.first { $0.kind.rawValue == picked } ?? ready.first { $0.kind == .claude } ?? ready.first
+    }
+
+    /// The provider picked in Settings, when `bz.engine` names one.
+    var preferredProvider: LLMProvider? {
+        guard let picked = UserDefaults.standard.string(forKey: "bz.engine"),
+              picked.hasPrefix("provider:") else { return nil }
+        let id = String(picked.dropFirst("provider:".count))
+        return ProviderStore.shared.providers.first { $0.id == id }
+    }
+
+    /// Start the cleanup with whatever the user picked in Settings.
+    func startCleanup() {
+        if let provider = preferredProvider { startProvider(provider) }
+        else if let agent = preferredAgent { startAgent(agent) }
+    }
+
+    func startProvider(_ provider: LLMProvider) {
+        guard let tree, !scanning else { return }
+        UserDefaults.standard.set("provider:\(provider.id)", forKey: "bz.engine")
+        agentRun?.cancel()
+        let run = AgentRun(agent: nil, env: agentEnv, tree: tree, scanRoot: scanRoot,
+                           known: cleanup, provider: provider) { [weak self] in
+            guard let self, !self.scanning else { return }
+            self.startScan()
+        }
+        withAnimation(.snappy) { agentRun = run }
     }
 
     func startAgent(_ agent: InstalledAgent) {
         guard let tree, !scanning, !cleanupTrash.running else { return }
+        UserDefaults.standard.set(agent.kind.rawValue, forKey: "bz.engine")
         UserDefaults.standard.set(agent.kind.rawValue, forKey: "bz.agent")
         agentRun?.cancel()
         let run = AgentRun(agent: agent, env: agentEnv, tree: tree, scanRoot: scanRoot, known: cleanup) { [weak self] in
@@ -209,7 +243,14 @@ final class ScanModel {
         panelOpenedAfterLaunch = true
         panelRequests += 1
         // QA only: BZ_QA_SETUP=claude|codex presses the setup button.
-        if preferredAgent == nil, let kind = ProcessInfo.processInfo.environment["BZ_QA_SETUP"].flatMap(AgentKind.init) { setUp(kind) }
+        if preferredAgent == nil, preferredProvider == nil, ProviderStore.shared.providers.isEmpty, let kind = ProcessInfo.processInfo.environment["BZ_QA_SETUP"].flatMap(AgentKind.init) { setUp(kind) }
+    }
+
+    /// Run the same cleanup again: whatever produced this run (CLI agent or
+    /// provider), re-planned from the current scan.
+    func restart(_ run: AgentRun) {
+        if let provider = run.provider { startProvider(provider) }
+        else if let agent = run.agent { startAgent(agent) }
     }
 
     /// Bumped to ask the window to open the Clean Up panel.

@@ -198,10 +198,20 @@ final class AgentSetup {
             // Anthropic's own installer: everything under ~/.local, no sudo.
             return "curl -fsSL https://claude.ai/install.sh | bash"
         case .codex:
-            // OpenAI's standalone build: no Node needed.
+            // OpenAI's standalone build: no Node needed. The version and its
+            // SHA-256 are pinned so a new upstream release cannot change what
+            // gets installed silently (S5). To update the pin: set VER to the
+            // wanted release tag (github.com/openai/codex/releases), download
+            // the codex-aarch64-apple-darwin.tar.gz of that release once,
+            // run `shasum -a 256` on it, and paste the hash below.
             return """
             set -e; t=$(mktemp -d); mkdir -p "$HOME/.local/bin"
-            curl -fsSL https://github.com/openai/codex/releases/latest/download/codex-aarch64-apple-darwin.tar.gz | tar -xz -C "$t"
+            VER="0.157.1"
+            URL="https://github.com/openai/codex/releases/download/rust-v$VER/codex-aarch64-apple-darwin.tar.gz"
+            curl -fsSL "$URL" -o "$t/codex.tar.gz"
+            # SHA-256 of codex-aarch64-apple-darwin.tar.gz for $VER.
+            echo "3c45b162b7a76f51325015b1d0a8112c73219b7a9b59cd5762c37c9ba55894fa  $t/codex.tar.gz" | shasum -a 256 -c - || { echo "Codex download failed the checksum check; nothing was installed." >&2; rm -rf "$t"; exit 1; }
+            tar -xzf "$t/codex.tar.gz" -C "$t"
             mv "$t/codex-aarch64-apple-darwin" "$HOME/.local/bin/codex"; rm -rf "$t"
             """
         }
@@ -236,93 +246,6 @@ final class AgentSetup {
         }
         self.process = nil
         return process.terminationStatus == 0 ? nil : (tail.last.isEmpty ? "exit \(process.terminationStatus)" : tail.last)
-    }
-}
-
-// MARK: - The plan
-
-nonisolated struct PlanItemSpec: Decodable, Sendable, Equatable {
-    let title: String
-    let detail: String
-    let group: String
-    let bytes: Int64
-    let paths: [String]
-    let action: String
-    let command: String
-}
-
-/// The JSON shape both agents must answer in (Claude: --json-schema, Codex:
-/// --output-schema; strict, so every field is required).
-nonisolated let planSchema = """
-{"type":"object","additionalProperties":false,"required":["summary","items"],"properties":{\
-"summary":{"type":"string"},"items":{"type":"array","items":{"type":"object","additionalProperties":false,\
-"required":["title","detail","group","bytes","paths","action","command"],"properties":{\
-"title":{"type":"string"},"detail":{"type":"string"},"group":{"type":"string","enum":["safe","ask"]},\
-"bytes":{"type":"integer"},"paths":{"type":"array","items":{"type":"string"}},\
-"action":{"type":"string","enum":["trash","command"]},"command":{"type":"string"}}}}}}
-"""
-
-/// Pulls finished item objects out of the plan JSON while it is still being
-/// written, so cards appear one by one instead of all at the end.
-nonisolated struct PartialPlanParser {
-    private(set) var hasInput = false
-    private static let itemsKey = Array("\"items\"".utf8)
-    private var keyBytes = 0
-    private var foundKey = false
-    private var inItems = false
-    private var finished = false
-    private var depth = 0
-    private var inString = false
-    private var escaped = false
-    private var object: [UInt8] = []
-
-    mutating func append(_ chunk: String) -> [PlanItemSpec] {
-        hasInput = hasInput || !chunk.isEmpty
-        guard !finished else { return [] }
-        var fresh: [PlanItemSpec] = []
-        // Only inspect the new bytes. State survives arbitrary delta
-        // boundaries, including a key, escape, or unfinished item.
-        for c in chunk.utf8 {
-            if !foundKey {
-                if c == Self.itemsKey[keyBytes] {
-                    keyBytes += 1
-                    if keyBytes == Self.itemsKey.count { foundKey = true }
-                } else {
-                    keyBytes = c == Self.itemsKey[0] ? 1 : 0
-                }
-                continue
-            }
-            if !inItems {
-                if c == UInt8(ascii: "[") { inItems = true }
-                continue
-            }
-            if depth > 0 { object.append(c) }
-            if inString {
-                if escaped { escaped = false }
-                else if c == UInt8(ascii: "\\") { escaped = true }
-                else if c == UInt8(ascii: "\"") { inString = false }
-            } else if c == UInt8(ascii: "\"") {
-                inString = true
-            } else if c == UInt8(ascii: "{") {
-                if depth == 0 {
-                    object.removeAll(keepingCapacity: true)
-                    object.append(c)
-                }
-                depth += 1
-            } else if c == UInt8(ascii: "}") {
-                depth -= 1
-                if depth == 0, !object.isEmpty {
-                    if let item = try? JSONDecoder().decode(PlanItemSpec.self, from: Data(object)) {
-                        fresh.append(item)
-                    }
-                    object.removeAll(keepingCapacity: true)
-                }
-            } else if c == UInt8(ascii: "]"), depth == 0 {
-                finished = true
-                break
-            }
-        }
-        return fresh
     }
 }
 
@@ -579,7 +502,14 @@ final class AgentRun {
     /// → `staged` → Delete for good → `done`.
     enum Phase: Equatable { case thinking, planned, trashing, staged, deleting, done, failed(String) }
 
-    let agent: InstalledAgent
+    /// Nil when the plan comes from a custom provider over HTTP.
+    let agent: InstalledAgent?
+    /// Nil when the plan comes from a CLI agent. The endpoint never runs
+    /// tools — it only writes the plan; the guards and the two-step delete
+    /// below are identical for both sources.
+    let provider: LLMProvider?
+    /// What the panel calls the planner: the CLI agent's or the provider's name.
+    var displayName: String { agent?.kind.name ?? provider?.displayName ?? "The assistant" }
     private(set) var phase: Phase = .thinking
     /// What the agent has done so far, in plain words; the last one is live.
     private(set) var steps: [String] = ["Reading your scan"]
@@ -595,9 +525,10 @@ final class AgentRun {
     private let onFinish: () -> Void
     private var preparationTask: Task<Void, Never>?
 
-    init(agent: InstalledAgent, env: AgentEnvironment, tree: Tree, scanRoot: String,
-         known: [CleanupItem], onFinish: @escaping () -> Void) {
+    init(agent: InstalledAgent?, env: AgentEnvironment, tree: Tree, scanRoot: String,
+         known: [CleanupItem], provider: LLMProvider? = nil, onFinish: @escaping () -> Void) {
         self.agent = agent
+        self.provider = provider
         self.scanRoot = scanRoot
         self.tree = tree
         self.onFinish = onFinish
@@ -614,7 +545,7 @@ final class AgentRun {
             // must not launch an agent after cancellation.
             guard !Task.isCancelled, let self else { return }
             preparationTask = nil
-            step("Asking \(agent.kind.name) what can go")
+            step("Asking \(displayName) what can go")
             start(input: input, env: env)
         }
     }
@@ -659,11 +590,19 @@ final class AgentRun {
         preparationTask = nil
         process?.terminate()
         process = nil
+        planClient?.cancel()
+        planClient = nil
     }
+
+    /// Custom endpoint runs need no process: the client streams SSE straight
+    /// from the HTTP response into the same event pipeline.
+    private var planClient: LLMPlanClient?
 
     // MARK: Agent process
 
     private func start(input: String, env: AgentEnvironment) {
+        if let provider { startProvider(input: input, provider: provider); return }
+        guard let agent else { return }
         let folder = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
             .appendingPathComponent("BlitzTree", isDirectory: true)
         try? FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
@@ -730,7 +669,7 @@ final class AgentRun {
         do {
             try process.run()
         } catch {
-            phase = .failed("Couldn't start \(agent.kind.name): \(error.localizedDescription)")
+            phase = .failed("Couldn't start \(displayName): \(error.localizedDescription)")
             return
         }
         self.process = process
@@ -742,6 +681,39 @@ final class AgentRun {
             }
         } else {
             reader.begin()
+        }
+    }
+
+    /// Custom provider: stream the plan over HTTP. No process, no PATH, no
+    /// working folder — the endpoint only ever sees the prompt text (folder
+    /// paths and sizes, never file contents) and answers with plan JSON.
+    private func startProvider(input: String, provider: LLMProvider) {
+        let key = ProviderStore.getKey(for: provider.id) ?? ""
+        let client = LLMPlanClient(provider: provider, apiKey: key)
+        planClient = client
+        let name = displayName
+        client.plan(input) { [weak self] event in
+            DispatchQueue.main.async { MainActor.assumeIsolated { self?.handleProvider(event, name: name) } }
+        }
+        step("Asking \(name) what can go")
+    }
+
+    private func handleProvider(_ event: LLMEvent, name: String) {
+        guard phase == .thinking else { return }
+        switch event {
+        case .item(let spec):
+            withAnimation(.snappy) { items.append(PlanItem(spec: spec, tree: tree)) }
+        case .plan(let summary, let specs):
+            self.summary = summary
+            // The final JSON is authoritative; keep the cards already shown
+            // (and their checkboxes) when they match.
+            if specs.map(\.title) != items.map(\.spec.title) {
+                withAnimation(.snappy) { items = specs.map { PlanItem(spec: $0, tree: tree) } }
+            }
+            finishPlanning()
+        case .failed(let message):
+            NSLog("[bz] provider \(name) failed: \(message)")
+            if !items.isEmpty { finishPlanning() } else { phase = .failed(message) }
         }
     }
 
@@ -765,7 +737,10 @@ final class AgentRun {
             }
             finishPlanning()
         case .failed(let message):
-            phase = .failed(message)
+            // A CLI run that dies after streaming cards still finishes
+            // planning with what arrived; a provider whose JSON never
+            // decoded strictly gets the same grace.
+            if !items.isEmpty { finishPlanning() } else { phase = .failed(message) }
         }
     }
 
@@ -775,9 +750,9 @@ final class AgentRun {
         if !items.isEmpty {
             finishPlanning()
         } else if status != 0 {
-            phase = .failed(stderr.isEmpty ? "\(agent.kind.name) stopped (exit \(status))." : stderr)
+            phase = .failed(stderr.isEmpty ? "\(displayName) stopped (exit \(status))." : stderr)
         } else {
-            phase = .failed("\(agent.kind.name) didn't return a plan.")
+            phase = .failed("\(displayName) didn't return a plan.")
         }
     }
 
@@ -1139,10 +1114,8 @@ nonisolated final class AgentStreamReader: @unchecked Sendable {
         }
     }
 
-    private static func decodePlan(_ obj: [String: Any]) -> (String, [PlanItemSpec])? {
-        guard let data = try? JSONSerialization.data(withJSONObject: obj["items"] ?? []),
-              let items = try? JSONDecoder().decode([PlanItemSpec].self, from: data) else { return nil }
-        return ((obj["summary"] as? String) ?? "", items)
+    static func decodePlan(_ obj: [String: Any]) -> (String, [PlanItemSpec])? {
+        PlanJSON.decode(obj)
     }
 
     /// "du -sk ~/a ~/b" → "Measuring a, b"; the rest in a few plain words.

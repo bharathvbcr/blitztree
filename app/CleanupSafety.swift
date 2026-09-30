@@ -94,6 +94,22 @@ nonisolated enum CleanupPathSafety {
         ".local", ".local/share", "Downloads",
     ]
 
+    /// Folders that alter app behavior or persistence (launch agents, fonts,
+    /// keychain helpers…): the folder and everything inside it is off limits.
+    /// Unlike `Library/Caches`, no named subfolder of these is a rebuildable
+    /// cache, so they block recursively.
+    private static let neverCleanRelative = [
+        "Library/LaunchAgents", "Library/LaunchDaemons", "Library/Cookies", "Library/Logs",
+        "Library/Saved Application State", "Library/Spelling", "Library/Frameworks",
+        "Library/PrivilegedHelperTools", "Library/ScriptingAdditions",
+        "Library/Internet Plug-Ins", "Library/PreferencePanes", "Library/Input Methods",
+        "Library/Fonts", "Library/Services", "Library/StartupItems", "Library/Tokens",
+        "Library/Widgets", "Library/Metadata", "Library/Desktop Pictures",
+        "Library/Screen Savers", "Library/Workflows", "Library/Automator",
+        "Library/Contextual Menu Items", "Library/Compositions", "Library/DirectoryServices",
+        "Library/Calendars", "Library/Accounts", "Library/Application Scripts",
+    ]
+
     static func capture(
         path: String,
         root: String = NSHomeDirectory(),
@@ -306,6 +322,12 @@ nonisolated enum CleanupPathSafety {
             throw CleanupPathError.tooBroad(path)
         }
         if broadRelative.contains(where: { $0.caseInsensitiveCompare(relative) == .orderedSame }) {
+            throw CleanupPathError.tooBroad(path)
+        }
+        let lowerRelative = relative.lowercased()
+        if neverCleanRelative.contains(where: {
+            lowerRelative == $0.lowercased() || lowerRelative.hasPrefix($0.lowercased() + "/")
+        }) {
             throw CleanupPathError.tooBroad(path)
         }
         for protected in protectedRelative {
