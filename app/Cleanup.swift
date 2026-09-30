@@ -253,11 +253,12 @@ struct CleanupPanel: View {
     }
 
     /// Nothing ready: one click installs an agent and signs it in. Offer the
-    /// one already installed first; else Codex, which a free ChatGPT account runs.
+    /// one already installed first (Claude Code when both are); else Claude
+    /// Code, with Codex one click away.
     private var setupOffer: some View {
-        let installed = model.agentEnv.agents.first
-        let kind = installed?.kind ?? .codex
-        let other: AgentKind = kind == .codex ? .claude : .codex
+        let installed = model.agentEnv.agents.first { $0.kind == .claude } ?? model.agentEnv.agents.first
+        let kind = installed?.kind ?? .claude
+        let other: AgentKind = kind == .claude ? .codex : .claude
         return VStack(alignment: .leading, spacing: 8) {
             VStack(alignment: .leading, spacing: 2) {
                 Label("Let AI clean up for you", systemImage: "sparkles")

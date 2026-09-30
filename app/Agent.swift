@@ -251,13 +251,23 @@ final class AgentSetup {
 
 // MARK: - Guards (enforced here, never left to the model)
 
-/// When Codex last worked in each folder, from its session logs: every
-/// rollout file opens with the chat's working folder and is appended to as
-/// the chat goes on.
-nonisolated enum CodexSessions {
-    static func lastActive(since: Date? = nil) -> [String: Date] {
+/// When a coding agent last worked in each folder, from its session logs:
+/// every log is a .jsonl file that names the working folder ("cwd") near its
+/// start and is appended to as the session goes on.
+nonisolated enum AgentSessions {
+    /// Codex rollouts: $CODEX_HOME/sessions/<date>/*.jsonl.
+    static var codex: URL {
         let home = ProcessInfo.processInfo.environment["CODEX_HOME"] ?? NSHomeDirectory() + "/.codex"
-        let root = URL(fileURLWithPath: home + "/sessions")
+        return URL(fileURLWithPath: home + "/sessions")
+    }
+
+    /// Claude Code transcripts: $CLAUDE_CONFIG_DIR/projects/<folder>/*.jsonl.
+    static var claude: URL {
+        let home = ProcessInfo.processInfo.environment["CLAUDE_CONFIG_DIR"] ?? NSHomeDirectory() + "/.claude"
+        return URL(fileURLWithPath: home + "/projects")
+    }
+
+    static func lastActive(in root: URL, since: Date? = nil) -> [String: Date] {
         guard let files = FileManager.default.enumerator(at: root, includingPropertiesForKeys: [.contentModificationDateKey])
         else { return [:] }
         var active: [String: Date] = [:]
@@ -272,6 +282,11 @@ nonisolated enum CodexSessions {
             active[cwd] = max(active[cwd] ?? date, date)
         }
         return active
+    }
+
+    /// Whether a session in `root` worked at or inside `folder` since `since`.
+    static func worked(in folder: String, root: URL, since: Date) -> Bool {
+        lastActive(in: root, since: since).keys.contains { $0 == folder || $0.hasPrefix(folder + "/") }
     }
 }
 
@@ -297,7 +312,8 @@ nonisolated enum CleanupGuard {
 
     /// Whether the project owning this build folder was used in the last two
     /// days: its git index (touched by every status, commit or checkout), the
-    /// project folder or the folder itself changed recently. A Codex chat
+    /// project folder or the folder itself changed recently, or Claude Code
+    /// worked in the project since. A Codex chat
     /// counts as used when it started or Codex worked in it since (folder
     /// dates are no help there: Finder's .DS_Store writes bump them).
     static func recentlyUsed(_ path: String, within: TimeInterval = 2 * 86400) -> Bool {
@@ -306,7 +322,7 @@ nonisolated enum CleanupGuard {
         if let chat = codexChat(path) {
             let day = ((chat as NSString).deletingLastPathComponent as NSString).lastPathComponent
             if let started = try? Date(day + "T23:59:59Z", strategy: .iso8601), started > cutoff { return true }
-            return CodexSessions.lastActive(since: cutoff).keys.contains { $0 == chat || $0.hasPrefix(chat + "/") }
+            return AgentSessions.worked(in: chat, root: AgentSessions.codex, since: cutoff)
         }
         let url = URL(fileURLWithPath: path)
         guard rebuildable.contains(url.lastPathComponent) else { return false }
@@ -326,7 +342,7 @@ nonisolated enum CleanupGuard {
         }
         return stamps.contains { p in
             ((try? fm.attributesOfItem(atPath: p))?[.modificationDate] as? Date).map { $0 > cutoff } ?? false
-        }
+        } || AgentSessions.worked(in: project.path, root: AgentSessions.claude, since: cutoff)
     }
 
     /// An app that must be quit before its files go, when one is running.
@@ -1343,7 +1359,7 @@ nonisolated enum AgentPrompt {
         |---:|---|---|---|
 
         """
-        let sessions = CodexSessions.lastActive()
+        let sessions = AgentSessions.lastActive(in: AgentSessions.codex)
         for (node, path) in chats.prefix(40) {
             let used = sessions.filter { $0.key == path || $0.key.hasPrefix(path + "/") }.values.max()
             let inside = tree.children(node).prefix(3).map { "\(tree.name(Int($0))) \(Fmt.size(tree.alloc[Int($0)]))" }

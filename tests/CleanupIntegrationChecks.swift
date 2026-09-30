@@ -153,6 +153,30 @@ struct CleanupIntegrationChecks {
             fatalError("a replaced Trash parent must not reach the eraser")
         }
         precondition(changedParent.remaining.count == 1 && !changedParent.errors.isEmpty)
+
+        // A project Claude Code worked in lately counts as used, even when
+        // nothing on disk was touched; its session logs are the evidence.
+        let old = Date().addingTimeInterval(-5 * 86400)
+        let project = try directory("work/app")
+        let modules = try directory("work/app/node_modules")
+        let sibling = try directory("work/app-other")
+        for path in [modules, project] { try fm.setAttributes([.modificationDate: old], ofItemAtPath: path) }
+        let claudeConfig = fixture.appendingPathComponent("claude-config")
+        let sessions = claudeConfig.appendingPathComponent("projects/-work-app")
+        try fm.createDirectory(at: sessions, withIntermediateDirectories: true)
+        setenv("CLAUDE_CONFIG_DIR", claudeConfig.path, 1)
+        defer { unsetenv("CLAUDE_CONFIG_DIR") }
+        func session(_ cwd: String, modified: Date = Date()) throws {
+            let file = sessions.appendingPathComponent("\(UUID().uuidString).jsonl")
+            try Data("{\"type\":\"user\",\"cwd\":\"\(cwd)\"}\n".utf8).write(to: file)
+            try fm.setAttributes([.modificationDate: modified], ofItemAtPath: file.path)
+        }
+        precondition(!CleanupGuard.recentlyUsed(modules), "no session: stale project is not in use")
+        try session(sibling)
+        try session(project, modified: old)
+        precondition(!CleanupGuard.recentlyUsed(modules), "sibling prefix or stale session does not count")
+        try session(project + "/src")
+        precondition(CleanupGuard.recentlyUsed(modules), "Claude Code session inside the project counts as use")
         print("PASS: scanned plans, final action changes, guarded moves, receipt identity and partial removal")
     }
 }
