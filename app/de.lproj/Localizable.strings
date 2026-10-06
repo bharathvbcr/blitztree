@@ -158,3 +158,12 @@
 
 "Save changes" = "Änderungen sichern";
 "HTTP %@: %@" = "HTTP %@: %@";
+
+/* Launch and auto-analyse options */
+"At launch" = "Beim Start";
+"What to scan when BlitzTree opens." = "Was beim Öffnen von BlitzTree gescannt werden soll.";
+"Scan Macintosh HD" = "Macintosh HD scannen";
+"Scan Home folder" = "Benutzerordner scannen";
+"Choose folder…" = "Ordner auswählen…";
+"Auto-analyse suggestions" = "Vorschläge automatisch analysieren";
+"Automatically plan cleanup with AI after scanning instead of waiting for a click." = "Bereinigung nach dem Scannen automatisch mit KI planen, anstatt auf einen Klick zu warten.";

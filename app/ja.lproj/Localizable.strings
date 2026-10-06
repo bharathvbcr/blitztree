@@ -158,3 +158,12 @@
 
 "Save changes" = "変更を保存";
 "HTTP %@: %@" = "HTTP %@: %@";
+
+/* Launch and auto-analyse options */
+"At launch" = "起動時";
+"What to scan when BlitzTree opens." = "BlitzTree起動時にスキャンする対象。";
+"Scan Macintosh HD" = "Macintosh HD をスキャン";
+"Scan Home folder" = "ホームフォルダをスキャン";
+"Choose folder…" = "フォルダを選択…";
+"Auto-analyse suggestions" = "提案を自動分析";
+"Automatically plan cleanup with AI after scanning instead of waiting for a click." = "クリックを待たずに、スキャン完了後にAIでクリーンアップを自動計画します。";

@@ -158,3 +158,12 @@
 
 "Save changes" = "保存更改";
 "HTTP %@: %@" = "HTTP %@: %@";
+
+/* Launch and auto-analyse options */
+"At launch" = "启动时";
+"What to scan when BlitzTree opens." = "打开 BlitzTree 时扫描的内容。";
+"Scan Macintosh HD" = "扫描 Macintosh HD";
+"Scan Home folder" = "扫描个人主目录";
+"Choose folder…" = "选取文件夹…";
+"Auto-analyse suggestions" = "自动分析清理建议";
+"Automatically plan cleanup with AI after scanning instead of waiting for a click." = "扫描完成后自动使用 AI 规划清理方案，无需等待手动点击。";

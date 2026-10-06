@@ -153,6 +153,23 @@ enum MapStyle: String {
     case treemap, rings
 }
 
+/// What to scan when BlitzTree opens.
+enum LaunchTarget: String, CaseIterable, Identifiable, Sendable {
+    case macintoshHD = "macintosh_hd"
+    case home = "home"
+    case prompt = "prompt"
+
+    var id: String { rawValue }
+
+    var label: String {
+        switch self {
+        case .macintoshHD: return String(localized: "Scan Macintosh HD")
+        case .home: return String(localized: "Scan Home folder")
+        case .prompt: return String(localized: "Choose folder…")
+        }
+    }
+}
+
 @Observable
 @MainActor
 final class ScanModel {
@@ -171,9 +188,21 @@ final class ScanModel {
                 return p
             }
         }
+        let target = LaunchTarget(rawValue: UserDefaults.standard.string(forKey: "bz.launchTarget") ?? "") ?? .macintoshHD
+        if target == .home {
+            return FileManager.default.homeDirectoryForCurrentUser.path
+        }
         // Whole disk by default: the user-data volume of the boot volume group.
         return "/System/Volumes/Data"
     }()
+    /// What to scan at application launch.
+    var launchTarget: LaunchTarget = LaunchTarget(rawValue: UserDefaults.standard.string(forKey: "bz.launchTarget") ?? "") ?? .macintoshHD {
+        didSet { UserDefaults.standard.set(launchTarget.rawValue, forKey: "bz.launchTarget") }
+    }
+    /// Automatically plan cleanup with AI after scanning instead of waiting for a click.
+    var autoAnalyze: Bool = UserDefaults.standard.bool(forKey: "bz.autoAnalyze") {
+        didSet { UserDefaults.standard.set(autoAnalyze, forKey: "bz.autoAnalyze") }
+    }
     /// Coding agents found on this Mac (Claude Code, Codex) and the user's PATH.
     var agentEnv = AgentEnvironment()
     /// The agent cleanup on screen, if any.
@@ -276,14 +305,18 @@ final class ScanModel {
     }
 
     /// After the launch scan: open the panel on the Clean Up button or the
-    /// setup offer. Nothing goes to an agent until the user clicks.
+    /// setup offer, or automatically start cleanup if autoAnalyze is on.
     func openPanelAfterLaunchScan() {
         guard !panelOpenedAfterLaunch, agentEnv.loaded, tree != nil, !scanning,
               !cleanupTrash.running, agentRun == nil else { return }
         panelOpenedAfterLaunch = true
-        panelRequests += 1
-        // QA only: BZ_QA_SETUP=claude|codex presses the setup button.
-        if preferredAgent == nil, preferredProvider == nil, ProviderStore.shared.providers.isEmpty, let kind = ProcessInfo.processInfo.environment["BZ_QA_SETUP"].flatMap(AgentKind.init) { setUp(kind) }
+        if autoAnalyze, (preferredAgent != nil || preferredProvider != nil) {
+            startCleanup()
+        } else {
+            panelRequests += 1
+            // QA only: BZ_QA_SETUP=claude|codex presses the setup button.
+            if preferredAgent == nil, preferredProvider == nil, ProviderStore.shared.providers.isEmpty, let kind = ProcessInfo.processInfo.environment["BZ_QA_SETUP"].flatMap(AgentKind.init) { setUp(kind) }
+        }
     }
 
     /// Run the same cleanup again: whatever produced this run (CLI agent or

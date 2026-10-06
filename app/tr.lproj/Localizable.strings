@@ -158,3 +158,12 @@
 
 "Save changes" = "Değişiklikleri kaydet";
 "HTTP %@: %@" = "HTTP %@: %@";
+
+/* Launch and auto-analyse options */
+"At launch" = "Başlangıçta";
+"What to scan when BlitzTree opens." = "BlitzTree açıldığında neyin taranacağı.";
+"Scan Macintosh HD" = "Macintosh HD'yi tara";
+"Scan Home folder" = "Ev klasörünü tara";
+"Choose folder…" = "Klasör seç…";
+"Auto-analyse suggestions" = "Önerileri otomatik analiz et";
+"Automatically plan cleanup with AI after scanning instead of waiting for a click." = "Tıklamayı beklemek yerine taramadan sonra yapay zeka ile temizliği otomatik planlayın.";

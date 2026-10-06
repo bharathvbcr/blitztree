@@ -246,6 +246,21 @@ struct GeneralSettingsView: View {
             }
             Divider()
             VStack(alignment: .leading, spacing: 4) {
+                Picker("At launch", selection: Binding(
+                    get: { UserDefaults.standard.string(forKey: "bz.launchTarget") ?? LaunchTarget.macintoshHD.rawValue },
+                    set: { (value: String) in UserDefaults.standard.set(value, forKey: "bz.launchTarget") }
+                )) {
+                    ForEach(LaunchTarget.allCases) { target in
+                        Text(target.label).tag(target.rawValue)
+                    }
+                }
+                .frame(width: 260)
+                Text("What to scan when BlitzTree opens.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            Divider()
+            VStack(alignment: .leading, spacing: 4) {
                 Picker("Clean Up planner", selection: Binding(
                     get: {
                         let picked = UserDefaults.standard.string(forKey: "bz.engine")
@@ -269,6 +284,16 @@ struct GeneralSettingsView: View {
                 }
                 .frame(width: 260)
                 Text("Which AI proposes what can go from the scan. Nothing is removed without your say.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            Divider()
+            VStack(alignment: .leading, spacing: 4) {
+                Toggle("Auto-analyse suggestions", isOn: Binding(
+                    get: { UserDefaults.standard.bool(forKey: "bz.autoAnalyze") },
+                    set: { (value: Bool) in UserDefaults.standard.set(value, forKey: "bz.autoAnalyze") }
+                ))
+                Text("Automatically plan cleanup with AI after scanning instead of waiting for a click.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }

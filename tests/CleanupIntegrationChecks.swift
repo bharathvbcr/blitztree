@@ -241,6 +241,56 @@ struct CleanupIntegrationChecks {
         precondition(!CleanupGuard.recentlyUsed(modules))
         try session(project + "/.claude/worktrees/agent", filedUnder: home + "/work")
         precondition(CleanupGuard.recentlyUsed(modules), "a session filed under an ancestor folder counts as use")
+
+        // Auto-analyse suggestions & LaunchTarget options
+        UserDefaults.standard.removeObject(forKey: "bz.launchTarget")
+        UserDefaults.standard.removeObject(forKey: "bz.autoAnalyze")
+        let model = ScanModel()
+        precondition(model.launchTarget == .macintoshHD, "default launch target is Macintosh HD")
+        precondition(!model.autoAnalyze, "autoAnalyze is false by default")
+
+        model.launchTarget = .home
+        precondition(UserDefaults.standard.string(forKey: "bz.launchTarget") == "home")
+        precondition(model.launchTarget == .home)
+
+        model.launchTarget = .prompt
+        precondition(UserDefaults.standard.string(forKey: "bz.launchTarget") == "prompt")
+        precondition(model.launchTarget == .prompt)
+
+        model.autoAnalyze = true
+        precondition(UserDefaults.standard.bool(forKey: "bz.autoAnalyze") == true)
+        precondition(model.autoAnalyze == true)
+
+        // When autoAnalyze is false: launch scan does not start an agent
+        let testModelFalse = ScanModel()
+        testModelFalse.autoAnalyze = false
+        testModelFalse.tree = tree
+        testModelFalse.agentEnv = AgentEnvironment(agents: [InstalledAgent(kind: .claude, path: "/fake/claude", signedIn: true)], loaded: true)
+        testModelFalse.openPanelAfterLaunchScan()
+        precondition(testModelFalse.agentRun == nil, "autoAnalyze=false must not start agent run")
+        precondition(testModelFalse.panelRequests == 1, "autoAnalyze=false opens panel")
+
+        // When autoAnalyze is true: launch scan automatically starts cleanup with ready agent
+        let testModelTrue = ScanModel()
+        testModelTrue.autoAnalyze = true
+        testModelTrue.tree = tree
+        testModelTrue.agentEnv = AgentEnvironment(agents: [InstalledAgent(kind: .claude, path: "/fake/claude", signedIn: true)], loaded: true)
+        testModelTrue.openPanelAfterLaunchScan()
+        precondition(testModelTrue.agentRun != nil, "autoAnalyze=true must start agent run automatically")
+
+        // When autoAnalyze is true but no agent/provider ready: gracefully opens panel without crash
+        let testModelNoAgent = ScanModel()
+        testModelNoAgent.autoAnalyze = true
+        testModelNoAgent.tree = tree
+        testModelNoAgent.agentEnv = AgentEnvironment(agents: [], loaded: true)
+        testModelNoAgent.openPanelAfterLaunchScan()
+        precondition(testModelNoAgent.agentRun == nil, "no agent available means no agent run")
+        precondition(testModelNoAgent.panelRequests == 1, "falls back to opening panel on setup offer")
+
+        // Clean up UserDefaults after test
+        UserDefaults.standard.removeObject(forKey: "bz.launchTarget")
+        UserDefaults.standard.removeObject(forKey: "bz.autoAnalyze")
+
         print("PASS: scanned plans, final action changes, guarded moves, receipt identity and partial removal")
     }
 }
