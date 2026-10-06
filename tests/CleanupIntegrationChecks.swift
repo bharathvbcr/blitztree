@@ -1,3 +1,4 @@
+import AppKit
 import Foundation
 
 @main
@@ -241,6 +242,108 @@ struct CleanupIntegrationChecks {
         precondition(!CleanupGuard.recentlyUsed(modules))
         try session(project + "/.claude/worktrees/agent", filedUnder: home + "/work")
         precondition(CleanupGuard.recentlyUsed(modules), "a session filed under an ancestor folder counts as use")
+
+        // [#9] Folder context menu & actions from directory list and treemap labels:
+        // Test NodeMenu.fill, copyPath, trashItem, Scan.hit, and OutlineView.menu(for:)
+        let model = ScanModel()
+        model.tree = tree
+        model.scanRoot = home
+
+        // Directory node context menu
+        let dirMenu = NSMenu()
+        NodeMenu.fill(dirMenu, node: askedNode, model: model)
+        let dirTitles = dirMenu.items.map(\.title)
+        precondition(dirTitles.contains("Zoom In"), "directory menu has Zoom In")
+        precondition(dirTitles.contains("Reveal in Finder"), "directory menu has Reveal in Finder")
+        precondition(dirTitles.contains("Copy Path"), "directory menu has Copy Path")
+        precondition(dirTitles.contains("Move to Trash"), "directory menu has Move to Trash")
+        let trashItem = dirMenu.items.first(where: { $0.title == "Move to Trash" })!
+        precondition(trashItem.isEnabled, "Move to Trash is enabled for directory")
+        let copyItem = dirMenu.items.first(where: { $0.title == "Copy Path" })!
+        precondition(copyItem.isEnabled, "Copy Path is enabled for directory")
+        precondition(copyItem.keyEquivalent == "C" && copyItem.keyEquivalentModifierMask == [.command, .option], "Copy Path has ⌥⌘C shortcut")
+        precondition(trashItem.keyEquivalent == "\u{08}" && trashItem.keyEquivalentModifierMask == [.command], "Move to Trash has ⌘⌫ shortcut")
+
+        // Root node context menu: Move to Trash must be disabled
+        let rootMenu = NSMenu()
+        NodeMenu.fill(rootMenu, node: 0, model: model)
+        let rootTrash = rootMenu.items.first(where: { $0.title == "Move to Trash" })!
+        precondition(!rootTrash.isEnabled, "Move to Trash is disabled for scan root")
+
+        // File node context menu: Open instead of Zoom In
+        let fileNode = tree.node(at: askedFile)!
+        let fileMenu = NSMenu()
+        NodeMenu.fill(fileMenu, node: fileNode, model: model)
+        let fileTitles = fileMenu.items.map(\.title)
+        precondition(fileTitles.contains("Open"), "file menu has Open")
+        precondition(!fileTitles.contains("Zoom In"), "file menu does not have Zoom In")
+        precondition(fileTitles.contains("Copy Path"), "file menu has Copy Path")
+        precondition(fileTitles.contains("Move to Trash"), "file menu has Move to Trash")
+
+        // Copy path functionality
+        NodeMenu.copyPath(asked)
+        precondition(NSPasteboard.general.string(forType: .string) == asked, "NodeMenu.copyPath writes path to general pasteboard")
+
+        // Trash folder with custom move handler and rescan
+        let trashTarget = try directory("to-trash-folder")
+        let trashTargetFile = trashTarget + "/file.txt"
+        try Data([1, 2, 3]).write(to: URL(fileURLWithPath: trashTargetFile))
+        var movedURL: URL?
+        var movedDestination: URL?
+        try NodeMenu.trashItem(at: trashTarget, model: model) { url in
+            movedURL = url
+            let dest = trash.appendingPathComponent("trashed-" + UUID().uuidString)
+            try fm.moveItem(at: url, to: dest)
+            movedDestination = dest
+        }
+        precondition(movedURL?.path == trashTarget, "NodeMenu.trashItem moves source URL")
+        precondition(!fm.fileExists(atPath: trashTarget), "Folder was moved away from source")
+        precondition(movedDestination != nil && fm.fileExists(atPath: movedDestination!.path), "Folder arrived in destination")
+
+        // Treemap label hit testing with Scan.hit
+        let testStrip = CGRect(x: 10, y: 10, width: 200, height: 16)
+        let testRegion = CGRect(x: 10, y: 10, width: 200, height: 300)
+        let label = TMLabel(strip: testStrip, region: testRegion, node: askedNode, depth: 1, name: "big")
+        let hits = Scan.hits([label])
+        precondition(hits.count == 1 && hits[0].node == askedNode, "Scan.hits creates correct tuple")
+        precondition(Scan.hit(hits, CGPoint(x: 50, y: 18), slop: 2) == askedNode, "Scan.hit hits inside strip")
+        precondition(Scan.hit(hits, CGPoint(x: 50, y: 8), slop: 2) == askedNode, "Scan.hit hits within slop")
+        precondition(Scan.hit(hits, CGPoint(x: 50, y: 5), slop: 2) == nil, "Scan.hit misses outside slop")
+
+        // OutlineView contextual menu and row selection
+        model.scanning = false
+        model.tree = tree
+        _ = NSApplication.shared
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 400, height: 600), styleMask: [.titled], backing: .buffered, defer: false)
+        let coord = OutlinePanel.Coordinator()
+        coord.model = model
+        let outlineView = OutlinePanel.OutlineView(frame: NSRect(x: 0, y: 0, width: 400, height: 600))
+        window.contentView = outlineView
+        outlineView.coordinator = coord
+        coord.outline = outlineView
+        let col = NSTableColumn(identifier: .init("name"))
+        col.width = 300
+        outlineView.addTableColumn(col)
+        outlineView.outlineTableColumn = col
+        outlineView.dataSource = coord
+        outlineView.delegate = coord
+        coord.rebuildIfNeeded()
+        outlineView.reloadData()
+        window.displayIfNeeded()
+        precondition(coord.roots.count > 0, "coord has roots")
+        precondition(outlineView.numberOfRows > 0, "outline view has rows: \(outlineView.numberOfRows)")
+        let rowRect = outlineView.rect(ofRow: 0)
+        let clickInView = NSPoint(x: rowRect.midX, y: rowRect.midY)
+        let clickInWindow = outlineView.convert(clickInView, to: nil)
+        let rightClickEvent = NSEvent.mouseEvent(with: .rightMouseDown, location: clickInWindow, modifierFlags: [], timestamp: 0, windowNumber: window.windowNumber, context: nil, eventNumber: 1, clickCount: 1, pressure: 1)!
+        let outlineMenu = outlineView.menu(for: rightClickEvent)
+        precondition(outlineMenu != nil, "outlineView.menu(for:) returns menu")
+        let outlineTitles = outlineMenu!.items.map(\.title)
+        precondition(outlineTitles.contains("Copy Path"), "outline menu contains Copy Path")
+        precondition(outlineTitles.contains("Move to Trash"), "outline menu contains Move to Trash")
+        precondition(outlineView.selectedRow == 0, "right-clicking row selects it in outline view")
+
         print("PASS: scanned plans, final action changes, guarded moves, receipt identity and partial removal")
+        print("PASS: [#9] folder trashing, copy path, treemap label hits and directory outline context menu")
     }
 }

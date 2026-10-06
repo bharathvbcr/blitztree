@@ -378,13 +378,22 @@ final class TreemapNSView: NSView {
     override func keyDown(with event: NSEvent) {
         let esc = event.keyCode == 53
         let cmdUp = event.modifierFlags.contains(.command) && event.keyCode == 126
+        let cmdDelete = event.modifierFlags.contains(.command) && (event.keyCode == 51 || event.keyCode == 117)
         if esc || cmdUp, let model, let tree = model.tree, model.viewRoot != 0 {
             let p = Int(tree.parents[model.viewRoot])
             model.viewRoot = p == Int(UInt32.max) ? 0 : p
             relayout()
+        } else if cmdDelete, let model, let tree = model.tree, let sel = model.selection, sel != 0 {
+            NodeMenu.moveToTrash(path: tree.path(sel), model: model)
         } else {
             super.keyDown(with: event)
         }
+    }
+
+    @objc(copy:)
+    func copySelection(_ sender: Any?) {
+        guard let model, let tree = model.tree, let sel = model.selection else { return }
+        NodeMenu.copyPath(tree.path(sel))
     }
 
     private var tracking: NSTrackingArea?
@@ -467,7 +476,7 @@ final class TreemapNSView: NSView {
     override func rightMouseDown(with event: NSEvent) {
         let p = convert(event.locationInWindow, from: nil)
         // A folder's label strip picks the folder, as a left click does.
-        guard let model, model.tree != nil, let node = Scan.hit(labelHits, p) ?? hit(p)?.node else { return }
+        guard let model, model.tree != nil, let node = Scan.hit(labelHits, p, slop: 2) ?? hit(p)?.node else { return }
         model.selection = node
         syncOverlay()
         NodeMenu.popUp(node: node, model: model, with: event, for: self)
@@ -477,7 +486,7 @@ final class TreemapNSView: NSView {
 /// Scans over the layout arrays, nonisolated on purpose: a closure written
 /// in the MainActor view checks its executor on every call, which made one
 /// pass over 40k directory rects cost milliseconds per mouse move.
-nonisolated private enum Scan {
+nonisolated enum Scan {
     static func leaf(_ leaves: [TMRect], _ node: Int) -> TMRect? {
         leaves.first { $0.node == node }
     }
@@ -517,8 +526,8 @@ nonisolated private enum Scan {
     }
 
     static func hit(_ hits: [(rect: CGRect, node: Int)], _ p: CGPoint, slop: CGFloat = 0) -> Int? {
-        slop == 0 ? hits.first { $0.rect.contains(p) }?.node
-            : hits.first { $0.rect.insetBy(dx: -slop, dy: -slop).contains(p) }?.node
+        slop == 0 ? hits.reversed().first { $0.rect.contains(p) }?.node
+            : hits.reversed().first { $0.rect.insetBy(dx: -slop, dy: -slop).contains(p) }?.node
     }
 
     static func intersects(_ rects: [CGRect], _ r: CGRect) -> Bool {
@@ -562,8 +571,9 @@ final class NodeMenu: NSObject {
         menu.autoenablesItems = false
         guard let tree = model.tree, node >= 0, node < tree.count else { return }
         let pick = Pick(node: node, path: tree.path(node), model: model)
-        func add(_ title: String, _ action: Selector, enabled: Bool = true) {
-            let item = NSMenuItem(title: title, action: action, keyEquivalent: "")
+        func add(_ title: String, _ action: Selector, keyEquivalent: String = "", modifiers: NSEvent.ModifierFlags = [], enabled: Bool = true) {
+            let item = NSMenuItem(title: title, action: action, keyEquivalent: keyEquivalent)
+            if !modifiers.isEmpty { item.keyEquivalentModifierMask = modifiers }
             item.target = shared
             item.representedObject = pick
             item.isEnabled = enabled
@@ -576,12 +586,42 @@ final class NodeMenu: NSObject {
             add(String(localized: "Open"), #selector(open(_:)))
         }
         add(String(localized: "Reveal in Finder"), #selector(revealInFinder(_:)))
-        add(String(localized: "Copy Path"), #selector(copyPath(_:)))
+        add(String(localized: "Copy Path"), #selector(copyPathFromMenu(_:)), keyEquivalent: "C", modifiers: [.command, .option])
         menu.addItem(.separator())
         // The scan root is the whole cleanup, which the panel already runs.
         add(askTitle(model), #selector(ask(_:)), enabled: node != 0 && model.canStartRun)
         menu.addItem(.separator())
-        add(String(localized: "Move to Trash"), #selector(moveToTrash(_:)), enabled: node != 0)
+        add(String(localized: "Move to Trash"), #selector(moveToTrashFromMenu(_:)), keyEquivalent: "\u{08}", modifiers: [.command], enabled: node != 0)
+    }
+
+    static func copyPath(_ path: String) {
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(path, forType: .string)
+    }
+
+    static func trashItem(at path: String, model: ScanModel?,
+                          move: (URL) throws -> Void = { try FileManager.default.trashItem(at: $0, resultingItemURL: nil) }) throws {
+        try move(URL(fileURLWithPath: path))
+        model?.startScan()
+    }
+
+    static func moveToTrash(path: String, model: ScanModel?) {
+        let url = URL(fileURLWithPath: path)
+        let alert = NSAlert()
+        alert.messageText = String(localized: "Move \u{201C}\(url.lastPathComponent)\u{201D} to Trash?")
+        alert.informativeText = path
+        alert.addButton(withTitle: String(localized: "Move to Trash"))
+        alert.addButton(withTitle: String(localized: "Cancel"))
+        guard alert.runModal() == .alertFirstButtonReturn else { return }
+        do {
+            try trashItem(at: path, model: model)
+        } catch {
+            let failed = NSAlert()
+            failed.alertStyle = .warning
+            failed.messageText = String(localized: "Couldn’t move \u{201C}\(url.lastPathComponent)\u{201D} to the Trash")
+            failed.informativeText = error.localizedDescription
+            failed.runModal()
+        }
     }
 
     @objc private func zoomIn(_ sender: NSMenuItem) {
@@ -599,10 +639,9 @@ final class NodeMenu: NSObject {
         NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: pick.path)])
     }
 
-    @objc private func copyPath(_ sender: NSMenuItem) {
+    @objc private func copyPathFromMenu(_ sender: NSMenuItem) {
         guard let pick = sender.representedObject as? Pick else { return }
-        NSPasteboard.general.clearContents()
-        NSPasteboard.general.setString(pick.path, forType: .string)
+        Self.copyPath(pick.path)
     }
 
     @objc private func ask(_ sender: NSMenuItem) {
@@ -610,25 +649,9 @@ final class NodeMenu: NSObject {
         model.ask(about: pick.node)
     }
 
-    @objc private func moveToTrash(_ sender: NSMenuItem) {
+    @objc private func moveToTrashFromMenu(_ sender: NSMenuItem) {
         guard let pick = sender.representedObject as? Pick else { return }
-        let url = URL(fileURLWithPath: pick.path)
-        let alert = NSAlert()
-        alert.messageText = String(localized: "Move \u{201C}\(url.lastPathComponent)\u{201D} to Trash?")
-        alert.informativeText = pick.path
-        alert.addButton(withTitle: String(localized: "Move to Trash"))
-        alert.addButton(withTitle: String(localized: "Cancel"))
-        guard alert.runModal() == .alertFirstButtonReturn else { return }
-        do {
-            try FileManager.default.trashItem(at: url, resultingItemURL: nil)
-            // Sizes refresh on the next rescan.
-        } catch {
-            let failed = NSAlert()
-            failed.alertStyle = .warning
-            failed.messageText = String(localized: "Couldn’t move \u{201C}\(url.lastPathComponent)\u{201D} to the Trash")
-            failed.informativeText = error.localizedDescription
-            failed.runModal()
-        }
+        Self.moveToTrash(path: pick.path, model: pick.model)
     }
 }
 

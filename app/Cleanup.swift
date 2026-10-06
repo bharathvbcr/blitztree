@@ -161,11 +161,19 @@ struct CleanupPanel: View {
                 .help(item.display)
                 .onTapGesture { model.reveal(item.node) }
                 .contextMenu {
-                    Button("Reveal in Finder") {
+                    Button(String(localized: "Reveal in Finder")) {
                         NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: item.path)])
                     }
+                    Button(String(localized: "Copy Path")) {
+                        NodeMenu.copyPath(item.path)
+                    }
+                    Divider()
                     Button(NodeMenu.askTitle(model)) { model.ask(about: item.node) }
                         .disabled(!model.canStartRun)
+                    Divider()
+                    Button(String(localized: "Move to Trash")) {
+                        NodeMenu.moveToTrash(path: item.path, model: model)
+                    }
                 }
             }
             .listStyle(.inset)

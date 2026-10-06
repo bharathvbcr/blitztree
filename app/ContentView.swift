@@ -283,6 +283,15 @@ private struct ScanStatusBar: View {
                     Text(tree.displayPath(sel))
                         .lineLimit(1)
                         .truncationMode(.middle)
+                        .textSelection(.enabled)
+                        .contextMenu {
+                            Button(String(localized: "Copy Path")) {
+                                NodeMenu.copyPath(tree.path(sel))
+                            }
+                            Button(String(localized: "Reveal in Finder")) {
+                                NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: tree.path(sel))])
+                            }
+                        }
                     Spacer()
                     let a = tree.alloc[sel]
                     let rootA = max(tree.alloc[model.viewRoot], 1)
@@ -637,18 +646,6 @@ struct OutlinePanel: NSViewRepresentable {
             }
         }
 
-        /// Right-click a row: the same menu as the treemap, for that row.
-        /// Selecting it lights the item in the map too.
-        func menuNeedsUpdate(_ menu: NSMenu) {
-            guard let outline, let model, model.tree != nil, model.tree === tree,
-                  let it = outline.item(atRow: outline.clickedRow) as? Item else {
-                menu.removeAllItems()
-                return
-            }
-            model.selection = it.id
-            NodeMenu.fill(menu, node: it.id, model: model)
-        }
-
         @objc func doubleClicked(_ sender: NSOutlineView) {
             guard let it = sender.item(atRow: sender.clickedRow) as? Item else { return }
             if it.tree.isDir(it.id) {
@@ -660,10 +657,53 @@ struct OutlinePanel: NSViewRepresentable {
         }
     }
 
+    @MainActor
+    final class OutlineView: NSOutlineView {
+        weak var coordinator: Coordinator?
+
+        override func menu(for event: NSEvent) -> NSMenu? {
+            let point = convert(event.locationInWindow, from: nil)
+            var row = self.row(at: point)
+            if row < 0 && event.type != .rightMouseDown {
+                row = selectedRow
+            }
+            guard let coordinator, let model = coordinator.model, model.tree != nil,
+                  row >= 0, let it = item(atRow: row) as? OutlinePanel.Item else {
+                return nil
+            }
+            if row != selectedRow {
+                selectRowIndexes(IndexSet(integer: row), byExtendingSelection: false)
+            }
+            model.selection = it.id
+            let menu = NSMenu()
+            NodeMenu.fill(menu, node: it.id, model: model)
+            return menu
+        }
+
+        @objc(copy:)
+        func copySelection(_ sender: Any?) {
+            guard let coordinator, let model = coordinator.model, let tree = model.tree,
+                  let sel = model.selection else { return }
+            NodeMenu.copyPath(tree.path(sel))
+        }
+
+        override func keyDown(with event: NSEvent) {
+            let cmdDelete = event.modifierFlags.contains(.command) && (event.keyCode == 51 || event.keyCode == 117)
+            if cmdDelete, let coordinator, let model = coordinator.model, let tree = model.tree,
+               let sel = model.selection, sel != 0 {
+                NodeMenu.moveToTrash(path: tree.path(sel), model: model)
+                return
+            }
+            super.keyDown(with: event)
+        }
+    }
+
     func makeCoordinator() -> Coordinator { Coordinator() }
 
     func makeNSView(context: Context) -> NSScrollView {
-        let outline = NSOutlineView()
+        let outline = OutlineView()
+        let coord = context.coordinator
+        outline.coordinator = coord
         outline.style = .plain
         outline.rowSizeStyle = .default
         outline.usesAlternatingRowBackgroundColors = true
@@ -687,16 +727,12 @@ struct OutlinePanel: NSViewRepresentable {
         outline.outlineTableColumn = name
         outline.columnAutoresizingStyle = .firstColumnOnlyAutoresizingStyle
 
-        let coord = context.coordinator
         coord.model = model
         coord.outline = outline
         outline.dataSource = coord
         outline.delegate = coord
         outline.target = coord
         outline.doubleAction = #selector(Coordinator.doubleClicked(_:))
-        let menu = NSMenu()
-        menu.delegate = coord
-        outline.menu = menu
 
         let scroll = NSScrollView()
         scroll.documentView = outline
