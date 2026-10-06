@@ -158,3 +158,12 @@
 
 "Save changes" = "Enregistrer les modifications";
 "HTTP %@: %@" = "HTTP %@: %@";
+
+/* Search */
+"Search" = "Rechercher";
+"Searching…" = "Recherche en cours…";
+"No matches" = "Aucune correspondance";
+"No matching files or folders" = "Aucun fichier ou dossier correspondant";
+"%@ matches" = "%@ correspondances";
+"Showing %1$@ of %2$@ matches" = "Affichage de %1$@ sur %2$@ correspondances";
+"Largest first" = "Plus grands d'abord";

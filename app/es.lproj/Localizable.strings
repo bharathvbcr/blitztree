@@ -158,3 +158,12 @@
 
 "Save changes" = "Guardar cambios";
 "HTTP %@: %@" = "HTTP %@: %@";
+
+/* Search */
+"Search" = "Buscar";
+"Searching…" = "Buscando…";
+"No matches" = "Sin coincidencias";
+"No matching files or folders" = "No hay archivos ni carpetas coincidentes";
+"%@ matches" = "%@ coincidencias";
+"Showing %1$@ of %2$@ matches" = "Mostrando %1$@ de %2$@ coincidencias";
+"Largest first" = "Los más grandes primero";

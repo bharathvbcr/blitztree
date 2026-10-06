@@ -172,6 +172,68 @@ pub extern "C" fn bz_free(h: *mut BzScan) {
     }
 }
 
+pub struct BzSearch {
+    total_matches: u64,
+    nodes: Vec<u32>,
+}
+
+#[no_mangle]
+pub extern "C" fn bz_search(h: *mut BzScan, query: *const c_char, limit: u32) -> *mut BzSearch {
+    if h.is_null() || query.is_null() {
+        return std::ptr::null_mut();
+    }
+    let h = unsafe { &*h };
+    let Some(flat) = h.flat.as_ref() else {
+        return std::ptr::null_mut();
+    };
+    let query_str = unsafe {
+        match CStr::from_ptr(query).to_str() {
+            Ok(s) => s,
+            Err(_) => return std::ptr::null_mut(),
+        }
+    };
+    let (total_matches, nodes) = flat.tree.search(query_str, limit as usize);
+    Box::into_raw(Box::new(BzSearch {
+        total_matches,
+        nodes,
+    }))
+}
+
+#[no_mangle]
+pub extern "C" fn bz_search_total_matches(s: *mut BzSearch) -> u64 {
+    if s.is_null() {
+        return 0;
+    }
+    let s = unsafe { &*s };
+    s.total_matches
+}
+
+#[no_mangle]
+pub extern "C" fn bz_search_result_count(s: *mut BzSearch) -> u32 {
+    if s.is_null() {
+        return 0;
+    }
+    let s = unsafe { &*s };
+    s.nodes.len() as u32
+}
+
+#[no_mangle]
+pub extern "C" fn bz_search_result_nodes(s: *mut BzSearch) -> *const u32 {
+    if s.is_null() {
+        return std::ptr::null();
+    }
+    let s = unsafe { &*s };
+    s.nodes.as_ptr()
+}
+
+#[no_mangle]
+pub extern "C" fn bz_search_free(s: *mut BzSearch) {
+    if !s.is_null() {
+        drop(unsafe { Box::from_raw(s) });
+    }
+}
+
+
 
 #[cfg(test)]
 mod tests {
@@ -205,4 +267,32 @@ mod tests {
             assert!(unsafe { bz_cleanup_description(h, expected.len() as u64) }.is_null());
         }
     }
+
+    #[test]
+    fn bridge_runs_search_and_returns_sorted_results() {
+        let mut tree = Tree::with_root("/root");
+        tree.push("photo_small.jpg", 0, 100, 100, false);
+        tree.push("photo_big.jpg", 0, 900, 900, false);
+        tree.push("photo_mid.jpg", 0, 500, 500, false);
+        tree.link_children();
+
+        let mut handle = BzScan {
+            progress: Arc::new(Progress::default()),
+            done: Arc::new(AtomicBool::new(true)),
+            result: Arc::new(std::sync::Mutex::new(None)),
+            flat: Some(Box::new(with_cleanup(tree))),
+        };
+        let h = &mut handle as *mut BzScan;
+
+        let query = CString::new("photo*").unwrap();
+        let s = bz_search(h, query.as_ptr(), 2);
+        assert!(!s.is_null());
+        assert_eq!(bz_search_total_matches(s), 3);
+        assert_eq!(bz_search_result_count(s), 2);
+        let nodes = unsafe { std::slice::from_raw_parts(bz_search_result_nodes(s), 2) };
+        // Largest first: photo_big (node 2, 900), photo_mid (node 3, 500)
+        assert_eq!(nodes, [2, 3]);
+        bz_search_free(s);
+    }
 }
+

@@ -158,3 +158,12 @@
 
 "Save changes" = "保存更改";
 "HTTP %@: %@" = "HTTP %@: %@";
+
+/* Search */
+"Search" = "搜索";
+"Searching…" = "正在搜索…";
+"No matches" = "无匹配项";
+"No matching files or folders" = "未找到匹配的文件或文件夹";
+"%@ matches" = "%@ 个匹配项";
+"Showing %1$@ of %2$@ matches" = "显示 %2$@ 个匹配项中的 %1$@ 个";
+"Largest first" = "从大到小";
