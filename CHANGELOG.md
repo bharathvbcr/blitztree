@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.6.0 — 2026-10-06
+
+This release adds search, custom model providers, a translated interface, and per-item cleanup advice.
+
+- Search the scan by name with ⌘F. `*` and `?` work as wildcards, results are listed largest first, and picking one opens the list and reveals it on the maps. Matching runs in the Rust engine and takes under 12 ms on a 3.6-million-entry tree, so typing stays responsive during whole-disk scans.
+- Custom model providers: in Settings → Model Providers, connect any OpenAI- or Anthropic-compatible endpoint (Chat Completions, Responses or Anthropic Messages) by its base URL, API key (kept in the Keychain) and model. The plan streams in as the model writes it. The endpoint never runs tools, and BlitzTree's guards and two-step delete still apply. Choose the Clean Up planner in Settings → General.
+- BlitzTree is available in German, Spanish, French, Japanese, Turkish and Simplified Chinese as well as English. Pick a language in Settings → General; it applies when you relaunch. The agent's live step lines and the reasons BlitzTree won't remove something are translated too, while what BlitzTree sends to the agent stays in English.
+- Right-click any file or folder in the treemap, rings, list or Clean Up panel and choose **Ask Claude Code If It's Safe to Clean** (or your planner) to plan for that item alone. Every suggestion stays inside the item you asked about.
+- Right-click menus offer **Copy Path** (⌥⌘C) and **Move to Trash** (⌘⌫), which also work as shortcuts on the selection in the list and treemap. Moving something to the Trash rescans. The path in the status bar can be selected and copied.
+- Settings → General: choose what to scan at launch (Macintosh HD, your Home folder, or a folder you pick each time), and turn on **Auto-analyse suggestions** to plan cleanup as soon as the launch scan finishes. It is off by default, so nothing leaves your Mac until you click.
+- Claude Code is the suggested agent when none is installed. The Clean Up menu offers to sign in to or set up whichever agent isn't ready. A project Claude Code worked in during the last 2 days counts as recently used, so its build output is kept.
+- Safety: the cleanup guards run again right before each Trash or command and refuse if anything changed; paths that pass through a symlink are refused; `~/Library/LaunchAgents` and similar folders are never cleaned; commands must match the allowlist exactly; and the Codex installer is pinned to a version and checks its SHA-256.
+- Live sizes no longer jitter while counting: the scan counter keeps two decimals and sizes that update in place use fixed-width digits (contributed by @kingwhiiitee).
+- Scan results reach the window before the volume's capacity is read, and ranking and hard-link accounting no longer allocate temporary paths (contributed by @512banque).
+
+Custom model providers, the translations and the safety hardening were contributed by @emircanerkul.
+
 ## 0.5.6 — 2026-09-27
 
 - BlitzTree updates itself. It checks GitHub for a new release once a day, downloads it in the background and installs it when you quit. Check for Updates… is in the BlitzTree menu. Updates are signed, and Full Disk Access carries over.
