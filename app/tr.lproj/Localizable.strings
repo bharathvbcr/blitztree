@@ -218,3 +218,12 @@
 "Choose folder…" = "Klasör seç…";
 "Auto-analyse suggestions" = "Önerileri otomatik analiz et";
 "Automatically plan cleanup with AI after scanning instead of waiting for a click." = "Tıklamayı beklemek yerine taramadan sonra yapay zeka ile temizliği otomatik planlayın.";
+
+/* Search */
+"Search" = "Ara";
+"Searching…" = "Aranıyor…";
+"No matches" = "Eşleşme yok";
+"No matching files or folders" = "Eşleşen dosya veya klasör yok";
+"%@ matches" = "%@ eşleşme";
+"Showing %1$@ of %2$@ matches" = "%2$@ eşleşmeden %1$@ tanesi gösteriliyor";
+"Largest first" = "Önce en büyükler";

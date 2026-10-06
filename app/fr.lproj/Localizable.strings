@@ -218,3 +218,12 @@
 "Choose folder…" = "Choisir un dossier…";
 "Auto-analyse suggestions" = "Analyser automatiquement les suggestions";
 "Automatically plan cleanup with AI after scanning instead of waiting for a click." = "Planifier automatiquement le nettoyage avec l'IA après l'analyse au lieu d'attendre un clic.";
+
+/* Search */
+"Search" = "Rechercher";
+"Searching…" = "Recherche en cours…";
+"No matches" = "Aucune correspondance";
+"No matching files or folders" = "Aucun fichier ou dossier correspondant";
+"%@ matches" = "%@ correspondances";
+"Showing %1$@ of %2$@ matches" = "Affichage de %1$@ sur %2$@ correspondances";
+"Largest first" = "Plus grands d'abord";

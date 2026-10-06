@@ -218,3 +218,12 @@
 "Choose folder…" = "Seleccionar carpeta…";
 "Auto-analyse suggestions" = "Analizar sugerencias automáticamente";
 "Automatically plan cleanup with AI after scanning instead of waiting for a click." = "Planificar la limpieza automáticamente con IA después de escanear en lugar de esperar un clic.";
+
+/* Search */
+"Search" = "Buscar";
+"Searching…" = "Buscando…";
+"No matches" = "Sin coincidencias";
+"No matching files or folders" = "No hay archivos ni carpetas coincidentes";
+"%@ matches" = "%@ coincidencias";
+"Showing %1$@ of %2$@ matches" = "Mostrando %1$@ de %2$@ coincidencias";
+"Largest first" = "Los más grandes primero";

@@ -19,3 +19,8 @@ for LPROJ in app/*.lproj; do
   cp -R "$LPROJ" "$CLEANUP_TEST_TMP/"
 done
 "$CLEANUP_TEST_TMP/integration"
+swiftc "${SOURCES[@]}" tests/SearchIntegrationChecks.swift "${FLAGS[@]}" \
+  -import-objc-header app/bz.h -L target/release -lblitztree \
+  -framework AppKit -framework SwiftUI -o "$CLEANUP_TEST_TMP/search"
+"$CLEANUP_TEST_TMP/search"
+

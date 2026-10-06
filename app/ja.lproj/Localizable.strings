@@ -218,3 +218,12 @@
 "Choose folder…" = "フォルダを選択…";
 "Auto-analyse suggestions" = "提案を自動分析";
 "Automatically plan cleanup with AI after scanning instead of waiting for a click." = "クリックを待たずに、スキャン完了後にAIでクリーンアップを自動計画します。";
+
+/* Search */
+"Search" = "検索";
+"Searching…" = "検索中…";
+"No matches" = "一致なし";
+"No matching files or folders" = "一致するファイルやフォルダはありません";
+"%@ matches" = "%@ 件の一致";
+"Showing %1$@ of %2$@ matches" = "%2$@ 件中 %1$@ 件の一致を表示中";
+"Largest first" = "サイズ順";

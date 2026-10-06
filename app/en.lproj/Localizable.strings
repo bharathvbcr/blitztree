@@ -209,3 +209,12 @@
 "Choose folder…" = "Choose folder…";
 "Auto-analyse suggestions" = "Auto-analyse suggestions";
 "Automatically plan cleanup with AI after scanning instead of waiting for a click." = "Automatically plan cleanup with AI after scanning instead of waiting for a click.";
+
+/* Search */
+"Search" = "Search";
+"Searching…" = "Searching…";
+"No matches" = "No matches";
+"No matching files or folders" = "No matching files or folders";
+"%@ matches" = "%@ matches";
+"Showing %1$@ of %2$@ matches" = "Showing %1$@ of %2$@ matches";
+"Largest first" = "Largest first";

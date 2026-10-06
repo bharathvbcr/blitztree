@@ -158,7 +158,398 @@ impl Tree {
         }
         self.name_bytes(a).cmp(self.name_bytes(b))
     }
+
+    /// Search all nodes (1..len) for `query`, returning total matches and
+    /// up to `limit` matching node indices sorted largest allocated size first.
+    pub fn search(&self, query: &str, limit: usize) -> (u64, Vec<u32>) {
+        let Some(matcher) = QueryMatcher::new(query) else {
+            return (0, Vec::new());
+        };
+        if self.len() <= 1 {
+            return (0, Vec::new());
+        }
+
+        use rayon::prelude::*;
+        use std::cmp::Reverse;
+        use std::collections::BinaryHeap;
+
+        let (total, heap) = (1..self.len() as u32)
+            .into_par_iter()
+            .fold(
+                || (0u64, BinaryHeap::<Reverse<(u64, u32)>>::new()),
+                |(mut count, mut heap), idx| {
+                    let name_bytes = self.name_bytes(idx as usize);
+                    if matcher.matches(name_bytes) {
+                        count += 1;
+                        if limit > 0 {
+                            let alloc = self.alloc[idx as usize];
+                            if heap.len() < limit {
+                                heap.push(Reverse((alloc, idx)));
+                            } else if let Some(&Reverse((min_alloc, _))) = heap.peek() {
+                                if alloc > min_alloc {
+                                    heap.pop();
+                                    heap.push(Reverse((alloc, idx)));
+                                }
+                            }
+                        }
+                    }
+                    (count, heap)
+                },
+            )
+            .reduce(
+                || (0u64, BinaryHeap::new()),
+                |(count_a, mut heap_a), (count_b, mut heap_b)| {
+                    for item in heap_b.drain() {
+                        if limit > 0 {
+                            if heap_a.len() < limit {
+                                heap_a.push(item);
+                            } else if let Some(&Reverse((min_alloc, _))) = heap_a.peek() {
+                                if item.0 .0 > min_alloc {
+                                    heap_a.pop();
+                                    heap_a.push(item);
+                                }
+                            }
+                        }
+                    }
+                    (count_a + count_b, heap_a)
+                },
+            );
+
+        let mut results: Vec<u32> = heap.into_iter().map(|Reverse((_, idx))| idx).collect();
+        results.sort_by(|&a, &b| {
+            self.alloc[b as usize]
+                .cmp(&self.alloc[a as usize])
+                .then_with(|| self.compare_paths(a as usize, b as usize))
+        });
+        results.truncate(limit);
+
+        (total, results)
+    }
 }
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AsciiToken {
+    Star,
+    Question,
+    Byte(u8),
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum PatternToken {
+    Star,
+    Question,
+    Char(char),
+}
+
+#[derive(Clone, Debug)]
+pub enum QueryMatcher {
+    SubstringAscii {
+        ascii_bytes: Vec<u8>,
+        unicode_chars: Vec<char>,
+    },
+    SubstringUnicode(Vec<char>),
+    WildcardAscii {
+        ascii_tokens: Vec<AsciiToken>,
+        unicode_tokens: Vec<PatternToken>,
+    },
+    WildcardUnicode(Vec<PatternToken>),
+}
+
+impl QueryMatcher {
+    pub fn new(query: &str) -> Option<Self> {
+        let q = query.trim();
+        if q.is_empty() {
+            return None;
+        }
+        let has_wildcards = q.contains('*') || q.contains('?');
+        let is_ascii = q.is_ascii();
+
+        if !has_wildcards {
+            if is_ascii {
+                let ascii_bytes: Vec<u8> = q.bytes().map(|b| b.to_ascii_lowercase()).collect();
+                let unicode_chars: Vec<char> = q.chars().flat_map(|c| c.to_lowercase()).collect();
+                Some(Self::SubstringAscii {
+                    ascii_bytes,
+                    unicode_chars,
+                })
+            } else {
+                let unicode_chars: Vec<char> = q.chars().flat_map(|c| c.to_lowercase()).collect();
+                Some(Self::SubstringUnicode(unicode_chars))
+            }
+        } else if is_ascii {
+            let mut ascii_tokens = Vec::new();
+            for b in q.bytes() {
+                match b {
+                    b'*' => {
+                        if !matches!(ascii_tokens.last(), Some(AsciiToken::Star)) {
+                            ascii_tokens.push(AsciiToken::Star);
+                        }
+                    }
+                    b'?' => ascii_tokens.push(AsciiToken::Question),
+                    _ => ascii_tokens.push(AsciiToken::Byte(b.to_ascii_lowercase())),
+                }
+            }
+            let mut unicode_tokens = Vec::new();
+            for c in q.chars() {
+                match c {
+                    '*' => {
+                        if !matches!(unicode_tokens.last(), Some(PatternToken::Star)) {
+                            unicode_tokens.push(PatternToken::Star);
+                        }
+                    }
+                    '?' => unicode_tokens.push(PatternToken::Question),
+                    _ => {
+                        for lc in c.to_lowercase() {
+                            unicode_tokens.push(PatternToken::Char(lc));
+                        }
+                    }
+                }
+            }
+            Some(Self::WildcardAscii {
+                ascii_tokens,
+                unicode_tokens,
+            })
+        } else {
+            let mut unicode_tokens = Vec::new();
+            for c in q.chars() {
+                match c {
+                    '*' => {
+                        if !matches!(unicode_tokens.last(), Some(PatternToken::Star)) {
+                            unicode_tokens.push(PatternToken::Star);
+                        }
+                    }
+                    '?' => unicode_tokens.push(PatternToken::Question),
+                    _ => {
+                        for lc in c.to_lowercase() {
+                            unicode_tokens.push(PatternToken::Char(lc));
+                        }
+                    }
+                }
+            }
+            Some(Self::WildcardUnicode(unicode_tokens))
+        }
+    }
+
+    #[inline]
+    pub fn matches(&self, name_bytes: &[u8]) -> bool {
+        let is_ascii = name_bytes.is_ascii();
+        match self {
+            Self::SubstringAscii {
+                ascii_bytes,
+                unicode_chars,
+            } => {
+                if is_ascii {
+                    ascii_contains(name_bytes, ascii_bytes)
+                } else if let Ok(s) = std::str::from_utf8(name_bytes) {
+                    unicode_contains(s, unicode_chars)
+                } else {
+                    false
+                }
+            }
+            Self::SubstringUnicode(unicode_chars) => {
+                if is_ascii {
+                    false
+                } else if let Ok(s) = std::str::from_utf8(name_bytes) {
+                    unicode_contains(s, unicode_chars)
+                } else {
+                    false
+                }
+            }
+            Self::WildcardAscii {
+                ascii_tokens,
+                unicode_tokens,
+            } => {
+                if is_ascii {
+                    matches_wildcard_ascii(ascii_tokens, name_bytes)
+                } else if let Ok(s) = std::str::from_utf8(name_bytes) {
+                    matches_wildcard_unicode(unicode_tokens, s)
+                } else {
+                    false
+                }
+            }
+            Self::WildcardUnicode(unicode_tokens) => {
+                if let Ok(s) = std::str::from_utf8(name_bytes) {
+                    matches_wildcard_unicode(unicode_tokens, s)
+                } else {
+                    false
+                }
+            }
+        }
+    }
+}
+
+#[inline]
+fn ascii_contains(text: &[u8], pat: &[u8]) -> bool {
+    if pat.is_empty() {
+        return true;
+    }
+    if text.len() < pat.len() {
+        return false;
+    }
+    let first = pat[0];
+    let end = text.len() - pat.len();
+    for i in 0..=end {
+        if text[i].to_ascii_lowercase() == first {
+            let window = &text[i..i + pat.len()];
+            if window
+                .iter()
+                .zip(pat.iter())
+                .all(|(&b, &p)| b.to_ascii_lowercase() == p)
+            {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+fn unicode_contains(text: &str, pat: &[char]) -> bool {
+    if pat.is_empty() {
+        return true;
+    }
+    let mut stack_buf = ['\0'; 256];
+    let mut heap_buf;
+    let lower_text: &[char] = if text.len() <= 256 {
+        let mut len = 0;
+        for c in text.chars() {
+            for lc in c.to_lowercase() {
+                if len < stack_buf.len() {
+                    stack_buf[len] = lc;
+                    len += 1;
+                }
+            }
+        }
+        &stack_buf[..len]
+    } else {
+        heap_buf = Vec::with_capacity(text.len());
+        for c in text.chars() {
+            for lc in c.to_lowercase() {
+                heap_buf.push(lc);
+            }
+        }
+        &heap_buf[..]
+    };
+
+    if lower_text.len() < pat.len() {
+        return false;
+    }
+    lower_text.windows(pat.len()).any(|w| w == pat)
+}
+
+#[inline]
+fn matches_wildcard_ascii(pattern: &[AsciiToken], text: &[u8]) -> bool {
+    let mut p_idx = 0;
+    let mut t_idx = 0;
+    let mut star_p = None;
+    let mut star_t = 0;
+
+    while t_idx < text.len() {
+        if p_idx < pattern.len() {
+            match pattern[p_idx] {
+                AsciiToken::Byte(b) if text[t_idx].to_ascii_lowercase() == b => {
+                    p_idx += 1;
+                    t_idx += 1;
+                    continue;
+                }
+                AsciiToken::Question => {
+                    p_idx += 1;
+                    t_idx += 1;
+                    continue;
+                }
+                AsciiToken::Star => {
+                    star_p = Some(p_idx);
+                    p_idx += 1;
+                    star_t = t_idx;
+                    continue;
+                }
+                _ => {}
+            }
+        }
+
+        if let Some(sp) = star_p {
+            p_idx = sp + 1;
+            star_t += 1;
+            t_idx = star_t;
+        } else {
+            return false;
+        }
+    }
+
+    while p_idx < pattern.len() && pattern[p_idx] == AsciiToken::Star {
+        p_idx += 1;
+    }
+
+    p_idx == pattern.len()
+}
+
+fn matches_wildcard_unicode(pattern: &[PatternToken], text: &str) -> bool {
+    let mut stack_buf = ['\0'; 256];
+    let mut heap_buf;
+    let lower_text: &[char] = if text.len() <= 256 {
+        let mut len = 0;
+        for c in text.chars() {
+            for lc in c.to_lowercase() {
+                if len < stack_buf.len() {
+                    stack_buf[len] = lc;
+                    len += 1;
+                }
+            }
+        }
+        &stack_buf[..len]
+    } else {
+        heap_buf = Vec::with_capacity(text.len());
+        for c in text.chars() {
+            for lc in c.to_lowercase() {
+                heap_buf.push(lc);
+            }
+        }
+        &heap_buf[..]
+    };
+
+    let mut p_idx = 0;
+    let mut t_idx = 0;
+    let mut star_p = None;
+    let mut star_t = 0;
+
+    while t_idx < lower_text.len() {
+        if p_idx < pattern.len() {
+            match pattern[p_idx] {
+                PatternToken::Char(c) if lower_text[t_idx] == c => {
+                    p_idx += 1;
+                    t_idx += 1;
+                    continue;
+                }
+                PatternToken::Question => {
+                    p_idx += 1;
+                    t_idx += 1;
+                    continue;
+                }
+                PatternToken::Star => {
+                    star_p = Some(p_idx);
+                    p_idx += 1;
+                    star_t = t_idx;
+                    continue;
+                }
+                _ => {}
+            }
+        }
+
+        if let Some(sp) = star_p {
+            p_idx = sp + 1;
+            star_t += 1;
+            t_idx = star_t;
+        } else {
+            return false;
+        }
+    }
+
+    while p_idx < pattern.len() && pattern[p_idx] == PatternToken::Star {
+        p_idx += 1;
+    }
+
+    p_idx == pattern.len()
+}
+
 
 #[derive(Default)]
 pub struct Progress {
@@ -1080,4 +1471,194 @@ mod tests {
         assert_eq!(&blob[off[1] as usize..], b"df");
         bz_free(h);
     }
+
+    #[test]
+    fn search_matcher_and_ranking() {
+        let mut t = Tree::with_root("/fixture");
+        // Add nodes with names and sizes
+        // index 1: photo1.png, 100 bytes
+        t.push("photo1.png", 0, 100, 100, false);
+        // index 2: PHOTO2.PNG, 300 bytes
+        t.push("PHOTO2.PNG", 0, 300, 300, false);
+        // index 3: documents, 5000 bytes (dir)
+        t.push("documents", 0, 5000, 5000, true);
+        // index 4: my_photo.jpg, 200 bytes
+        t.push("my_photo.jpg", 0, 200, 200, false);
+        // index 5: münchen_report.pdf, 400 bytes
+        t.push("münchen_report.pdf", 0, 400, 400, false);
+        // index 6: 東京_notes.txt, 50 bytes
+        t.push("東京_notes.txt", 0, 50, 50, false);
+        t.link_children();
+
+        // 1. Substring case-insensitive
+        let (total, matches) = t.search("photo", 10);
+        assert_eq!(total, 3);
+        // Largest first: PHOTO2.PNG (300), my_photo.jpg (200), photo1.png (100)
+        assert_eq!(matches, vec![2, 4, 1]);
+
+        // 2. Wildcard *.png
+        let (total, matches) = t.search("*.png", 10);
+        assert_eq!(total, 2);
+        assert_eq!(matches, vec![2, 1]);
+
+        // 3. Wildcard ?
+        let (total, matches) = t.search("photo?.png", 10);
+        assert_eq!(total, 2);
+        assert_eq!(matches, vec![2, 1]);
+
+        // 4. Non-ASCII: German umlaut case-insensitivity
+        let (total, matches) = t.search("MÜNCHEN*", 10);
+        assert_eq!(total, 1);
+        assert_eq!(matches, vec![5]);
+
+        // 5. Non-ASCII: Japanese
+        let (total, matches) = t.search("*京*", 10);
+        assert_eq!(total, 1);
+        assert_eq!(matches, vec![6]);
+
+        // 6. Capped results: limit 1
+        let (total, matches) = t.search("photo", 1);
+        assert_eq!(total, 3, "total count must reflect all matches even when capped");
+        assert_eq!(matches, vec![2], "only top 1 returned");
+
+        // 7. Empty or whitespace query
+        let (total, matches) = t.search("", 10);
+        assert_eq!(total, 0);
+        assert!(matches.is_empty());
+        let (total, matches) = t.search("   ", 10);
+        assert_eq!(total, 0);
+        assert!(matches.is_empty());
+    }
+
+    #[test]
+    fn search_adversarial_wildcards_and_boundaries() {
+        let mut t = Tree::with_root("/fixture");
+        t.push("a", 0, 10, 10, false);
+        t.push("ab", 0, 20, 20, false);
+        t.push("abc", 0, 30, 30, false);
+        t.push("a_b_c", 0, 40, 40, false);
+        t.push("123foo456bar789", 0, 50, 50, false);
+        t.push("foobar", 0, 60, 60, false);
+        t.link_children();
+
+        // Single star matches everything
+        let (total, matches) = t.search("*", 10);
+        assert_eq!(total, 6);
+        assert_eq!(matches.len(), 6);
+
+        // Multiple consecutive stars collapse to single star
+        let (total, matches) = t.search("***", 10);
+        assert_eq!(total, 6);
+        assert_eq!(matches.len(), 6);
+
+        // Question mark boundaries
+        let (total, matches) = t.search("?", 10);
+        assert_eq!(total, 1);
+        assert_eq!(matches, vec![1]); // "a" only
+
+        let (total, matches) = t.search("??", 10);
+        assert_eq!(total, 1);
+        assert_eq!(matches, vec![2]); // "ab" only
+
+        let (total, matches) = t.search("???", 10);
+        assert_eq!(total, 1);
+        assert_eq!(matches, vec![3]); // "abc" only
+
+        // Infix star and question mark
+        let (total, matches) = t.search("a?c", 10);
+        assert_eq!(total, 1);
+        assert_eq!(matches, vec![3]); // "abc"
+
+        let (total, matches) = t.search("a*c", 10);
+        assert_eq!(total, 2);
+        // "a_b_c" (40), "abc" (30)
+        assert_eq!(matches, vec![4, 3]);
+
+        // Multi-segment wildcard
+        let (total, matches) = t.search("*foo*bar*", 10);
+        assert_eq!(total, 2);
+        assert_eq!(matches, vec![6, 5]);
+
+        // Anchored patterns
+        let (total, matches) = t.search("foo*", 10);
+        assert_eq!(total, 1);
+        assert_eq!(matches, vec![6]); // "foobar"
+
+        let (total, matches) = t.search("*bar", 10);
+        assert_eq!(total, 1);
+        assert_eq!(matches, vec![6]); // "foobar"
+    }
+
+    #[test]
+    fn search_multilingual_unicode_case_folding() {
+        let mut t = Tree::with_root("/fixture");
+        // French: Éléphant
+        t.push("Éléphant.txt", 0, 100, 100, false);
+        // Cyrillic: Привет
+        t.push("Привет_мир.log", 0, 200, 200, false);
+        // Spanish: Año_2026
+        t.push("Año_2026.doc", 0, 300, 300, false);
+        // Greek: Άλφα
+        t.push("Άλφα_βήτα.dat", 0, 400, 400, false);
+        // Emojis: 🚀_rocket
+        t.push("🚀_rocket.png", 0, 500, 500, false);
+        t.link_children();
+
+        // French lower and upper
+        let (total, _) = t.search("éléphant*", 10);
+        assert_eq!(total, 1);
+        let (total, _) = t.search("ÉLÉPHANT*", 10);
+        assert_eq!(total, 1);
+        let (total, _) = t.search("?léphant*", 10);
+        assert_eq!(total, 1);
+
+        // Cyrillic lower, upper, and wildcard
+        let (total, _) = t.search("привет*", 10);
+        assert_eq!(total, 1);
+        let (total, _) = t.search("ПРИВЕТ*", 10);
+        assert_eq!(total, 1);
+        let (total, _) = t.search("*мир*", 10);
+        assert_eq!(total, 1);
+        let (total, _) = t.search("пр?вет*", 10);
+        assert_eq!(total, 1);
+
+        // Spanish ñ / Ñ
+        let (total, _) = t.search("año*", 10);
+        assert_eq!(total, 1);
+        let (total, _) = t.search("AÑO*", 10);
+        assert_eq!(total, 1);
+
+        // Greek
+        let (total, _) = t.search("άλφα*", 10);
+        assert_eq!(total, 1);
+
+        // Emoji
+        let (total, _) = t.search("🚀*", 10);
+        assert_eq!(total, 1);
+        let (total, _) = t.search("*rocket*", 10);
+        assert_eq!(total, 1);
+    }
+
+    #[test]
+    fn search_tie_breaking_and_oversized_names() {
+        let mut t = Tree::with_root("/fixture");
+        // Two files with identical alloc size, different paths
+        t.push("b_match.txt", 0, 100, 100, false);
+        t.push("a_match.txt", 0, 100, 100, false);
+        // Oversized name (> 256 chars to test stack buffer overflow fallback)
+        let long_name = "x".repeat(300) + "_target.bin";
+        t.push(&long_name, 0, 500, 500, false);
+        t.link_children();
+
+        let (total, matches) = t.search("match", 10);
+        assert_eq!(total, 2);
+        // Lexical tie break: a_match (node 2) before b_match (node 1)
+        assert_eq!(matches, vec![2, 1]);
+
+        let (total, matches) = t.search("*_target.bin", 10);
+        assert_eq!(total, 1);
+        assert_eq!(matches, vec![3]);
+    }
 }
+
+
