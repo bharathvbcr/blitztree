@@ -149,3 +149,54 @@
 
 "Save changes" = "Save changes";
 "HTTP %@: %@" = "HTTP %@: %@";
+/* Step lines */
+"Reading your scan" = "Reading your scan";
+"Asking %@ what can go" = "Asking %@ what can go";
+"Asking %@ about %@" = "Asking %1$@ about %2$@";
+"Thinking" = "Thinking";
+"Reading %@" = "Reading %@";
+"Measuring folders" = "Measuring folders";
+"Measuring %@" = "Measuring %@";
+"Looking around" = "Looking around";
+"Looking in %@" = "Looking in %@";
+"Checking Docker" = "Checking Docker";
+"Checking Xcode simulators" = "Checking Xcode simulators";
+"Checking Ollama models" = "Checking Ollama models";
+"Checking %@" = "Checking %@";
+
+/* Guard block reasons */
+"Invalid cleanup path: %@" = "Invalid cleanup path: %@";
+"Cannot inspect %@ (errno %d)" = "Cannot inspect %1$@ (errno %2$d)";
+"Path is missing: %@" = "Path is missing: %@";
+"Path component is not a directory: %@" = "Path component is not a directory: %@";
+"Symlinks are not allowed in cleanup paths: %@" = "Symlinks are not allowed in cleanup paths: %@";
+"Cloud-only path is not available locally: %@" = "Cloud-only path is not available locally: %@";
+"Path is outside the authorized scan root: %@" = "Path is outside the authorized scan root: %@";
+"Path is on a different volume: %@" = "Path is on a different volume: %@";
+"Path changed since it was checked: %@" = "Path changed since it was checked: %@";
+"Protected path: %@" = "Protected path: %@";
+"Path is too broad to clean: %@" = "Path is too broad to clean: %@";
+"Git metadata path is protected: %@" = "Git metadata path is protected: %@";
+
+/* Card block reasons */
+"Unknown cleanup action" = "Unknown cleanup action";
+"A Trash action cannot contain a command" = "A Trash action cannot contain a command";
+"The supplied paths do not match this tool's cache" = "The supplied paths do not match this tool's cache";
+"Command or arguments not allowed" = "Command or arguments not allowed";
+"Outside the item you asked about" = "Outside the item you asked about";
+"Nothing to remove" = "Nothing to remove";
+"Path is not an item in this scan" = "Path is not an item in this scan";
+"The cache path is not a scanned directory" = "The cache path is not a scanned directory";
+"Quit %@ to clean this" = "Quit %@ to clean this";
+"A Codex chat you used in the last 2 days" = "A Codex chat you used in the last 2 days";
+"In a project used in the last 2 days" = "In a project used in the last 2 days";
+"A supplied path is not in this scan" = "A supplied path is not in this scan";
+"Runs the tool's cleanup, which may affect data outside the listed paths" = "Runs the tool's cleanup, which may affect data outside the listed paths";
+"Leaves %lld path(s) unchanged: %@" = "Leaves %1$lld path(s) unchanged: %2$@";
+"not eligible" = "not eligible";
+
+/* Local check lines */
+"Recognised as %@, but BlitzTree won't remove it: %@" = "Recognised as %1$@, but BlitzTree won't remove it: %2$@";
+"Recognised by BlitzTree as %@" = "Recognised by BlitzTree as %@";
+"Inside %@, recognised by BlitzTree as %@" = "Inside %1$@, recognised by BlitzTree as %2$@";
+"BlitzTree won't remove this: %@" = "BlitzTree won't remove this: %@";

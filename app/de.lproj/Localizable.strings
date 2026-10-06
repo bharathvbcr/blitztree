@@ -158,3 +158,54 @@
 
 "Save changes" = "Änderungen sichern";
 "HTTP %@: %@" = "HTTP %@: %@";
+/* Step lines */
+"Reading your scan" = "Ihr Scan wird gelesen";
+"Asking %@ what can go" = "%@ fragen, was weg kann";
+"Asking %@ about %@" = "%1$@ zu %2$@ befragen";
+"Thinking" = "Nachdenken";
+"Reading %@" = "%@ lesen";
+"Measuring folders" = "Ordnergröße messen";
+"Measuring %@" = "%@ messen";
+"Looking around" = "Dateien durchsuchen";
+"Looking in %@" = "In %@ nachsehen";
+"Checking Docker" = "Docker prüfen";
+"Checking Xcode simulators" = "Xcode-Simulatoren prüfen";
+"Checking Ollama models" = "Ollama-Modelle prüfen";
+"Checking %@" = "%@ prüfen";
+
+/* Guard block reasons */
+"Invalid cleanup path: %@" = "Ungültiger Bereinigungspfad: %@";
+"Cannot inspect %@ (errno %d)" = "%1$@ kann nicht überprüft werden (Fehler %2$d)";
+"Path is missing: %@" = "Pfad fehlt: %@";
+"Path component is not a directory: %@" = "Pfadkomponente ist kein Verzeichnis: %@";
+"Symlinks are not allowed in cleanup paths: %@" = "Symbolische Links sind in Bereinigungspfaden nicht zulässig: %@";
+"Cloud-only path is not available locally: %@" = "Reiner Cloud-Pfad ist lokal nicht verfügbar: %@";
+"Path is outside the authorized scan root: %@" = "Pfad liegt außerhalb des autorisierten Scan-Stamms: %@";
+"Path is on a different volume: %@" = "Pfad befindet sich auf einem anderen Volume: %@";
+"Path changed since it was checked: %@" = "Pfad hat sich seit der Überprüfung geändert: %@";
+"Protected path: %@" = "Geschützter Pfad: %@";
+"Path is too broad to clean: %@" = "Pfad ist zu umfassend zum Bereinigen: %@";
+"Git metadata path is protected: %@" = "Git-Metadatenpfad ist geschützt: %@";
+
+/* Card block reasons */
+"Unknown cleanup action" = "Unbekannte Bereinigungsaktion";
+"A Trash action cannot contain a command" = "Eine Papierkorb-Aktion darf keinen Befehl enthalten";
+"The supplied paths do not match this tool's cache" = "Die angegebenen Pfade stimmen nicht mit dem Cache dieses Tools überein";
+"Command or arguments not allowed" = "Befehl oder Argumente nicht zulässig";
+"Outside the item you asked about" = "Außerhalb des angefragten Elements";
+"Nothing to remove" = "Nichts zu entfernen";
+"Path is not an item in this scan" = "Pfad ist kein Element in diesem Scan";
+"The cache path is not a scanned directory" = "Der Cache-Pfad ist kein gescanntes Verzeichnis";
+"Quit %@ to clean this" = "%@ beenden, um dies zu bereinigen";
+"A Codex chat you used in the last 2 days" = "Ein Codex-Chat, den Sie in den letzten 2 Tagen verwendet haben";
+"In a project used in the last 2 days" = "In einem Projekt, das in den letzten 2 Tagen verwendet wurde";
+"A supplied path is not in this scan" = "Ein angegebener Pfad ist nicht in diesem Scan";
+"Runs the tool's cleanup, which may affect data outside the listed paths" = "Führt die Bereinigung des Tools aus, was Daten außerhalb der aufgelisteten Pfade betreffen kann";
+"Leaves %lld path(s) unchanged: %@" = "Belässt %1$lld Pfad(e) unverändert: %2$@";
+"not eligible" = "nicht geeignet";
+
+/* Local check lines */
+"Recognised as %@, but BlitzTree won't remove it: %@" = "Als %1$@ erkannt, aber BlitzTree entfernt es nicht: %2$@";
+"Recognised by BlitzTree as %@" = "Von BlitzTree als %@ erkannt";
+"Inside %@, recognised by BlitzTree as %@" = "In %1$@, von BlitzTree als %2$@ erkannt";
+"BlitzTree won't remove this: %@" = "BlitzTree entfernt dies nicht: %@";

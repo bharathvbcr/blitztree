@@ -15,4 +15,7 @@ SOURCES=(${SOURCES:#app/Main.swift})
 swiftc "${SOURCES[@]}" tests/CleanupIntegrationChecks.swift "${FLAGS[@]}" \
   -import-objc-header app/bz.h -L target/release -lblitztree \
   -framework AppKit -framework SwiftUI -o "$CLEANUP_TEST_TMP/integration"
+for LPROJ in app/*.lproj; do
+  cp -R "$LPROJ" "$CLEANUP_TEST_TMP/"
+done
 "$CLEANUP_TEST_TMP/integration"

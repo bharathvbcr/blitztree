@@ -158,3 +158,54 @@
 
 "Save changes" = "保存更改";
 "HTTP %@: %@" = "HTTP %@: %@";
+/* Step lines */
+"Reading your scan" = "正在读取你的扫描";
+"Asking %@ what can go" = "正在询问 %@ 哪些内容可以删除";
+"Asking %@ about %@" = "正在向 %1$@ 询问关于 %2$@";
+"Thinking" = "正在思考";
+"Reading %@" = "正在读取 %@";
+"Measuring folders" = "正在计算文件夹大小";
+"Measuring %@" = "正在计算 %@ 大小";
+"Looking around" = "正在查看四周";
+"Looking in %@" = "正在查看 %@";
+"Checking Docker" = "正在检查 Docker";
+"Checking Xcode simulators" = "正在检查 Xcode 模拟器";
+"Checking Ollama models" = "正在检查 Ollama 模型";
+"Checking %@" = "正在检查 %@";
+
+/* Guard block reasons */
+"Invalid cleanup path: %@" = "无效的清理路径：%@";
+"Cannot inspect %@ (errno %d)" = "无法检查 %1$@ (errno %2$d)";
+"Path is missing: %@" = "路径不存在：%@";
+"Path component is not a directory: %@" = "路径组件不是目录：%@";
+"Symlinks are not allowed in cleanup paths: %@" = "清理路径中不允许使用符号链接：%@";
+"Cloud-only path is not available locally: %@" = "仅在云端的路径在本地不可用：%@";
+"Path is outside the authorized scan root: %@" = "路径在已授权的扫描根目录之外：%@";
+"Path is on a different volume: %@" = "路径位于其他卷上：%@";
+"Path changed since it was checked: %@" = "自检查以来路径已更改：%@";
+"Protected path: %@" = "受保护的路径：%@";
+"Path is too broad to clean: %@" = "路径范围过大，无法清理：%@";
+"Git metadata path is protected: %@" = "Git 元数据路径受保护：%@";
+
+/* Card block reasons */
+"Unknown cleanup action" = "未知的清理操作";
+"A Trash action cannot contain a command" = "移入废纸篓操作不能包含命令";
+"The supplied paths do not match this tool's cache" = "提供的路径与此工具的缓存不匹配";
+"Command or arguments not allowed" = "命令或参数不被允许";
+"Outside the item you asked about" = "超出所询问的项目范围";
+"Nothing to remove" = "没有可删除的内容";
+"Path is not an item in this scan" = "路径不是本次扫描中的项目";
+"The cache path is not a scanned directory" = "缓存路径不是扫描过的目录";
+"Quit %@ to clean this" = "退出 %@ 以清理此项";
+"A Codex chat you used in the last 2 days" = "最近 2 天内使用过的 Codex 对话";
+"In a project used in the last 2 days" = "在最近 2 天内使用过的项目中";
+"A supplied path is not in this scan" = "提供的路径不在本次扫描中";
+"Runs the tool's cleanup, which may affect data outside the listed paths" = "运行该工具自身的清理，这可能会影响所列路径之外的数据";
+"Leaves %lld path(s) unchanged: %@" = "保持 %1$lld 个路径不变：%2$@";
+"not eligible" = "不符合条件";
+
+/* Local check lines */
+"Recognised as %@, but BlitzTree won't remove it: %@" = "识别为 %1$@，但 BlitzTree 不会将其删除：%2$@";
+"Recognised by BlitzTree as %@" = "被 BlitzTree 识别为 %@";
+"Inside %@, recognised by BlitzTree as %@" = "在 %1$@ 内，被 BlitzTree 识别为 %2$@";
+"BlitzTree won't remove this: %@" = "BlitzTree 不会删除此项：%@";

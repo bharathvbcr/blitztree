@@ -158,3 +158,54 @@
 
 "Save changes" = "Değişiklikleri kaydet";
 "HTTP %@: %@" = "HTTP %@: %@";
+/* Step lines */
+"Reading your scan" = "Taramanız okunuyor";
+"Asking %@ what can go" = "%@ adlı modele nelerin gidebileceği soruluyor";
+"Asking %@ about %@" = "%1$@ adlı modele %2$@ hakkında soruluyor";
+"Thinking" = "Düşünülüyor";
+"Reading %@" = "%@ okunuyor";
+"Measuring folders" = "Klasörler ölçülüyor";
+"Measuring %@" = "%@ ölçülüyor";
+"Looking around" = "Etraf taranıyor";
+"Looking in %@" = "%@ içine bakılıyor";
+"Checking Docker" = "Docker kontrol ediliyor";
+"Checking Xcode simulators" = "Xcode simülatörleri kontrol ediliyor";
+"Checking Ollama models" = "Ollama modelleri kontrol ediliyor";
+"Checking %@" = "%@ kontrol ediliyor";
+
+/* Guard block reasons */
+"Invalid cleanup path: %@" = "Geçersiz temizleme yolu: %@";
+"Cannot inspect %@ (errno %d)" = "%1$@ denetlenemiyor (hata no %2$d)";
+"Path is missing: %@" = "Yol eksik: %@";
+"Path component is not a directory: %@" = "Yol bileşeni bir dizin değil: %@";
+"Symlinks are not allowed in cleanup paths: %@" = "Temizleme yollarında sembolik bağlantılara izin verilmez: %@";
+"Cloud-only path is not available locally: %@" = "Yalnızca bulutta olan yol yerel olarak mevcut değil: %@";
+"Path is outside the authorized scan root: %@" = "Yol yetkili tarama kökünün dışında: %@";
+"Path is on a different volume: %@" = "Yol farklı bir birimde: %@";
+"Path changed since it was checked: %@" = "Yol kontrol edildikten sonra değişti: %@";
+"Protected path: %@" = "Korumalı yol: %@";
+"Path is too broad to clean: %@" = "Yol temizlemek için çok geniş kapsamlı: %@";
+"Git metadata path is protected: %@" = "Git meta veri yolu korumalı: %@";
+
+/* Card block reasons */
+"Unknown cleanup action" = "Bilinmeyen temizleme eylemi";
+"A Trash action cannot contain a command" = "Bir çöp kutusu eylemi komut içeremez";
+"The supplied paths do not match this tool's cache" = "Belirtilen yollar bu aracın önbelleğiyle eşleşmiyor";
+"Command or arguments not allowed" = "Komuta veya bağımsız değişkenlere izin verilmiyor";
+"Outside the item you asked about" = "Hakkında sorduğunuz öğenin dışında";
+"Nothing to remove" = "Kaldırılacak bir şey yok";
+"Path is not an item in this scan" = "Yol bu taramada bir öğe değil";
+"The cache path is not a scanned directory" = "Önbellek yolu taranan bir dizin değil";
+"Quit %@ to clean this" = "Bunu temizlemek için %@ uygulamasından çıkın";
+"A Codex chat you used in the last 2 days" = "Son 2 gün içinde kullandığınız bir Codex sohbeti";
+"In a project used in the last 2 days" = "Son 2 gün içinde kullanılan bir projede";
+"A supplied path is not in this scan" = "Belirtilen bir yol bu taramada yok";
+"Runs the tool's cleanup, which may affect data outside the listed paths" = "Aracın kendi temizlemesini çalıştırır, bu da listelenen yollar dışındaki verileri etkileyebilir";
+"Leaves %lld path(s) unchanged: %@" = "%1$lld yolu değiştirmeden bırakır: %2$@";
+"not eligible" = "uygun değil";
+
+/* Local check lines */
+"Recognised as %@, but BlitzTree won't remove it: %@" = "%1$@ olarak tanındı, ancak BlitzTree bunu kaldırmayacak: %2$@";
+"Recognised by BlitzTree as %@" = "BlitzTree tarafından %@ olarak tanındı";
+"Inside %@, recognised by BlitzTree as %@" = "%1$@ içinde, BlitzTree tarafından %2$@ olarak tanındı";
+"BlitzTree won't remove this: %@" = "BlitzTree bunu kaldırmayacak: %@";

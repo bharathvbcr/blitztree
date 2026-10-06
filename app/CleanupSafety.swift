@@ -31,6 +31,23 @@ nonisolated enum CleanupPathError: Error, LocalizedError, Equatable, Sendable {
 
     var errorDescription: String? {
         switch self {
+        case .invalidPath(let path): return String(localized: "Invalid cleanup path: \(path)")
+        case .unavailable(let path, let code): return String(localized: "Cannot inspect \(path) (errno \(code))")
+        case .missing(let path): return String(localized: "Path is missing: \(path)")
+        case .notDirectory(let path): return String(localized: "Path component is not a directory: \(path)")
+        case .symlink(let path): return String(localized: "Symlinks are not allowed in cleanup paths: \(path)")
+        case .cloudOnly(let path): return String(localized: "Cloud-only path is not available locally: \(path)")
+        case .outsideRoot(let path): return String(localized: "Path is outside the authorized scan root: \(path)")
+        case .differentVolume(let path): return String(localized: "Path is on a different volume: \(path)")
+        case .changed(let path): return String(localized: "Path changed since it was checked: \(path)")
+        case .protectedPath(let path): return String(localized: "Protected path: \(path)")
+        case .tooBroad(let path): return String(localized: "Path is too broad to clean: \(path)")
+        case .gitPath(let path): return String(localized: "Git metadata path is protected: \(path)")
+        }
+    }
+
+    var englishDescription: String {
+        switch self {
         case .invalidPath(let path): return "Invalid cleanup path: \(path)"
         case .unavailable(let path, let code): return "Cannot inspect \(path) (errno \(code))"
         case .missing(let path): return "Path is missing: \(path)"

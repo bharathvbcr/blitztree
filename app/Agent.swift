@@ -408,6 +408,7 @@ nonisolated struct AgentFocus: Sendable, Equatable {
     /// BlitzTree's own check before any agent sees it: why its guards would
     /// refuse the item, or the rebuildable folder it was recognised as.
     let local: String?
+    let localDisplay: String?
 
     @MainActor
     init(node: Int, tree: Tree, known: [CleanupItem], home: String = NSHomeDirectory()) {
@@ -417,15 +418,25 @@ nonisolated struct AgentFocus: Sendable, Equatable {
         isDir = tree.isDir(node)
         let ancestry = Set(tree.ancestry(node))
         if let item = known.first(where: { ancestry.contains($0.node) }) {
-            local = item.blocked.map { "Recognised as \(item.kind), but BlitzTree won't remove it: \($0)" }
+            let englishReason = item.englishBlocked ?? item.blocked
+            local = englishReason.map { "Recognised as \(item.kind), but BlitzTree won't remove it: \($0)" }
                 ?? (item.node == node ? "Recognised by BlitzTree as \(item.kind)"
                     : "Inside \(item.display), recognised by BlitzTree as \(item.kind)")
+            localDisplay = item.blocked.map { String(localized: "Recognised as \(item.kind), but BlitzTree won't remove it: \($0)") }
+                ?? (item.node == node ? String(localized: "Recognised by BlitzTree as \(item.kind)")
+                    : String(localized: "Inside \(item.display), recognised by BlitzTree as \(item.kind)"))
         } else {
             do {
                 _ = try CleanupPathSafety.capture(path: tree.path(node), root: home, home: home)
-                local = CleanupGuard.recentlyUsed(path) ? "In a project used in the last 2 days" : nil
+                let recent = CleanupGuard.recentlyUsed(path)
+                local = recent ? "In a project used in the last 2 days" : nil
+                localDisplay = recent ? String(localized: "In a project used in the last 2 days") : nil
+            } catch let error as CleanupPathError {
+                local = "BlitzTree won't remove this: \(error.englishDescription)"
+                localDisplay = String(localized: "BlitzTree won't remove this: \(error.errorDescription ?? error.englishDescription)")
             } catch {
                 local = "BlitzTree won't remove this: \(error.localizedDescription)"
+                localDisplay = String(localized: "BlitzTree won't remove this: \(error.localizedDescription)")
             }
         }
     }
@@ -471,9 +482,9 @@ final class PlanItem: Identifiable {
         var reason: String?
         var folderCache = false
         if !["trash", "command"].contains(spec.action) {
-            reason = "Unknown cleanup action"
+            reason = String(localized: "Unknown cleanup action")
         } else if spec.action == "trash", !spec.command.isEmpty {
-            reason = "A Trash action cannot contain a command"
+            reason = String(localized: "A Trash action cannot contain a command")
         } else if spec.action == "command" {
             if let command {
                 if let relative = command.cacheRelativePath {
@@ -487,41 +498,41 @@ final class PlanItem: Identifiable {
                             try CleanupPathSafety.capture(path: $0, root: home, home: home).identity
                         }
                         guard Set(supplied) == [target.identity] else {
-                            throw CleanupOperations.failure("The supplied paths do not match this tool's cache")
+                            throw CleanupOperations.failure(String(localized: "The supplied paths do not match this tool's cache"))
                         }
                         asked = [target.path]
                         folderCache = true
                     } catch { reason = error.localizedDescription }
                 }
-            } else { reason = "Command or arguments not allowed" }
+            } else { reason = String(localized: "Command or arguments not allowed") }
         }
         if reason == nil, let scope, asked.contains(where: { path in
             tree.node(at: path).map { !tree.ancestry($0).contains(scope) } ?? true
         }) {
-            reason = "Outside the item you asked about"
+            reason = String(localized: "Outside the item you asked about")
         }
         viaTrash = folderCache
         var kept: [CleanupTarget] = []
         var excluded = 0
         var firstExclusion: String?
         if reason == nil && (spec.action == "trash" || folderCache) {
-            if asked.isEmpty { reason = "Nothing to remove" }
+            if asked.isEmpty { reason = String(localized: "Nothing to remove") }
             for path in asked {
                 do {
                     let target = try CleanupPathSafety.capture(path: path, root: home, home: home)
                     guard let node = tree.node(at: target.path), node != 0 else {
-                        throw CleanupOperations.failure("Path is not an item in this scan")
+                        throw CleanupOperations.failure(String(localized: "Path is not an item in this scan"))
                     }
                     if folderCache && !tree.isDir(node) {
-                        throw CleanupOperations.failure("The cache path is not a scanned directory")
+                        throw CleanupOperations.failure(String(localized: "The cache path is not a scanned directory"))
                     }
                     if CleanupGuard.codexChat(target.path) == nil,
                        let app = CleanupGuard.runningOwner(of: [target.path]) {
-                        throw CleanupOperations.failure("Quit \(app) to clean this")
+                        throw CleanupOperations.failure(String(localized: "Quit \(app) to clean this"))
                     }
                     if CleanupGuard.recentlyUsed(target.path) {
                         throw CleanupOperations.failure(CleanupGuard.codexChat(target.path) != nil
-                            ? "A Codex chat you used in the last 2 days" : "In a project used in the last 2 days")
+                            ? String(localized: "A Codex chat you used in the last 2 days") : String(localized: "In a project used in the last 2 days"))
                     }
                     kept.append(target)
                 } catch {
@@ -529,14 +540,14 @@ final class PlanItem: Identifiable {
                     firstExclusion = firstExclusion ?? error.localizedDescription
                 }
             }
-            if kept.isEmpty { reason = reason ?? firstExclusion ?? "Nothing to remove" }
+            if kept.isEmpty { reason = reason ?? firstExclusion ?? String(localized: "Nothing to remove") }
         } else if reason == nil && spec.action == "command" {
             // Paths only describe a tool command. They never become deletion
             // targets, but must still belong to the scan being reviewed.
             if asked.isEmpty || asked.contains(where: { tree.node(at: $0).map { $0 == 0 } ?? true }) {
-                reason = "A supplied path is not in this scan"
+                reason = String(localized: "A supplied path is not in this scan")
             } else if let app = CleanupGuard.runningOwner(of: asked) {
-                reason = "Quit \(app) to clean this"
+                reason = String(localized: "Quit \(app) to clean this")
             }
         }
         let candidateNodes = Set(kept.compactMap { tree.node(at: $0.path) })
@@ -551,10 +562,10 @@ final class PlanItem: Identifiable {
         blocked = reason
         selected = reason == nil && spec.group == "safe" && (spec.action == "trash" || folderCache)
         if spec.action == "command" && !folderCache && reason == nil {
-            note = "Runs the tool's cleanup, which may affect data outside the listed paths"
+            note = String(localized: "Runs the tool's cleanup, which may affect data outside the listed paths")
         } else {
             note = excluded > 0 && !kept.isEmpty
-                ? "Leaves \(excluded) path(s) unchanged: \(firstExclusion ?? "not eligible")" : nil
+                ? String(localized: "Leaves \(excluded) path(s) unchanged: \(firstExclusion ?? String(localized: "not eligible"))") : nil
         }
         let nodes = Set(paths.compactMap { tree.node(at: $0) })
         self.nodes = Array(nodes.filter { node in !tree.ancestry(node).dropLast().contains(where: nodes.contains) })
@@ -605,7 +616,7 @@ final class AgentRun {
     let focus: AgentFocus?
     private(set) var phase: Phase = .thinking
     /// What the agent has done so far, in plain words; the last one is live.
-    private(set) var steps: [String] = ["Reading your scan"]
+    private(set) var steps: [String] = [String(localized: "Reading your scan")]
     private(set) var summary = ""
     private(set) var items: [PlanItem] = []
     private(set) var startedAt = Date()
@@ -794,7 +805,8 @@ final class AgentRun {
     }
 
     private var asking: String {
-        focus.map { "Asking \(displayName) about \($0.name)" } ?? "Asking \(displayName) what can go"
+        focus.map { String(localized: "Asking \(displayName) about \($0.name)") }
+            ?? String(localized: "Asking \(displayName) what can go")
     }
 
     /// Every card goes through the same guards; a focused run also keeps
@@ -1123,10 +1135,10 @@ nonisolated final class AgentStreamReader: @unchecked Sendable {
                     if inPlan {
                         if parser.hasInput { emit(.restart) }
                         parser = PartialPlanParser()
-                        emit(.activity("Writing the plan"))
+                        emit(.activity(String(localized: "Writing the plan")))
                     }
                 } else if block["type"] as? String == "thinking" {
-                    emit(.activity("Thinking"))
+                    emit(.activity(String(localized: "Thinking")))
                 }
             } else if ev["type"] as? String == "content_block_delta", inPlan,
                       let delta = ev["delta"] as? [String: Any],
@@ -1183,14 +1195,14 @@ nonisolated final class AgentStreamReader: @unchecked Sendable {
         case ("item/started", "commandExecution"):
             emit(.activity(Self.describe(tool: "Bash", input: ["command": item["command"] ?? ""])))
         case ("item/started", "reasoning"):
-            emit(.activity("Thinking"))
+            emit(.activity(String(localized: "Thinking")))
         case ("item/started", "agentMessage"):
             parser = PartialPlanParser()
         case ("item/agentMessage/delta", _):
             if let delta = params["delta"] as? String {
                 if !inPlan, delta.contains("{") || parser.hasInput {
                     inPlan = true
-                    emit(.activity("Writing the plan"))
+                    emit(.activity(String(localized: "Writing the plan")))
                 }
                 for item in parser.append(delta) { emit(.item(item)) }
             }
@@ -1224,7 +1236,7 @@ nonisolated final class AgentStreamReader: @unchecked Sendable {
     /// "du -sk ~/a ~/b" → "Measuring a, b"; the rest in a few plain words.
     static func describe(tool: String, input: [String: Any]) -> String {
         if tool == "Read", let path = input["file_path"] as? String {
-            return "Reading \((path as NSString).lastPathComponent)"
+            return String(localized: "Reading \((path as NSString).lastPathComponent)")
         }
         let command = (input["command"] as? String) ?? ""
         let words = command.split(separator: " ").map(String.init)
@@ -1232,12 +1244,12 @@ nonisolated final class AgentStreamReader: @unchecked Sendable {
             .map { ($0 as NSString).lastPathComponent }
         let names = targets.prefix(3).joined(separator: ", ") + (targets.count > 3 ? "…" : "")
         switch words.first ?? "" {
-        case "du": return names.isEmpty ? "Measuring folders" : "Measuring \(names)"
-        case "ls", "stat": return names.isEmpty ? "Looking around" : "Looking in \(names)"
-        case "docker": return "Checking Docker"
-        case "xcrun": return "Checking Xcode simulators"
-        case "ollama": return "Checking Ollama models"
-        default: return "Checking \(words.first ?? "")"
+        case "du": return names.isEmpty ? String(localized: "Measuring folders") : String(localized: "Measuring \(names)")
+        case "ls", "stat": return names.isEmpty ? String(localized: "Looking around") : String(localized: "Looking in \(names)")
+        case "docker": return String(localized: "Checking Docker")
+        case "xcrun": return String(localized: "Checking Xcode simulators")
+        case "ollama": return String(localized: "Checking Ollama models")
+        default: return String(localized: "Checking \(words.first ?? "")")
         }
     }
 }
