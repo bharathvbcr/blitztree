@@ -200,3 +200,12 @@
 "Recognised by BlitzTree as %@" = "Recognised by BlitzTree as %@";
 "Inside %@, recognised by BlitzTree as %@" = "Inside %1$@, recognised by BlitzTree as %2$@";
 "BlitzTree won't remove this: %@" = "BlitzTree won't remove this: %@";
+
+/* Launch and auto-analyse options */
+"At launch" = "At launch";
+"What to scan when BlitzTree opens." = "What to scan when BlitzTree opens.";
+"Scan Macintosh HD" = "Scan Macintosh HD";
+"Scan Home folder" = "Scan Home folder";
+"Choose folder…" = "Choose folder…";
+"Auto-analyse suggestions" = "Auto-analyse suggestions";
+"Automatically plan cleanup with AI after scanning instead of waiting for a click." = "Automatically plan cleanup with AI after scanning instead of waiting for a click.";

@@ -209,3 +209,12 @@
 "Recognised by BlitzTree as %@" = "被 BlitzTree 识别为 %@";
 "Inside %@, recognised by BlitzTree as %@" = "在 %1$@ 内，被 BlitzTree 识别为 %2$@";
 "BlitzTree won't remove this: %@" = "BlitzTree 不会删除此项：%@";
+
+/* Launch and auto-analyse options */
+"At launch" = "启动时";
+"What to scan when BlitzTree opens." = "打开 BlitzTree 时扫描的内容。";
+"Scan Macintosh HD" = "扫描 Macintosh HD";
+"Scan Home folder" = "扫描个人主目录";
+"Choose folder…" = "选取文件夹…";
+"Auto-analyse suggestions" = "自动分析清理建议";
+"Automatically plan cleanup with AI after scanning instead of waiting for a click." = "扫描完成后自动使用 AI 规划清理方案，无需等待手动点击。";

@@ -462,8 +462,58 @@ struct CleanupIntegrationChecks {
         precondition(AgentStreamReader.describe(tool: "ollama", input: ["command": "ollama list"]) == "Checking Ollama models")
         precondition(AgentStreamReader.describe(tool: "Read", input: ["file_path": "/a/b/foo.txt"]) == "Reading foo.txt")
 
+        // Auto-analyse suggestions & LaunchTarget options
+        UserDefaults.standard.removeObject(forKey: "bz.launchTarget")
+        UserDefaults.standard.removeObject(forKey: "bz.autoAnalyze")
+        let launchModel = ScanModel()
+        precondition(launchModel.launchTarget == .macintoshHD, "default launch target is Macintosh HD")
+        precondition(!launchModel.autoAnalyze, "autoAnalyze is false by default")
+
+        launchModel.launchTarget = .home
+        precondition(UserDefaults.standard.string(forKey: "bz.launchTarget") == "home")
+        precondition(launchModel.launchTarget == .home)
+
+        launchModel.launchTarget = .prompt
+        precondition(UserDefaults.standard.string(forKey: "bz.launchTarget") == "prompt")
+        precondition(launchModel.launchTarget == .prompt)
+
+        launchModel.autoAnalyze = true
+        precondition(UserDefaults.standard.bool(forKey: "bz.autoAnalyze") == true)
+        precondition(launchModel.autoAnalyze == true)
+
+        // When autoAnalyze is false: launch scan does not start an agent
+        let testModelFalse = ScanModel()
+        testModelFalse.autoAnalyze = false
+        testModelFalse.tree = tree
+        testModelFalse.agentEnv = AgentEnvironment(agents: [InstalledAgent(kind: .claude, path: "/fake/claude", signedIn: true)], loaded: true)
+        testModelFalse.openPanelAfterLaunchScan()
+        precondition(testModelFalse.agentRun == nil, "autoAnalyze=false must not start agent run")
+        precondition(testModelFalse.panelRequests == 1, "autoAnalyze=false opens panel")
+
+        // When autoAnalyze is true: launch scan automatically starts cleanup with ready agent
+        let testModelTrue = ScanModel()
+        testModelTrue.autoAnalyze = true
+        testModelTrue.tree = tree
+        testModelTrue.agentEnv = AgentEnvironment(agents: [InstalledAgent(kind: .claude, path: "/fake/claude", signedIn: true)], loaded: true)
+        testModelTrue.openPanelAfterLaunchScan()
+        precondition(testModelTrue.agentRun != nil, "autoAnalyze=true must start agent run automatically")
+
+        // When autoAnalyze is true but no agent/provider ready: gracefully opens panel without crash
+        let testModelNoAgent = ScanModel()
+        testModelNoAgent.autoAnalyze = true
+        testModelNoAgent.tree = tree
+        testModelNoAgent.agentEnv = AgentEnvironment(agents: [], loaded: true)
+        testModelNoAgent.openPanelAfterLaunchScan()
+        precondition(testModelNoAgent.agentRun == nil, "no agent available means no agent run")
+        precondition(testModelNoAgent.panelRequests == 1, "falls back to opening panel on setup offer")
+
+        // Clean up UserDefaults after test
+        UserDefaults.standard.removeObject(forKey: "bz.launchTarget")
+        UserDefaults.standard.removeObject(forKey: "bz.autoAnalyze")
+
         print("PASS: scanned plans, final action changes, guarded moves, receipt identity and partial removal")
         print("PASS: [#9] folder trashing, copy path, treemap label hits and directory outline context menu")
         print("PASS: translation tables, English prompt safety, and step/guard localization")
+        print("PASS: launch target and auto-analyse suggestions")
     }
 }
