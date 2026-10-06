@@ -384,7 +384,7 @@ final class TreemapNSView: NSView {
             model.viewRoot = p == Int(UInt32.max) ? 0 : p
             relayout()
         } else if cmdDelete, let model, let tree = model.tree, let sel = model.selection, sel != 0 {
-            NodeMenu.moveToTrash(path: tree.path(sel), model: model)
+            NodeMenu.moveToTrash(path: tree.path(sel), displayPath: tree.displayPath(sel), model: model)
         } else {
             super.keyDown(with: event)
         }
@@ -393,7 +393,7 @@ final class TreemapNSView: NSView {
     @objc(copy:)
     func copySelection(_ sender: Any?) {
         guard let model, let tree = model.tree, let sel = model.selection else { return }
-        NodeMenu.copyPath(tree.path(sel))
+        NodeMenu.copyPath(tree.displayPath(sel))
     }
 
     private var tracking: NSTrackingArea?
@@ -544,10 +544,12 @@ final class NodeMenu: NSObject {
     private final class Pick: NSObject {
         let node: Int
         let path: String
+        let displayPath: String
         weak var model: ScanModel?
-        init(node: Int, path: String, model: ScanModel) {
+        init(node: Int, path: String, displayPath: String, model: ScanModel) {
             self.node = node
             self.path = path
+            self.displayPath = displayPath
             self.model = model
         }
     }
@@ -570,7 +572,7 @@ final class NodeMenu: NSObject {
         menu.removeAllItems()
         menu.autoenablesItems = false
         guard let tree = model.tree, node >= 0, node < tree.count else { return }
-        let pick = Pick(node: node, path: tree.path(node), model: model)
+        let pick = Pick(node: node, path: tree.path(node), displayPath: tree.displayPath(node), model: model)
         func add(_ title: String, _ action: Selector, keyEquivalent: String = "", modifiers: NSEvent.ModifierFlags = [], enabled: Bool = true) {
             let item = NSMenuItem(title: title, action: action, keyEquivalent: keyEquivalent)
             if !modifiers.isEmpty { item.keyEquivalentModifierMask = modifiers }
@@ -605,20 +607,45 @@ final class NodeMenu: NSObject {
         model?.startScan()
     }
 
-    static func moveToTrash(path: String, model: ScanModel?) {
+    static func trashAlert(path: String, displayPath: String? = nil) -> NSAlert {
         let url = URL(fileURLWithPath: path)
         let alert = NSAlert()
-        alert.messageText = String(localized: "Move \u{201C}\(url.lastPathComponent)\u{201D} to Trash?")
-        alert.informativeText = path
+        alert.messageText = String(localized: "Move “\(url.lastPathComponent)” to Trash?")
+        let shown: String
+        if let displayPath {
+            shown = displayPath
+        } else {
+            let prefix = "/System/Volumes/Data"
+            if path.hasPrefix(prefix) {
+                let rest = String(path.dropFirst(prefix.count))
+                shown = rest.isEmpty ? "/" : rest
+            } else {
+                shown = path
+            }
+        }
+        alert.informativeText = shown
         alert.addButton(withTitle: String(localized: "Move to Trash"))
         alert.addButton(withTitle: String(localized: "Cancel"))
-        guard alert.runModal() == .alertFirstButtonReturn else { return }
+        return alert
+    }
+
+    static func moveToTrash(path: String, displayPath: String? = nil, model: ScanModel?,
+                            confirm: ((NSAlert) -> NSApplication.ModalResponse)? = nil,
+                            move: ((URL) throws -> Void)? = nil) {
+        let alert = trashAlert(path: path, displayPath: displayPath)
+        let response = confirm?(alert) ?? alert.runModal()
+        guard response == .alertFirstButtonReturn else { return }
         do {
-            try trashItem(at: path, model: model)
+            if let move {
+                try trashItem(at: path, model: model, move: move)
+            } else {
+                try trashItem(at: path, model: model)
+            }
         } catch {
+            let url = URL(fileURLWithPath: path)
             let failed = NSAlert()
             failed.alertStyle = .warning
-            failed.messageText = String(localized: "Couldn’t move \u{201C}\(url.lastPathComponent)\u{201D} to the Trash")
+            failed.messageText = String(localized: "Couldn’t move “\(url.lastPathComponent)” to the Trash")
             failed.informativeText = error.localizedDescription
             failed.runModal()
         }
@@ -641,7 +668,7 @@ final class NodeMenu: NSObject {
 
     @objc private func copyPathFromMenu(_ sender: NSMenuItem) {
         guard let pick = sender.representedObject as? Pick else { return }
-        Self.copyPath(pick.path)
+        Self.copyPath(pick.displayPath)
     }
 
     @objc private func ask(_ sender: NSMenuItem) {
@@ -651,7 +678,7 @@ final class NodeMenu: NSObject {
 
     @objc private func moveToTrashFromMenu(_ sender: NSMenuItem) {
         guard let pick = sender.representedObject as? Pick else { return }
-        Self.moveToTrash(path: pick.path, model: pick.model)
+        Self.moveToTrash(path: pick.path, displayPath: pick.displayPath, model: pick.model)
     }
 }
 

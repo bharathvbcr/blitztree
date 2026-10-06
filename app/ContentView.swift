@@ -718,14 +718,14 @@ struct OutlinePanel: NSViewRepresentable {
         func copySelection(_ sender: Any?) {
             guard let coordinator, let model = coordinator.model, let tree = model.tree,
                   let sel = model.selection else { return }
-            NodeMenu.copyPath(tree.path(sel))
+            NodeMenu.copyPath(tree.displayPath(sel))
         }
 
         override func keyDown(with event: NSEvent) {
             let cmdDelete = event.modifierFlags.contains(.command) && (event.keyCode == 51 || event.keyCode == 117)
             if cmdDelete, let coordinator, let model = coordinator.model, let tree = model.tree,
                let sel = model.selection, sel != 0 {
-                NodeMenu.moveToTrash(path: tree.path(sel), model: model)
+                NodeMenu.moveToTrash(path: tree.path(sel), displayPath: tree.displayPath(sel), model: model)
                 return
             }
             super.keyDown(with: event)
