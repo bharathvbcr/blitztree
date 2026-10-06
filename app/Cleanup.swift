@@ -13,15 +13,22 @@ nonisolated struct CleanupItem: Identifiable, Sendable {
     var id: Int { node }
     let target: CleanupTarget?
     let blocked: String?
+    let englishBlocked: String?
 
     init(node: Int, path: String, display: String, kind: String, bytes: UInt64, root: String = NSHomeDirectory()) {
         self.node = node; self.path = path; self.display = display; self.kind = kind; self.bytes = bytes
         do {
             self.target = try CleanupPathSafety.capture(path: path, root: root)
             self.blocked = nil
+            self.englishBlocked = nil
+        } catch let error as CleanupPathError {
+            self.target = nil
+            self.blocked = error.errorDescription
+            self.englishBlocked = error.englishDescription
         } catch {
             self.target = nil
             self.blocked = error.localizedDescription
+            self.englishBlocked = error.localizedDescription
         }
     }
 }
@@ -436,7 +443,7 @@ private struct AgentRunView: View {
                     .textSelection(.enabled)
                     .fixedSize(horizontal: false, vertical: true)
             }
-            if let local = focus.local {
+            if let local = focus.localDisplay ?? focus.local {
                 Label(local, systemImage: "checkmark.shield")
                     .font(.caption)
                     .foregroundStyle(.secondary)

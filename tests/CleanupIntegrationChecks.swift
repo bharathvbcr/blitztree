@@ -343,7 +343,127 @@ struct CleanupIntegrationChecks {
         precondition(outlineTitles.contains("Move to Trash"), "outline menu contains Move to Trash")
         precondition(outlineView.selectedRow == 0, "right-clicking row selects it in outline view")
 
+        // Localization checks:
+        // 1. Acceptance Criterion 2: Guarded prompt stays English
+        precondition(guarded.local?.hasPrefix("BlitzTree won't remove this: ") == true)
+        precondition(guarded.localDisplay != nil)
+        precondition(guardedPrompt.contains("BlitzTree's own check: BlitzTree won't remove this: "))
+        let error = CleanupPathError.gitPath("/test/.git")
+        precondition(error.englishDescription == "Git metadata path is protected: /test/.git")
+        precondition(error.errorDescription != nil)
+
+        // 2. Acceptance Criterion 3: All 7 translation tables contain all new keys
+        let languages = ["en", "de", "es", "fr", "ja", "tr", "zh-Hans"]
+        let requiredKeys: [String] = [
+            /* Step lines */
+            "Reading your scan",
+            "Asking %@ what can go",
+            "Asking %@ about %@",
+            "Thinking",
+            "Writing the plan",
+            "Reading %@",
+            "Measuring folders",
+            "Measuring %@",
+            "Looking around",
+            "Looking in %@",
+            "Checking Docker",
+            "Checking Xcode simulators",
+            "Checking Ollama models",
+            "Checking %@",
+
+            /* Guard block reasons */
+            "Invalid cleanup path: %@",
+            "Cannot inspect %@ (errno %d)",
+            "Path is missing: %@",
+            "Path component is not a directory: %@",
+            "Symlinks are not allowed in cleanup paths: %@",
+            "Cloud-only path is not available locally: %@",
+            "Path is outside the authorized scan root: %@",
+            "Path is on a different volume: %@",
+            "Path changed since it was checked: %@",
+            "Protected path: %@",
+            "Path is too broad to clean: %@",
+            "Git metadata path is protected: %@",
+
+            /* Card block reasons */
+            "Unknown cleanup action",
+            "A Trash action cannot contain a command",
+            "The supplied paths do not match this tool's cache",
+            "Command or arguments not allowed",
+            "Outside the item you asked about",
+            "Nothing to remove",
+            "Path is not an item in this scan",
+            "The cache path is not a scanned directory",
+            "Quit %@ to clean this",
+            "A Codex chat you used in the last 2 days",
+            "In a project used in the last 2 days",
+            "A supplied path is not in this scan",
+            "Runs the tool's cleanup, which may affect data outside the listed paths",
+            "Leaves %lld path(s) unchanged: %@",
+            "not eligible",
+
+            /* Local check lines */
+            "Recognised as %@, but BlitzTree won't remove it: %@",
+            "Recognised by BlitzTree as %@",
+            "Inside %@, recognised by BlitzTree as %@",
+            "BlitzTree won't remove this: %@",
+        ]
+
+        for lang in languages {
+            guard let bundle = Bundle(path: "app/\(lang).lproj") ?? Bundle.main.path(forResource: lang, ofType: "lproj").flatMap(Bundle.init(path:)) else {
+                fatalError("Missing bundle for language: \(lang)")
+            }
+            for key in requiredKeys {
+                let localized = bundle.localizedString(forKey: key, value: nil, table: nil)
+                precondition(!localized.isEmpty, "Empty translation for key '\(key)' in \(lang)")
+                if lang != "en" {
+                    precondition(localized != key, "Untranslated key '\(key)' in \(lang)")
+                }
+            }
+        }
+
+        // 3. Acceptance Criterion 1: Verify specific localized translations in non-English bundles
+        let deBundle = Bundle(path: "app/de.lproj")!
+        precondition(deBundle.localizedString(forKey: "Reading your scan", value: nil, table: nil) == "Ihr Scan wird gelesen")
+        precondition(deBundle.localizedString(forKey: "Checking Docker", value: nil, table: nil) == "Docker prüfen")
+        precondition(deBundle.localizedString(forKey: "Outside the item you asked about", value: nil, table: nil) == "Außerhalb des angefragten Elements")
+        precondition(deBundle.localizedString(forKey: "Git metadata path is protected: %@", value: nil, table: nil) == "Git-Metadatenpfad ist geschützt: %@")
+
+        let jaBundle = Bundle(path: "app/ja.lproj")!
+        precondition(jaBundle.localizedString(forKey: "Writing the plan", value: nil, table: nil) == "プランを作成中")
+        precondition(jaBundle.localizedString(forKey: "Thinking", value: nil, table: nil) == "思考中")
+        precondition(jaBundle.localizedString(forKey: "Nothing to remove", value: nil, table: nil) == "削除する項目はありません")
+        precondition(jaBundle.localizedString(forKey: "Checking Ollama models", value: nil, table: nil) == "Ollamaモデルを確認中")
+
+        let frBundle = Bundle(path: "app/fr.lproj")!
+        precondition(frBundle.localizedString(forKey: "Thinking", value: nil, table: nil) == "Réflexion")
+        precondition(frBundle.localizedString(forKey: "Quit %@ to clean this", value: nil, table: nil) == "Quittez %@ pour nettoyer ceci")
+        precondition(frBundle.localizedString(forKey: "Symlinks are not allowed in cleanup paths: %@", value: nil, table: nil) == "Les liens symboliques ne sont pas autorisés dans les chemins de nettoyage : %@")
+
+        let esBundle = Bundle(path: "app/es.lproj")!
+        precondition(esBundle.localizedString(forKey: "A Trash action cannot contain a command", value: nil, table: nil) == "Una acción de papelera no puede contener un comando")
+        precondition(esBundle.localizedString(forKey: "Command or arguments not allowed", value: nil, table: nil) == "Comando o argumentos no permitidos")
+
+        let trBundle = Bundle(path: "app/tr.lproj")!
+        precondition(trBundle.localizedString(forKey: "Unknown cleanup action", value: nil, table: nil) == "Bilinmeyen temizleme eylemi")
+        precondition(trBundle.localizedString(forKey: "Path is missing: %@", value: nil, table: nil) == "Yol eksik: %@")
+
+        let zhBundle = Bundle(path: "app/zh-Hans.lproj")!
+        precondition(zhBundle.localizedString(forKey: "Protected path: %@", value: nil, table: nil) == "受保护的路径：%@")
+        precondition(zhBundle.localizedString(forKey: "Measuring folders", value: nil, table: nil) == "正在计算文件夹大小")
+
+        // 4. Step line generator verification
+        precondition(AgentStreamReader.describe(tool: "du", input: ["command": "du -sk /a /b"]) == "Measuring a, b")
+        precondition(AgentStreamReader.describe(tool: "du", input: ["command": "du -sk"]) == "Measuring folders")
+        precondition(AgentStreamReader.describe(tool: "ls", input: ["command": "ls"]) == "Looking around")
+        precondition(AgentStreamReader.describe(tool: "ls", input: ["command": "ls /a/b"]) == "Looking in b")
+        precondition(AgentStreamReader.describe(tool: "docker", input: ["command": "docker system df"]) == "Checking Docker")
+        precondition(AgentStreamReader.describe(tool: "xcrun", input: ["command": "xcrun simctl list"]) == "Checking Xcode simulators")
+        precondition(AgentStreamReader.describe(tool: "ollama", input: ["command": "ollama list"]) == "Checking Ollama models")
+        precondition(AgentStreamReader.describe(tool: "Read", input: ["file_path": "/a/b/foo.txt"]) == "Reading foo.txt")
+
         print("PASS: scanned plans, final action changes, guarded moves, receipt identity and partial removal")
         print("PASS: [#9] folder trashing, copy path, treemap label hits and directory outline context menu")
+        print("PASS: translation tables, English prompt safety, and step/guard localization")
     }
 }

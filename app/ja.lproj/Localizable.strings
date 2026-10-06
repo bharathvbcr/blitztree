@@ -158,3 +158,54 @@
 
 "Save changes" = "変更を保存";
 "HTTP %@: %@" = "HTTP %@: %@";
+/* Step lines */
+"Reading your scan" = "スキャンを読み取り中";
+"Asking %@ what can go" = "%@に削除できるものを確認中";
+"Asking %@ about %@" = "%1$@に%2$@について確認中";
+"Thinking" = "思考中";
+"Reading %@" = "%@を読み取り中";
+"Measuring folders" = "フォルダーを計測中";
+"Measuring %@" = "%@を計測中";
+"Looking around" = "周辺を確認中";
+"Looking in %@" = "%@内を確認中";
+"Checking Docker" = "Dockerを確認中";
+"Checking Xcode simulators" = "Xcodeシミュレータを確認中";
+"Checking Ollama models" = "Ollamaモデルを確認中";
+"Checking %@" = "%@を確認中";
+
+/* Guard block reasons */
+"Invalid cleanup path: %@" = "無効なクリーンアップパス: %@";
+"Cannot inspect %@ (errno %d)" = "%1$@を検査できません (errno %2$d)";
+"Path is missing: %@" = "パスが存在しません: %@";
+"Path component is not a directory: %@" = "パスの構成要素がディレクトリではありません: %@";
+"Symlinks are not allowed in cleanup paths: %@" = "クリーンアップパスにシンボリックリンクは許可されていません: %@";
+"Cloud-only path is not available locally: %@" = "クラウド専用パスはローカルで利用できません: %@";
+"Path is outside the authorized scan root: %@" = "パスが承認されたスキャンルートの範囲外です: %@";
+"Path is on a different volume: %@" = "パスが別のボリュームにあります: %@";
+"Path changed since it was checked: %@" = "確認後にパスが変更されました: %@";
+"Protected path: %@" = "保護されたパス: %@";
+"Path is too broad to clean: %@" = "パスが広範囲すぎるためクリーンアップできません: %@";
+"Git metadata path is protected: %@" = "Gitメタデータパスは保護されています: %@";
+
+/* Card block reasons */
+"Unknown cleanup action" = "不明なクリーンアップ操作";
+"A Trash action cannot contain a command" = "ゴミ箱への移動アクションにコマンドを含めることはできません";
+"The supplied paths do not match this tool's cache" = "指定されたパスはこのツールのキャッシュと一致しません";
+"Command or arguments not allowed" = "コマンドまたは引数が許可されていません";
+"Outside the item you asked about" = "指定された項目の範囲外です";
+"Nothing to remove" = "削除する項目はありません";
+"Path is not an item in this scan" = "パスはこのスキャン内の項目ではありません";
+"The cache path is not a scanned directory" = "キャッシュパスはスキャンされたディレクトリではありません";
+"Quit %@ to clean this" = "これをクリーンアップするには%@を終了してください";
+"A Codex chat you used in the last 2 days" = "過去2日間に使用したCodexチャット";
+"In a project used in the last 2 days" = "過去2日間に使用されたプロジェクト内";
+"A supplied path is not in this scan" = "指定されたパスはこのスキャンに含まれていません";
+"Runs the tool's cleanup, which may affect data outside the listed paths" = "ツールのクリーンアップを実行します。リスト外のデータに影響を与える可能性があります";
+"Leaves %lld path(s) unchanged: %@" = "%1$lld個のパスを変更せずに残します: %2$@";
+"not eligible" = "対象外";
+
+/* Local check lines */
+"Recognised as %@, but BlitzTree won't remove it: %@" = "%1$@として認識されましたが、BlitzTreeは削除しません: %2$@";
+"Recognised by BlitzTree as %@" = "BlitzTreeによって%@として認識されました";
+"Inside %@, recognised by BlitzTree as %@" = "%1$@内、BlitzTreeによって%2$@として認識されました";
+"BlitzTree won't remove this: %@" = "BlitzTreeはこれを削除しません: %@";
