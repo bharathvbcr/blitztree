@@ -23,6 +23,13 @@ struct CleanupIntegrationChecks {
         let other = try directory(".cache/other")
         let secret = try directory(".ssh/node_modules")
         try Data(repeating: 1, count: 8192).write(to: URL(fileURLWithPath: cache + "/data"))
+        // Over a focused question's 1 MB cutoff, so they get table rows.
+        let asked = try directory("projects/big")
+        let askedInside = try directory("projects/big/sub")
+        let askedSibling = try directory("projects/sibling")
+        let askedFile = askedInside + "/blob.bin"
+        try Data(repeating: 2, count: 3_000_000).write(to: URL(fileURLWithPath: askedFile))
+        try Data(repeating: 3, count: 3_000_000).write(to: URL(fileURLWithPath: askedSibling + "/blob.bin"))
         guard let handle = bz_scan_start(home) else { fatalError("fixture scan failed") }
         var files: UInt64 = 0, dirs: UInt64 = 0, bytes: UInt64 = 0, done: Int32 = 0
         while done == 0 {
@@ -89,6 +96,52 @@ struct CleanupIntegrationChecks {
         precondition(invalidCommand != nil, "execution must independently reject changed arguments")
         let relativeTool = await AgentRun.runCommand("docker system prune -f", path: ".:relative:")
         precondition(relativeTool != nil, "relative executable lookup must be refused")
+
+        // "Is this safe to clean?": a focused run keeps every card inside the
+        // item asked about, and its prompt covers only that item.
+        let uvNode = tree.node(at: cache)!, dataNode = tree.node(at: cache + "/data")!
+        func scoped(_ value: PlanItemSpec, _ scope: Int) -> PlanItem {
+            PlanItem(spec: value, tree: tree, home: home, scope: scope)
+        }
+        precondition(scoped(spec([cache]), uvNode).blocked == nil, "the item itself is in scope")
+        precondition(scoped(spec([cache]), tree.node(at: home + "/.cache")!).blocked == nil, "inside the item is in scope")
+        precondition(scoped(spec([cache + "/data"]), uvNode).blocked == nil)
+        for (value, scope) in [(spec([other]), uvNode), (spec([cache, other]), uvNode),
+                               (spec([cache], action: "command", command: "uv cache clean"), dataNode),
+                               (spec([other], action: "command", command: "docker system prune -f"), uvNode)] {
+            let item = scoped(value, scope)
+            precondition(item.blocked == "Outside the item you asked about" && !item.selected
+                         && item.cleanupTargets.isEmpty, "a path or command past the item blocks the card")
+        }
+        precondition(scoped(spec([cache], action: "command", command: "uv cache clean"), uvNode).blocked == nil,
+                     "the tool's own cache command fits when its folder is the item")
+        let rescoped = PlanItem.reconcile([spec([other])], previous: [], tree: tree, scope: uvNode)
+        precondition(rescoped[0].blocked != nil, "cards from the final plan are scoped too")
+
+        let askedNode = tree.node(at: asked)!
+        let focus = AgentFocus(node: askedNode, tree: tree, known: [], home: home)
+        precondition(focus.path == asked && focus.name == "big" && focus.isDir && focus.local == nil)
+        let focused = AgentPrompt.build(tree: tree, scanRoot: home, known: [], running: [], focus: focus)
+        precondition(focused.contains("asked whether it is safe to clean: \(asked)"))
+        precondition(focused.contains("| \(askedInside)/ |"), "the item's own subfolders are listed")
+        precondition(!focused.contains(askedSibling), "an unrelated sibling stays out of the question")
+        precondition(!focused.contains("BlitzTree's own check"), "no local check line when there is none")
+        let fileFocus = AgentFocus(node: tree.node(at: askedFile)!, tree: tree, known: [], home: home)
+        let filePrompt = AgentPrompt.build(tree: tree, scanRoot: home, known: [], running: [], focus: fileFocus)
+        precondition(!fileFocus.isDir && filePrompt.contains("Answer about this file only")
+                     && filePrompt.contains("## The file") && !filePrompt.contains("## Largest folders"))
+        let whole = AgentPrompt.build(tree: tree, scanRoot: home, known: [], running: [])
+        precondition(whole.contains("The user clicked \"Clean up\"") && !whole.contains("right-clicked"))
+        let guarded = AgentFocus(node: tree.node(at: secret)!, tree: tree, known: [], home: home)
+        precondition(guarded.local?.hasPrefix("BlitzTree won't remove this: ") == true,
+                     "a protected item says so before any agent answers")
+        let guardedPrompt = AgentPrompt.build(tree: tree, scanRoot: home, known: [], running: [], focus: guarded)
+        precondition(guardedPrompt.contains("BlitzTree's own check: BlitzTree won't remove this"))
+        precondition(AgentPrompt.relevant("/a/b", to: nil) && AgentPrompt.relevant("/a/b", to: "/a")
+                     && AgentPrompt.relevant("/a/b", to: "/a/b/c") && AgentPrompt.relevant("/a/b", to: "/")
+                     && !AgentPrompt.relevant("/a/b", to: "/a/bc") && !AgentPrompt.relevant("/a/b", to: "/x"))
+        precondition(AgentPrompt.appData(tree: tree, focus: asked).isEmpty,
+                     "simulator and Codex sections are skipped for an unrelated item")
 
         // Move only inside this disposable fixture: never use the user's Trash.
         let trash = fixture.appendingPathComponent("fake-trash")

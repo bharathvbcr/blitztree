@@ -105,6 +105,13 @@
 "Copy Path" = "Yolu Kopyala";
 "Move to Trash" = "Çöp Kutusu'na Taşı";
 "Move “%@” to Trash?" = "“%@” Çöp Kutusu'na taşınsın mı?";
+"Couldn’t move “%@” to the Trash" = "“%@” Çöp Kutusu'na taşınamadı";
+"Open" = "Aç";
+"Zoom In" = "Yakınlaştır";
+"Ask %@ If It’s Safe to Clean" = "Silmenin güvenli olup olmadığını %@ uygulamasına sor";
+"Ask an Agent If It’s Safe to Clean…" = "Silmenin güvenli olup olmadığını bir ajana sor…";
+"%@ is looking at “%@”" = "%1$@, “%2$@” öğesini inceliyor";
+"Is “%@” safe to clean?" = "“%@” güvenle silinebilir mi?";
 
 /* Settings */
 "Custom model providers" = "Özel model sağlayıcıları";

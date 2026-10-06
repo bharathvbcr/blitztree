@@ -102,6 +102,13 @@
 "Copy Path" = "Copy Path";
 "Move to Trash" = "Move to Trash";
 "Move “%@” to Trash?" = "Move “%@” to Trash?";
+"Couldn’t move “%@” to the Trash" = "Couldn’t move “%@” to the Trash";
+"Open" = "Open";
+"Zoom In" = "Zoom In";
+"Ask %@ If It’s Safe to Clean" = "Ask %@ If It’s Safe to Clean";
+"Ask an Agent If It’s Safe to Clean…" = "Ask an Agent If It’s Safe to Clean…";
+"%@ is looking at “%@”" = "%1$@ is looking at “%2$@”";
+"Is “%@” safe to clean?" = "Is “%@” safe to clean?";
 "Custom model providers" = "Custom model providers";
 "Add provider" = "Add provider";
 "Connect a relay, a self-hosted server, or any other OpenAI- or Anthropic-compatible endpoint by its base URL, protocol, and models." = "Connect a relay, a self-hosted server, or any other OpenAI- or Anthropic-compatible endpoint by its base URL, protocol, and models.";

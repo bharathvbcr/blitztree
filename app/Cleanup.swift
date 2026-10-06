@@ -164,6 +164,8 @@ struct CleanupPanel: View {
                     Button("Reveal in Finder") {
                         NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: item.path)])
                     }
+                    Button(NodeMenu.askTitle(model)) { model.ask(about: item.node) }
+                        .disabled(!model.canStartRun)
                 }
             }
             .listStyle(.inset)
@@ -348,6 +350,9 @@ private struct AgentRunView: View {
                         .transition(.scale(scale: 0.9).combined(with: .opacity))
                         .animation(.snappy, value: hero)
                     }
+                    if let focus = run.focus, [.thinking, .planned].contains(run.phase) {
+                        verdict(focus)
+                    }
                     if run.phase == .thinking || !run.items.isEmpty {
                         steps
                     }
@@ -413,8 +418,35 @@ private struct AgentRunView: View {
     /// The big number: what waits to be deleted, then what was freed.
     private var hero: UInt64 { run.phase == .done ? (run.reclaimed ?? run.freed) : run.pendingBytes }
 
+    /// A right-click question: BlitzTree's own check at once, then the
+    /// agent's answer. The answer stands even when every card is blocked.
+    private func verdict(_ focus: AgentFocus) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            if run.phase == .planned, !run.summary.isEmpty {
+                Text(run.summary)
+                    .font(.body)
+                    .textSelection(.enabled)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            if let local = focus.local {
+                Label(local, systemImage: "checkmark.shield")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+        .padding(.bottom, 4)
+    }
+
     private var title: String {
-        switch run.phase {
+        if let focus = run.focus {
+            switch run.phase {
+            case .thinking: return String(localized: "\(run.displayName) is looking at \u{201C}\(focus.name)\u{201D}")
+            case .planned: return String(localized: "Is \u{201C}\(focus.name)\u{201D} safe to clean?")
+            default: break
+            }
+        }
+        return switch run.phase {
         case .thinking: String(localized: "\(run.displayName) is looking")
         case .planned: run.items.isEmpty ? String(localized: "Nothing worth removing") : String(localized: "Here's the plan")
         case .trashing: String(localized: "Moving to the Trash")
@@ -427,7 +459,12 @@ private struct AgentRunView: View {
     }
 
     private var subtitle: String {
-        switch run.phase {
+        // The verdict is in the body; the header names where the item is.
+        if let focus = run.focus, run.phase == .planned {
+            let home = NSHomeDirectory()
+            return focus.path.hasPrefix(home + "/") ? "~" + focus.path.dropFirst(home.count) : focus.path
+        }
+        return switch run.phase {
         case .thinking: run.items.isEmpty ? String(localized: "Reading your scan, nothing is touched") : String(localized: "Writing the plan")
         case .planned: run.summary
         case .trashing: String(localized: "Nothing is deleted yet")
@@ -514,6 +551,11 @@ private struct AgentRunView: View {
         switch run.phase {
         case .thinking:
             Button("Stop", action: close)
+                .frame(maxWidth: .infinity)
+        case .planned where run.focus != nil && run.items.allSatisfy({ $0.blocked != nil }):
+            // An answer with nothing BlitzTree may remove: just close it.
+            Button("Done", action: close)
+                .buttonStyle(.borderedProminent)
                 .frame(maxWidth: .infinity)
         case .planned:
             VStack(spacing: 8) {

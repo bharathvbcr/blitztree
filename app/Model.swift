@@ -205,30 +205,70 @@ final class ScanModel {
         return ProviderStore.shared.providers.first { $0.id == id }
     }
 
-    /// Start the cleanup with whatever the user picked in Settings.
-    func startCleanup() {
-        if let provider = preferredProvider { startProvider(provider) }
-        else if let agent = preferredAgent { startAgent(agent) }
+    /// Start the cleanup with whatever the user picked in Settings; with a
+    /// focus, ask that planner about one item instead of the whole scan.
+    func startCleanup(focus: AgentFocus? = nil) {
+        if let provider = preferredProvider { startProvider(provider, focus: focus) }
+        else if let agent = preferredAgent { startAgent(agent, focus: focus) }
     }
 
-    func startProvider(_ provider: LLMProvider) {
-        guard let tree, !scanning else { return }
+    /// What answers a right-click question right now, by name; nil when
+    /// nothing is set up yet.
+    var plannerName: String? { preferredProvider?.displayName ?? preferredAgent?.kind.name }
+
+    /// A run that has started moving or deleting must not be replaced.
+    var canStartRun: Bool {
+        guard tree != nil, !scanning, !cleanupTrash.running else { return false }
+        guard let phase = agentRun?.phase else { return true }
+        return ![.trashing, .staged, .deleting].contains(phase)
+    }
+
+    /// The right-click menu's "Ask … if it's safe to clean". With nothing
+    /// set up, the panel shows the setup offer and the question is answered
+    /// once setup finishes.
+    func ask(about node: Int) {
+        guard let tree, canStartRun, node > 0, node < tree.count else { return }
+        let focus = AgentFocus(node: node, tree: tree, known: cleanup)
+        selection = node
+        if plannerName == nil {
+            pendingFocus = focus
+            panelRequests += 1
+        } else {
+            startCleanup(focus: focus)
+        }
+    }
+
+    /// A question asked before any planner was ready.
+    private var pendingFocus: AgentFocus?
+
+    /// The same item in the scan on screen now, which may be newer than the
+    /// one the question was asked from (or no longer contain it).
+    private func refocus(_ old: AgentFocus?) -> AgentFocus? {
+        guard let old, let tree, let node = tree.node(at: old.path) else { return nil }
+        return AgentFocus(node: node, tree: tree, known: cleanup)
+    }
+
+    func startProvider(_ provider: LLMProvider, focus: AgentFocus? = nil) {
+        guard let tree, canStartRun else { return }
         UserDefaults.standard.set("provider:\(provider.id)", forKey: "bz.engine")
+        pendingFocus = nil
         agentRun?.cancel()
         let run = AgentRun(agent: nil, env: agentEnv, tree: tree, scanRoot: scanRoot,
-                           known: cleanup, provider: provider) { [weak self] in
+                           known: cleanup, provider: provider, focus: focus) { [weak self] in
             guard let self, !self.scanning else { return }
             self.startScan()
         }
         withAnimation(.snappy) { agentRun = run }
     }
 
-    func startAgent(_ agent: InstalledAgent) {
-        guard let tree, !scanning, !cleanupTrash.running else { return }
+    func startAgent(_ agent: InstalledAgent, focus: AgentFocus? = nil) {
+        guard let tree, canStartRun else { return }
         UserDefaults.standard.set(agent.kind.rawValue, forKey: "bz.engine")
         UserDefaults.standard.set(agent.kind.rawValue, forKey: "bz.agent")
+        pendingFocus = nil
         agentRun?.cancel()
-        let run = AgentRun(agent: agent, env: agentEnv, tree: tree, scanRoot: scanRoot, known: cleanup) { [weak self] in
+        let run = AgentRun(agent: agent, env: agentEnv, tree: tree, scanRoot: scanRoot, known: cleanup,
+                           focus: focus) { [weak self] in
             guard let self, !self.scanning else { return }
             self.startScan()
         }
@@ -249,8 +289,11 @@ final class ScanModel {
     /// Run the same cleanup again: whatever produced this run (CLI agent or
     /// provider), re-planned from the current scan.
     func restart(_ run: AgentRun) {
-        if let provider = run.provider { startProvider(provider) }
-        else if let agent = run.agent { startAgent(agent) }
+        // The item asked about may be gone from a newer scan.
+        let focus = refocus(run.focus)
+        if run.focus != nil && focus == nil { return }
+        if let provider = run.provider { startProvider(provider, focus: focus) }
+        else if let agent = run.agent { startAgent(agent, focus: focus) }
     }
 
     /// Bumped to ask the window to open the Clean Up panel.
@@ -263,7 +306,11 @@ final class ScanModel {
             guard let self else { return }
             agentEnv = env
             agentSetup = nil
-            if let agent = env.ready.first(where: { $0.kind == kind }) { startAgent(agent) }
+            if let agent = env.ready.first(where: { $0.kind == kind }) {
+                // Answer the right-click question that led here, if its
+                // scan is still the one on screen.
+                startAgent(agent, focus: refocus(pendingFocus))
+            }
         }
     }
     /// A tree has been shown at least once, so the views exist (see ContentView).

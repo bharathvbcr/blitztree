@@ -105,6 +105,13 @@
 "Copy Path" = "Copier le chemin";
 "Move to Trash" = "Déplacer à la Corbeille";
 "Move “%@” to Trash?" = "Déplacer « %@ » à la Corbeille ?";
+"Couldn’t move “%@” to the Trash" = "Impossible de déplacer « %@ » à la Corbeille";
+"Open" = "Ouvrir";
+"Zoom In" = "Zoomer";
+"Ask %@ If It’s Safe to Clean" = "Demander à %@ si on peut le supprimer sans risque";
+"Ask an Agent If It’s Safe to Clean…" = "Demander à un agent si on peut le supprimer sans risque…";
+"%@ is looking at “%@”" = "%1$@ examine « %2$@ »";
+"Is “%@” safe to clean?" = "Peut-on supprimer « %@ » sans risque ?";
 
 /* Settings */
 "Custom model providers" = "Fournisseurs de modèles personnalisés";

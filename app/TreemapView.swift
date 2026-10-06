@@ -466,10 +466,11 @@ final class TreemapNSView: NSView {
 
     override func rightMouseDown(with event: NSEvent) {
         let p = convert(event.locationInWindow, from: nil)
-        guard let model, let tree = model.tree, let leaf = hit(p) else { return }
-        model.selection = leaf.node
+        // A folder's label strip picks the folder, as a left click does.
+        guard let model, model.tree != nil, let node = Scan.hit(labelHits, p) ?? hit(p)?.node else { return }
+        model.selection = node
         syncOverlay()
-        NodeMenu.popUp(path: tree.path(leaf.node), with: event, for: self)
+        NodeMenu.popUp(node: node, model: model, with: event, for: self)
     }
 }
 
@@ -525,46 +526,108 @@ nonisolated private enum Scan {
     }
 }
 
-/// Right-click menu for a file or folder, shared by the treemap and rings.
+/// Right-click menu for a file or folder. The treemap, rings and directory
+/// list all show these items; the Clean Up list offers the same question.
 final class NodeMenu: NSObject {
     private static let shared = NodeMenu()
 
-    static func popUp(path: String, with event: NSEvent, for view: NSView) {
-        let menu = NSMenu()
-        for (title, action) in [(String(localized: "Reveal in Finder"), #selector(revealInFinder(_:))),
-                                (String(localized: "Copy Path"), #selector(copyPath(_:))),
-                                (String(localized: "Move to Trash"), #selector(moveToTrash(_:)))] {
-            if action == #selector(moveToTrash(_:)) { menu.addItem(.separator()) }
-            let item = NSMenuItem(title: title, action: action, keyEquivalent: "")
-            item.target = shared
-            item.representedObject = path
-            menu.addItem(item)
+    /// What the chosen item acts on.
+    private final class Pick: NSObject {
+        let node: Int
+        let path: String
+        weak var model: ScanModel?
+        init(node: Int, path: String, model: ScanModel) {
+            self.node = node
+            self.path = path
+            self.model = model
         }
+    }
+
+    static func popUp(node: Int, model: ScanModel, with event: NSEvent, for view: NSView) {
+        let menu = NSMenu()
+        fill(menu, node: node, model: model)
         NSMenu.popUpContextMenu(menu, with: event, for: view)
     }
 
+    /// "Ask Claude Code If It's Safe to Clean", or a setup hint when no
+    /// planner is ready yet.
+    static func askTitle(_ model: ScanModel) -> String {
+        model.plannerName.map { String(localized: "Ask \($0) If It’s Safe to Clean") }
+            ?? String(localized: "Ask an Agent If It’s Safe to Clean…")
+    }
+
+    /// Replaces the menu's items with the actions for `node`.
+    static func fill(_ menu: NSMenu, node: Int, model: ScanModel) {
+        menu.removeAllItems()
+        menu.autoenablesItems = false
+        guard let tree = model.tree, node >= 0, node < tree.count else { return }
+        let pick = Pick(node: node, path: tree.path(node), model: model)
+        func add(_ title: String, _ action: Selector, enabled: Bool = true) {
+            let item = NSMenuItem(title: title, action: action, keyEquivalent: "")
+            item.target = shared
+            item.representedObject = pick
+            item.isEnabled = enabled
+            menu.addItem(item)
+        }
+        if tree.isDir(node) {
+            add(String(localized: "Zoom In"), #selector(zoomIn(_:)),
+                enabled: node != model.viewRoot && !tree.children(node).isEmpty)
+        } else {
+            add(String(localized: "Open"), #selector(open(_:)))
+        }
+        add(String(localized: "Reveal in Finder"), #selector(revealInFinder(_:)))
+        add(String(localized: "Copy Path"), #selector(copyPath(_:)))
+        menu.addItem(.separator())
+        // The scan root is the whole cleanup, which the panel already runs.
+        add(askTitle(model), #selector(ask(_:)), enabled: node != 0 && model.canStartRun)
+        menu.addItem(.separator())
+        add(String(localized: "Move to Trash"), #selector(moveToTrash(_:)), enabled: node != 0)
+    }
+
+    @objc private func zoomIn(_ sender: NSMenuItem) {
+        guard let pick = sender.representedObject as? Pick, let model = pick.model else { return }
+        model.viewRoot = pick.node
+    }
+
+    @objc private func open(_ sender: NSMenuItem) {
+        guard let pick = sender.representedObject as? Pick else { return }
+        NSWorkspace.shared.open(URL(fileURLWithPath: pick.path))
+    }
+
     @objc private func revealInFinder(_ sender: NSMenuItem) {
-        guard let path = sender.representedObject as? String else { return }
-        NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: path)])
+        guard let pick = sender.representedObject as? Pick else { return }
+        NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: pick.path)])
     }
 
     @objc private func copyPath(_ sender: NSMenuItem) {
-        guard let path = sender.representedObject as? String else { return }
+        guard let pick = sender.representedObject as? Pick else { return }
         NSPasteboard.general.clearContents()
-        NSPasteboard.general.setString(path, forType: .string)
+        NSPasteboard.general.setString(pick.path, forType: .string)
+    }
+
+    @objc private func ask(_ sender: NSMenuItem) {
+        guard let pick = sender.representedObject as? Pick, let model = pick.model else { return }
+        model.ask(about: pick.node)
     }
 
     @objc private func moveToTrash(_ sender: NSMenuItem) {
-        guard let path = sender.representedObject as? String else { return }
-        let url = URL(fileURLWithPath: path)
+        guard let pick = sender.representedObject as? Pick else { return }
+        let url = URL(fileURLWithPath: pick.path)
         let alert = NSAlert()
         alert.messageText = String(localized: "Move \u{201C}\(url.lastPathComponent)\u{201D} to Trash?")
-        alert.informativeText = path
+        alert.informativeText = pick.path
         alert.addButton(withTitle: String(localized: "Move to Trash"))
         alert.addButton(withTitle: String(localized: "Cancel"))
-        if alert.runModal() == .alertFirstButtonReturn {
-            try? FileManager.default.trashItem(at: url, resultingItemURL: nil)
-            // Note: sizes refresh on next rescan; v1 keeps it simple.
+        guard alert.runModal() == .alertFirstButtonReturn else { return }
+        do {
+            try FileManager.default.trashItem(at: url, resultingItemURL: nil)
+            // Sizes refresh on the next rescan.
+        } catch {
+            let failed = NSAlert()
+            failed.alertStyle = .warning
+            failed.messageText = String(localized: "Couldn’t move \u{201C}\(url.lastPathComponent)\u{201D} to the Trash")
+            failed.informativeText = error.localizedDescription
+            failed.runModal()
         }
     }
 }

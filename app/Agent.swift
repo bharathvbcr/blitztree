@@ -396,6 +396,41 @@ nonisolated enum CleanupGuard {
 
 // MARK: - Run model
 
+/// One file or folder the user right-clicked and asked about. The run then
+/// plans for that item alone: its summary is the verdict, and every card
+/// must stay at or inside the item.
+nonisolated struct AgentFocus: Sendable, Equatable {
+    let node: Int
+    /// Absolute, without the Data-volume prefix (what the agent can `ls`).
+    let path: String
+    let name: String
+    let isDir: Bool
+    /// BlitzTree's own check before any agent sees it: why its guards would
+    /// refuse the item, or the rebuildable folder it was recognised as.
+    let local: String?
+
+    @MainActor
+    init(node: Int, tree: Tree, known: [CleanupItem], home: String = NSHomeDirectory()) {
+        self.node = node
+        path = tree.displayPath(node)
+        name = node == 0 ? path : tree.name(node)
+        isDir = tree.isDir(node)
+        let ancestry = Set(tree.ancestry(node))
+        if let item = known.first(where: { ancestry.contains($0.node) }) {
+            local = item.blocked.map { "Recognised as \(item.kind), but BlitzTree won't remove it: \($0)" }
+                ?? (item.node == node ? "Recognised by BlitzTree as \(item.kind)"
+                    : "Inside \(item.display), recognised by BlitzTree as \(item.kind)")
+        } else {
+            do {
+                _ = try CleanupPathSafety.capture(path: tree.path(node), root: home, home: home)
+                local = CleanupGuard.recentlyUsed(path) ? "In a project used in the last 2 days" : nil
+            } catch {
+                local = "BlitzTree won't remove this: \(error.localizedDescription)"
+            }
+        }
+    }
+}
+
 @Observable
 @MainActor
 final class PlanItem: Identifiable {
@@ -427,7 +462,9 @@ final class PlanItem: Identifiable {
     /// A tool cache that is only a folder: trashed and deleted like one.
     let viaTrash: Bool
 
-    init(spec: PlanItemSpec, tree: Tree, home: String = NSHomeDirectory()) {
+    /// `scope`: the node a focused run asked about. Any path outside it
+    /// blocks the whole item, so a command that would reach past it can't run.
+    init(spec: PlanItemSpec, tree: Tree, home: String = NSHomeDirectory(), scope: Int? = nil) {
         self.spec = spec
         var asked = spec.paths.map { ($0 as NSString).expandingTildeInPath }
         let command = spec.action == "command" ? CleanupCommand.parse(spec.command) : nil
@@ -457,6 +494,11 @@ final class PlanItem: Identifiable {
                     } catch { reason = error.localizedDescription }
                 }
             } else { reason = "Command or arguments not allowed" }
+        }
+        if reason == nil, let scope, asked.contains(where: { path in
+            tree.node(at: path).map { !tree.ancestry($0).contains(scope) } ?? true
+        }) {
+            reason = "Outside the item you asked about"
         }
         viaTrash = folderCache
         var kept: [CleanupTarget] = []
@@ -531,13 +573,13 @@ final class PlanItem: Identifiable {
 
     /// Retain a reviewed action and its captured identities only when its full
     /// specification is unchanged. New or changed final actions need selection.
-    static func reconcile(_ specs: [PlanItemSpec], previous: [PlanItem], tree: Tree) -> [PlanItem] {
+    static func reconcile(_ specs: [PlanItemSpec], previous: [PlanItem], tree: Tree, scope: Int? = nil) -> [PlanItem] {
         var remaining = previous
         return specs.map { spec in
             if let index = remaining.firstIndex(where: { $0.spec == spec }) {
                 return remaining.remove(at: index)
             }
-            let fresh = PlanItem(spec: spec, tree: tree)
+            let fresh = PlanItem(spec: spec, tree: tree, scope: scope)
             fresh.selected = false
             return fresh
         }
@@ -559,6 +601,8 @@ final class AgentRun {
     let provider: LLMProvider?
     /// What the panel calls the planner: the CLI agent's or the provider's name.
     var displayName: String { agent?.kind.name ?? provider?.displayName ?? "The assistant" }
+    /// Set when the user asked about one item rather than the whole scan.
+    let focus: AgentFocus?
     private(set) var phase: Phase = .thinking
     /// What the agent has done so far, in plain words; the last one is live.
     private(set) var steps: [String] = ["Reading your scan"]
@@ -575,9 +619,11 @@ final class AgentRun {
     private var preparationTask: Task<Void, Never>?
 
     init(agent: InstalledAgent?, env: AgentEnvironment, tree: Tree, scanRoot: String,
-         known: [CleanupItem], provider: LLMProvider? = nil, onFinish: @escaping () -> Void) {
+         known: [CleanupItem], provider: LLMProvider? = nil, focus: AgentFocus? = nil,
+         onFinish: @escaping () -> Void) {
         self.agent = agent
         self.provider = provider
+        self.focus = focus
         self.scanRoot = scanRoot
         self.tree = tree
         self.onFinish = onFinish
@@ -587,14 +633,14 @@ final class AgentRun {
         preparationTask = Task { [weak self] in
             guard !Task.isCancelled else { return }
             let input = await Task.detached(priority: .userInitiated) {
-                AgentPrompt.build(tree: tree, scanRoot: scanRoot, known: known, running: running)
-                + AgentPrompt.appData(tree: tree)
+                AgentPrompt.build(tree: tree, scanRoot: scanRoot, known: known, running: running, focus: focus)
+                + AgentPrompt.appData(tree: tree, focus: focus?.path)
             }.value
             // Closing or replacing a run while its prompt was being built
             // must not launch an agent after cancellation.
             guard !Task.isCancelled, let self else { return }
             preparationTask = nil
-            step("Asking \(displayName) what can go")
+            step(asking)
             start(input: input, env: env)
         }
     }
@@ -744,20 +790,28 @@ final class AgentRun {
         client.plan(input) { [weak self] event in
             DispatchQueue.main.async { MainActor.assumeIsolated { self?.handleProvider(event, name: name) } }
         }
-        step("Asking \(name) what can go")
+        step(asking)
     }
+
+    private var asking: String {
+        focus.map { "Asking \(displayName) about \($0.name)" } ?? "Asking \(displayName) what can go"
+    }
+
+    /// Every card goes through the same guards; a focused run also keeps
+    /// them inside the item it asked about.
+    private func plan(_ spec: PlanItemSpec) -> PlanItem { PlanItem(spec: spec, tree: tree, scope: focus?.node) }
 
     private func handleProvider(_ event: LLMEvent, name: String) {
         guard phase == .thinking else { return }
         switch event {
         case .item(let spec):
-            withAnimation(.snappy) { items.append(PlanItem(spec: spec, tree: tree)) }
+            withAnimation(.snappy) { items.append(plan(spec)) }
         case .plan(let summary, let specs):
             self.summary = summary
             // The final JSON is authoritative; keep the cards already shown
             // (and their checkboxes) when they match.
             if specs.map(\.title) != items.map(\.spec.title) {
-                withAnimation(.snappy) { items = specs.map { PlanItem(spec: $0, tree: tree) } }
+                withAnimation(.snappy) { items = specs.map(plan) }
             }
             finishPlanning()
         case .failed(let message):
@@ -772,7 +826,7 @@ final class AgentRun {
         case .activity(let text):
             step(text)
         case .item(let spec):
-            withAnimation(.snappy) { items.append(PlanItem(spec: spec, tree: tree)) }
+            withAnimation(.snappy) { items.append(plan(spec)) }
         case .restart:
             withAnimation(.snappy) { items = [] }
         case .plan(let summary, let specs):
@@ -781,7 +835,7 @@ final class AgentRun {
             // (and their checkboxes) when they match.
             if specs != items.map(\.spec) {
                 withAnimation(.snappy) {
-                    items = PlanItem.reconcile(specs, previous: items, tree: tree)
+                    items = PlanItem.reconcile(specs, previous: items, tree: tree, scope: focus?.node)
                 }
             }
             finishPlanning()
@@ -1193,14 +1247,16 @@ nonisolated final class AgentStreamReader: @unchecked Sendable {
 nonisolated enum AgentPrompt {
     /// The flat tree orders siblings by size and includes descendants in
     /// each directory's total. Small subtrees cannot contribute a row.
-    static func largestNodes(in tree: Tree) -> (folders: [Int], files: [Int]) {
+    /// A focused question passes its own node and cutoffs scaled to it.
+    static func largestNodes(in tree: Tree, under root: Int = 0, minFolder: UInt64 = 100_000_000,
+                             minFile: UInt64 = 250_000_000) -> (folders: [Int], files: [Int]) {
         var folders: [Int] = []
         var files: [Int] = []
-        var stack = [0]
+        var stack = [root]
         while let parent = stack.popLast() {
             for raw in tree.children(parent) {
                 let i = Int(raw), size = tree.alloc[i]
-                guard size >= 100_000_000 else { break }
+                guard size >= minFolder else { break }
                 if tree.isDir(i) {
                     stack.append(i)
                     // Still descend through pass-through folders: only their
@@ -1208,7 +1264,7 @@ nonisolated enum AgentPrompt {
                     if let first = tree.children(i).first, tree.isDir(Int(first)),
                        Double(tree.alloc[Int(first)]) >= 0.95 * Double(size) { continue }
                     folders.append(i)
-                } else if size >= 250_000_000 {
+                } else if size >= minFile {
                     files.append(i)
                 }
             }
@@ -1223,24 +1279,59 @@ nonisolated enum AgentPrompt {
         return (Array(folders.prefix(250)), Array(files.prefix(80)))
     }
 
-    static func build(tree: Tree, scanRoot: String, known: [CleanupItem], running: [String]) -> String {
+    /// The whole-scan cleanup, or with `focus` the question "is this one item
+    /// safe to clean?" Both share the plan rules; a focus only narrows the
+    /// tables to the item and asks for a verdict as the summary.
+    static func build(tree: Tree, scanRoot: String, known: [CleanupItem], running: [String],
+                      focus: AgentFocus? = nil) -> String {
         let home = NSHomeDirectory()
         func shown(_ i: Int) -> String { tree.displayPath(i) }
 
-        let (folders, files) = largestNodes(in: tree)
+        var md: String
+        let folders: [Int], files: [Int], rebuildable: [CleanupItem]
+        if let focus {
+            // Scaled to the item: a 40 MB folder still gets a useful breakdown.
+            let cutoff = max(1_000_000, tree.alloc[focus.node] / 100)
+            (folders, files) = largestNodes(in: tree, under: focus.node, minFolder: cutoff, minFile: cutoff)
+            rebuildable = known.filter { tree.ancestry($0.node).contains(focus.node) }
+            let kind = focus.isDir ? "folder" : "file"
+            md = """
+            You are the cleanup agent inside BlitzTree, a macOS disk-space app. The user right-clicked \
+            one \(kind) and asked whether it is safe to clean: \(focus.path) (\(Fmt.size(tree.alloc[focus.node]))\
+            \(focus.isDir ? ", \(Fmt.num(UInt64(tree.nFiles[focus.node]))) files" : "")). They are watching a \
+            live view of your steps, so be fast. Their home folder is \(home).
+            \(focus.local.map { "\nBlitzTree's own check: \($0)\n" } ?? "")
+            Below is BlitzTree's scan of that \(kind) (allocated sizes, measured seconds ago). Use it; do \
+            not re-scan the disk. Only check what you really cannot judge from the tables, batched (one \
+            `du -sk a b c` beats several), at most 3 commands.
 
-        var md = """
-        You are the cleanup agent inside BlitzTree, a macOS disk-space app. The user clicked \
-        "Clean up" and is watching a live view of your steps, so be fast. Their home folder is \(home).
+            Answer about this \(kind) only. Every path in items must be \(focus.path) itself or inside \
+            it; BlitzTree ignores any other path. If it should be kept, say so and return no items.
 
-        Below is BlitzTree's scan (\(scanRoot == "/System/Volumes/Data" ? "whole disk" : scanRoot), \
-        allocated sizes, measured seconds ago). Use it; do not re-scan the disk. Most plans need no \
-        commands at all. Only check what you really cannot judge from the tables, batched (one \
-        `du -sk a b c` beats several), at most 3 commands.
+            Return a cleanup plan as JSON (the schema is enforced):
+            - summary: your verdict in one or two plain sentences, under 220 characters: what it is, and \
+            whether removing it loses anything or it is rebuilt, e.g. "npm packages for one project; \
+            npm install brings them back, so it is safe to remove."
+            - items, largest first, at most 12. Each item:
+            """
+        } else {
+            (folders, files) = largestNodes(in: tree)
+            rebuildable = known
+            md = """
+            You are the cleanup agent inside BlitzTree, a macOS disk-space app. The user clicked \
+            "Clean up" and is watching a live view of your steps, so be fast. Their home folder is \(home).
 
-        Return a cleanup plan as JSON (the schema is enforced):
-        - summary: one short sentence, e.g. "About 44 GB of caches and build output can go."
-        - items, largest first, at most 12. Each item:
+            Below is BlitzTree's scan (\(scanRoot == "/System/Volumes/Data" ? "whole disk" : scanRoot), \
+            allocated sizes, measured seconds ago). Use it; do not re-scan the disk. Most plans need no \
+            commands at all. Only check what you really cannot judge from the tables, batched (one \
+            `du -sk a b c` beats several), at most 3 commands.
+
+            Return a cleanup plan as JSON (the schema is enforced):
+            - summary: one short sentence, e.g. "About 44 GB of caches and build output can go."
+            - items, largest first, at most 12. Each item:
+            """
+        }
+        md += "\n" + """
           - title: 2-5 plain words ("uv package cache", "Old Playwright browsers").
           - detail: why it is safe, under 90 characters, plain English.
           - group: "safe" = rebuilt or re-downloaded automatically, nothing lost; "ask" = probably \
@@ -1266,33 +1357,55 @@ nonisolated enum AgentPrompt {
         \(running.joined(separator: ", "))
 
         """
-        if !known.isEmpty {
+        if !rebuildable.isEmpty {
             md += "\n## Recognised by BlitzTree as rebuildable\n\n| Size | Path | What |\n|---:|---|---|\n"
-            for item in known.prefix(120) {
+            for item in rebuildable.prefix(120) {
                 md += "| \(Fmt.size(item.bytes)) | \(item.path) | \(item.kind) |\n"
             }
         }
-        md += "\n## Largest folders\n\n| Size | Files | Path |\n|---:|---:|---|\n"
-        for i in folders.prefix(250) {
-            md += "| \(Fmt.size(tree.alloc[i])) | \(Fmt.num(UInt64(tree.nFiles[i]))) | \(shown(i))/ |\n"
+        if let focus, !focus.isDir {
+            md += "\n## The file\n\n| Size | Path |\n|---:|---|\n| \(Fmt.size(tree.alloc[focus.node])) | \(focus.path) |\n"
+            return md
+        }
+        if focus == nil || !folders.isEmpty {
+            md += "\n## Largest folders\(focus == nil ? "" : " inside it")\n\n| Size | Files | Path |\n|---:|---:|---|\n"
+            for i in folders.prefix(250) {
+                md += "| \(Fmt.size(tree.alloc[i])) | \(Fmt.num(UInt64(tree.nFiles[i]))) | \(shown(i))/ |\n"
+            }
         }
         if !files.isEmpty {
-            md += "\n## Largest files\n\n| Size | Path |\n|---:|---|\n"
+            md += "\n## Largest files\(focus == nil ? "" : " inside it")\n\n| Size | Path |\n|---:|---|\n"
             for i in files.prefix(80) { md += "| \(Fmt.size(tree.alloc[i])) | \(shown(i)) |\n" }
         }
         return md
+    }
+
+    /// Whether an app-data section is worth its lookup for this question:
+    /// always for the whole scan, else only when the focus and the section's
+    /// folder contain one another.
+    static func relevant(_ folder: String, to focus: String?) -> Bool {
+        guard let focus else { return true }
+        let f = focus.hasSuffix("/") ? String(focus.dropLast()) : focus
+        return f == folder || folder.hasPrefix(f + "/") || f.hasPrefix(folder + "/") || f.isEmpty
     }
 
     /// Big folders the scan alone can't explain: Xcode's simulators (runtime
     /// images live outside the home folder and go only through `simctl`) and
     /// the Codex app's chat folders, which sit in the otherwise off-limits
     /// ~/Documents. Listed with what the agent needs to plan them.
-    static func appData(tree: Tree) -> String {
+    /// A focused question only gets the sections its item overlaps.
+    static func appData(tree: Tree, focus: String? = nil) -> String {
+        let home = NSHomeDirectory()
+        // Device data lives in the home folder, runtime images outside it.
+        let wantSims = relevant(home + "/Library/Developer/CoreSimulator", to: focus)
+            || relevant("/Library/Developer/CoreSimulator", to: focus)
         // simctl and Codex's logs are independent: look them up side by side.
         let sims = OutputText()
         let done = DispatchGroup()
-        DispatchQueue.global(qos: .userInitiated).async(group: done) { sims.set(Data(simulators().utf8)) }
-        let chats = codexChats(tree: tree)
+        if wantSims {
+            DispatchQueue.global(qos: .userInitiated).async(group: done) { sims.set(Data(simulators().utf8)) }
+        }
+        let chats = relevant(home + "/Documents/Codex", to: focus) ? codexChats(tree: tree) : ""
         done.wait()
         return sims.value + chats
     }

@@ -105,6 +105,13 @@
 "Copy Path" = "パスをコピー";
 "Move to Trash" = "ゴミ箱に移動";
 "Move “%@” to Trash?" = "「%@」をゴミ箱に移動しますか？";
+"Couldn’t move “%@” to the Trash" = "「%@」をゴミ箱に移動できませんでした";
+"Open" = "開く";
+"Zoom In" = "拡大";
+"Ask %@ If It’s Safe to Clean" = "削除しても安全か%@に聞く";
+"Ask an Agent If It’s Safe to Clean…" = "削除しても安全かエージェントに聞く…";
+"%@ is looking at “%@”" = "%1$@が「%2$@」を確認中";
+"Is “%@” safe to clean?" = "「%@」は削除しても安全？";
 
 /* Settings */
 "Custom model providers" = "カスタムモデルプロバイダ";

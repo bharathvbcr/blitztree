@@ -105,6 +105,13 @@
 "Copy Path" = "拷贝路径";
 "Move to Trash" = "移到废纸篓";
 "Move “%@” to Trash?" = "将“%@”移到废纸篓？";
+"Couldn’t move “%@” to the Trash" = "无法将“%@”移到废纸篓";
+"Open" = "打开";
+"Zoom In" = "放大";
+"Ask %@ If It’s Safe to Clean" = "询问 %@ 是否可以安全删除";
+"Ask an Agent If It’s Safe to Clean…" = "询问智能体是否可以安全删除…";
+"%@ is looking at “%@”" = "%1$@ 正在查看“%2$@”";
+"Is “%@” safe to clean?" = "“%@”可以安全删除吗？";
 
 /* Settings */
 "Custom model providers" = "自定义模型提供商";

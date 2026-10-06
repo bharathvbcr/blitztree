@@ -451,7 +451,7 @@ struct OutlinePanel: NSViewRepresentable {
     }
 
     @MainActor
-    final class Coordinator: NSObject, NSOutlineViewDataSource, NSOutlineViewDelegate {
+    final class Coordinator: NSObject, NSOutlineViewDataSource, NSOutlineViewDelegate, NSMenuDelegate {
         var model: ScanModel?
         var tree: Tree?
         var viewRoot = -1
@@ -636,6 +636,18 @@ struct OutlinePanel: NSViewRepresentable {
             }
         }
 
+        /// Right-click a row: the same menu as the treemap, for that row.
+        /// Selecting it lights the item in the map too.
+        func menuNeedsUpdate(_ menu: NSMenu) {
+            guard let outline, let model, model.tree != nil, model.tree === tree,
+                  let it = outline.item(atRow: outline.clickedRow) as? Item else {
+                menu.removeAllItems()
+                return
+            }
+            model.selection = it.id
+            NodeMenu.fill(menu, node: it.id, model: model)
+        }
+
         @objc func doubleClicked(_ sender: NSOutlineView) {
             guard let it = sender.item(atRow: sender.clickedRow) as? Item else { return }
             if it.tree.isDir(it.id) {
@@ -681,6 +693,9 @@ struct OutlinePanel: NSViewRepresentable {
         outline.delegate = coord
         outline.target = coord
         outline.doubleAction = #selector(Coordinator.doubleClicked(_:))
+        let menu = NSMenu()
+        menu.delegate = coord
+        outline.menu = menu
 
         let scroll = NSScrollView()
         scroll.documentView = outline

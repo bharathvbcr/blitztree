@@ -105,6 +105,13 @@
 "Copy Path" = "Copiar ruta";
 "Move to Trash" = "Mover a la Papelera";
 "Move “%@” to Trash?" = "¿Mover «%@» a la Papelera?";
+"Couldn’t move “%@” to the Trash" = "No se pudo mover «%@» a la Papelera";
+"Open" = "Abrir";
+"Zoom In" = "Acercar";
+"Ask %@ If It’s Safe to Clean" = "Preguntar a %@ si es seguro eliminarlo";
+"Ask an Agent If It’s Safe to Clean…" = "Preguntar a un agente si es seguro eliminarlo…";
+"%@ is looking at “%@”" = "%1$@ está revisando «%2$@»";
+"Is “%@” safe to clean?" = "¿Es seguro eliminar «%@»?";
 
 /* Settings */
 "Custom model providers" = "Proveedores de modelos personalizados";
