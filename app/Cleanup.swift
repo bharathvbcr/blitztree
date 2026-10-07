@@ -14,13 +14,25 @@ nonisolated struct CleanupItem: Identifiable, Sendable {
     let target: CleanupTarget?
     let blocked: String?
     let englishBlocked: String?
+    /// The rule's verifier ("" none). Nil when the engine gave no answer,
+    /// which blocks: a missing answer never reads as "no check needed".
+    let verify: String?
 
-    init(node: Int, path: String, display: String, kind: String, bytes: UInt64, root: String = NSHomeDirectory()) {
+    init(node: Int, path: String, display: String, kind: String, bytes: UInt64, root: String = NSHomeDirectory(),
+         verify: String? = "") {
         self.node = node; self.path = path; self.display = display; self.kind = kind; self.bytes = bytes
+        self.verify = verify
         do {
-            self.target = try CleanupPathSafety.capture(path: path, root: root)
-            self.blocked = nil
-            self.englishBlocked = nil
+            let target = try CleanupPathSafety.capture(path: path, root: root)
+            if let reason = CleanupItem.verifyReason(verify, path: path) {
+                self.target = nil
+                self.blocked = reason.localized
+                self.englishBlocked = reason.english
+            } else {
+                self.target = target
+                self.blocked = nil
+                self.englishBlocked = nil
+            }
         } catch let error as CleanupPathError {
             self.target = nil
             self.blocked = error.errorDescription
@@ -30,6 +42,11 @@ nonisolated struct CleanupItem: Identifiable, Sendable {
             self.blocked = error.localizedDescription
             self.englishBlocked = error.localizedDescription
         }
+    }
+
+    /// Runs the rule's verifier; an unknown or missing one blocks.
+    static func verifyReason(_ verify: String?, path: String) -> CleanupVerify.Reason? {
+        CleanupVerify.blockReason(verify: verify ?? "unavailable", path: path)
     }
 }
 
@@ -44,7 +61,8 @@ nonisolated enum Cleanup {
             var display = tree.displayPath(node)
             if display.hasPrefix(home) { display = "~" + display.dropFirst(home.count) }
             return CleanupItem(node: node, path: path, display: display,
-                               kind: tree.cleanupDescription(index), bytes: tree.alloc[node], root: tree.path(0))
+                               kind: tree.cleanupDescription(index), bytes: tree.alloc[node], root: tree.path(0),
+                               verify: tree.cleanupVerify(index))
         }
     }
 }
@@ -72,6 +90,10 @@ final class CleanupTrashBatch {
                     do {
                         guard let target = item.target else {
                             throw CleanupOperations.failure("This folder could not be validated; rescan before cleaning")
+                        }
+                        // Checked again now: the folder may have been used since the scan.
+                        if let reason = CleanupItem.verifyReason(item.verify, path: target.path) {
+                            throw CleanupOperations.failure(reason.localized)
                         }
                         _ = try CleanupOperations.trash(target)
                         moved.append(item)

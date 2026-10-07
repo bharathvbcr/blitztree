@@ -610,6 +610,43 @@ struct CleanupIntegrationChecks {
         precondition(testModelNoAgent.agentRun == nil, "no agent available means no agent run")
         precondition(testModelNoAgent.panelRequests == 1, "falls back to opening panel on setup offer")
 
+        // The panel runs the rule's verifier: a CACHEDIR.TAG folder is offered
+        // only with the real signature, checked again right before the Trash.
+        let tagged = fixture.appendingPathComponent("tagged/state")
+        try fm.createDirectory(at: tagged, withIntermediateDirectories: true)
+        try Data(repeating: 4, count: 51_000_000).write(to: tagged.appendingPathComponent("blob"))
+        let tag = tagged.appendingPathComponent("CACHEDIR.TAG")
+        try Data("not a cache tag\n".utf8).write(to: tag)
+        guard let taggedHandle = bz_scan_start(tagged.deletingLastPathComponent().path) else { fatalError("tagged scan failed") }
+        done = 0
+        while done == 0 {
+            bz_progress(taggedHandle, &files, &dirs, &bytes, &done)
+            if done == 0 { try await Task.sleep(for: .milliseconds(5)) }
+        }
+        guard let taggedTree = Tree(handle: taggedHandle) else { bz_free(taggedHandle); fatalError("tagged tree failed") }
+        func taggedItem() -> CleanupItem {
+            let found = Cleanup.find(in: taggedTree).filter { $0.path == tagged.path }
+            precondition(found.count == 1, "the tagged folder is a candidate")
+            return found[0]
+        }
+        let taggedNode = UInt32(taggedTree.node(at: tagged.path)!)
+        let taggedIndex = (0..<taggedTree.cleanupCount).first { taggedTree.cleanupNodes[$0] == taggedNode }!
+        precondition(taggedTree.cleanupVerify(taggedIndex) == "cachedir_tag", "the rule names its verifier")
+        let forged = taggedItem()
+        precondition(forged.target == nil && forged.blocked != nil, "a tag without the signature blocks the item")
+        try Data((CleanupVerify.cacheSignature + "\n").utf8).write(to: tag)
+        let genuine = taggedItem()
+        precondition(genuine.target != nil && genuine.blocked == nil, "a signed tag passes")
+        let missing = CleanupItem(node: genuine.node, path: tagged.path, display: "state", kind: "fixture",
+                                  bytes: 1, root: tagged.deletingLastPathComponent().path, verify: nil)
+        precondition(missing.target == nil && missing.blocked != nil, "no answer from the engine blocks")
+        try Data("changed after the scan\n".utf8).write(to: tag)
+        let batch = CleanupTrashBatch()
+        var movedNow: [CleanupItem] = [], failedNow: [String] = []
+        await batch.start([genuine]) { moved, failed in movedNow = moved; failedNow = failed }?.value
+        precondition(movedNow.isEmpty && failedNow.count == 1 && fm.fileExists(atPath: tagged.path),
+                     "the verifier runs again before the Trash")
+
         // Clean up UserDefaults after test
         UserDefaults.standard.removeObject(forKey: "bz.launchTarget")
         UserDefaults.standard.removeObject(forKey: "bz.autoAnalyze")
