@@ -11,7 +11,6 @@ struct CleanupCommandChecks {
             "pnpm store prune",
             "yarn cache clean",
             "brew cleanup --prune=all",
-            "docker system prune -f",
             "docker builder prune -f",
             "xcrun simctl delete unavailable",
             "xcrun simctl runtime delete \(simulatorID)",
@@ -19,16 +18,39 @@ struct CleanupCommandChecks {
             "pip cache purge",
             "ollama rm llama3.2:latest",
             "go clean -modcache",
-            "gem cleanup",
             "pod cache clean --all",
             "conda clean -a -y",
             "uv cache prune",
             "npm cache clean",
             "pip3 cache purge",
             "go clean -cache",
+            "swift package purge-cache",
+            "dotnet nuget locals all --clear",
+            "composer clear-cache",
+            "hf cache prune --yes",
+            "rustup toolchain uninstall nightly-2026-10-05-aarch64-apple-darwin",
+            "rustup toolchain uninstall 1.97.0-aarch64-apple-darwin",
+            "rustup toolchain uninstall stable",
+            "rustup toolchain uninstall 1.80",
+            "rustup toolchain uninstall beta-2026-01-02",
         ]
         for raw in allowed {
             precondition(CleanupCommand.parse(raw) != nil, "should allow: \(raw)")
+        }
+
+        // Not cache-only (verified against each tool's docs/source): these
+        // remove stopped containers' data or uninstall gems, so they stay out
+        // even though older builds accepted them.
+        for raw in ["docker system prune -f", "gem cleanup", "podman system prune -f", "deno clean",
+                    "dart pub cache clean --force", "flutter pub cache clean -f"] {
+            precondition(CleanupCommand.parse(raw) == nil, "not a cache-only cleanup: \(raw)")
+        }
+        // Toolchain names: rustup's <channel>[-<date>][-<host>] grammar only.
+        for name in ["", "-v", "--help", "all", "stable nightly", "../stable", "stable/x", "~stable",
+                     "nightly-2026-13-05", "1.97.0.1", "1..97", "stable-", "Stable", "nightly-2026-10-05-",
+                     String(repeating: "a", count: 101), "1.97.0-aarch64-apple-darwin\u{00e9}"] {
+            precondition(CleanupCommand.parse("rustup toolchain uninstall \(name)") == nil,
+                         "should reject toolchain name: \(name)")
         }
 
         let padded = CleanupCommand.parse(" \tuv\tcache clean \t")
@@ -66,7 +88,15 @@ struct CleanupCommandChecks {
         precondition(CleanupCommand.parse("npm cache clean --force")?.cacheRelativePath == ".npm/_cacache")
         precondition(CleanupCommand.parse("bun pm cache rm")?.cacheRelativePath == ".bun/install/cache")
         precondition(CleanupCommand.parse("pip3 cache purge")?.cacheRelativePath == "Library/Caches/pip")
-        precondition(CleanupCommand.parse("docker system prune -f")?.cacheRelativePath == nil)
+        precondition(CleanupCommand.parse("docker builder prune -f")?.cacheRelativePath == nil)
+        precondition(CleanupCommand.parse("swift package purge-cache")?.cacheRelativePath
+                     == "Library/Caches/org.swift.swiftpm")
+        precondition(CleanupCommand.parse("composer clear-cache")?.cacheRelativePath == "Library/Caches/composer")
+        precondition(CleanupCommand.parse("pod cache clean --all")?.cacheRelativePath == "Library/Caches/CocoaPods")
+        precondition(CleanupCommand.parse("rustup toolchain uninstall stable")?.cacheRelativePath == nil)
+        precondition(CleanupCommand.promptExamples.contains("`rustup toolchain uninstall <toolchain>`"))
+        precondition(!CleanupCommand.promptExamples.contains("docker system prune"))
+        precondition(!CleanupCommand.promptExamples.contains("gem cleanup"))
         precondition(CleanupCommand.promptExamples.contains("`ollama rm <model>`"))
         precondition(CleanupCommand.promptExamples.contains("`xcrun simctl runtime delete <id>`"))
         precondition(CleanupCommand.promptExamples.contains("`xcrun simctl erase <udid>`"))

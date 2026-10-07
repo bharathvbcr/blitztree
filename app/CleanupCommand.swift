@@ -26,6 +26,13 @@ nonisolated struct CleanupCommand: Sendable, Equatable {
             return "Library/Caches/pip"
         case ("yarn", ["cache", "clean"]):
             return "Library/Caches/Yarn"
+        case ("swift", ["package", "purge-cache"]):
+            // ~/.swiftpm/cache is a symlink to this folder; measure it once.
+            return "Library/Caches/org.swift.swiftpm"
+        case ("composer", ["clear-cache"]):
+            return "Library/Caches/composer"
+        case ("pod", ["cache", "clean", "--all"]):
+            return "Library/Caches/CocoaPods"
         default:
             return nil
         }
@@ -37,6 +44,7 @@ nonisolated struct CleanupCommand: Sendable, Equatable {
     static var promptExamples: String {
         fixedEntries.map { "`\($0.words.joined(separator: " "))`" }
             .joined(separator: ", ") + ", `ollama rm <model>`, `xcrun simctl runtime delete <id>`, `xcrun simctl erase <udid>`"
+            + ", `rustup toolchain uninstall <toolchain>`"
     }
 
     /// Parses only a single known argv shape. Spaces and tabs separate argv
@@ -67,9 +75,24 @@ nonisolated struct CleanupCommand: Sendable, Equatable {
             return Self(executable: "xcrun", arguments: Array(words.dropFirst()))
         }
 
+        // One installed toolchain by its exact rustup name; never a flag.
+        if words.count == 4, Array(words.prefix(3)) == ["rustup", "toolchain", "uninstall"] {
+            guard validToolchain(words[3]) else { return nil }
+            return Self(executable: "rustup", arguments: Array(words.dropFirst()))
+        }
+
         guard words.count == 3, words[0] == "ollama", words[1] == "rm",
               validModel(words[2]) else { return nil }
         return Self(executable: "ollama", arguments: ["rm", words[2]])
+    }
+
+    /// rustup's `<channel>[-<date>][-<host>]`: channel `stable`, `beta`,
+    /// `nightly` or `X.Y[.Z][-beta[.N]]`, a real calendar date, and a host
+    /// triple whose first part starts with a letter (so a bad date cannot
+    /// pass as a host).
+    private static func validToolchain(_ name: String) -> Bool {
+        guard name.utf8.count <= 100 else { return false }
+        return name.wholeMatch(of: /(?:stable|beta|nightly|\d{1,3}\.\d{1,3}(?:\.\d{1,3})?(?:-beta(?:\.\d{1,3})?)?)(?:-\d{4}-(?:0[1-9]|1[0-2])-(?:0[1-9]|[12]\d|3[01]))?(?:-[a-z][a-z0-9_]*(?:-[a-z0-9_]+){1,3})?/) != nil
     }
 
     private struct Fixed: Sendable {
@@ -84,14 +107,19 @@ nonisolated struct CleanupCommand: Sendable, Equatable {
         Fixed(words: ["pnpm", "store", "prune"]),
         Fixed(words: ["yarn", "cache", "clean"]),
         Fixed(words: ["brew", "cleanup", "--prune=all"]),
-        Fixed(words: ["docker", "system", "prune", "-f"]),
+        // Build cache only. `docker system prune` (and `gem cleanup`) are not
+        // here: they remove stopped containers' data and old installed gems.
         Fixed(words: ["docker", "builder", "prune", "-f"]),
         Fixed(words: ["xcrun", "simctl", "delete", "unavailable"]),
         Fixed(words: ["pip", "cache", "purge"]),
         Fixed(words: ["go", "clean", "-modcache"]),
-        Fixed(words: ["gem", "cleanup"]),
         Fixed(words: ["pod", "cache", "clean", "--all"]),
         Fixed(words: ["conda", "clean", "-a", "-y"]),
+        Fixed(words: ["swift", "package", "purge-cache"]),
+        Fixed(words: ["dotnet", "nuget", "locals", "all", "--clear"]),
+        Fixed(words: ["composer", "clear-cache"]),
+        // Unreferenced revisions and blobs only; never the token or models in use.
+        Fixed(words: ["hf", "cache", "prune", "--yes"]),
 
         // Exact cache-only compatibility forms from the released guard.
         Fixed(words: ["uv", "cache", "prune"]),

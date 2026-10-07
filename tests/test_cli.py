@@ -81,37 +81,144 @@ class AgentCLITests(unittest.TestCase):
         self.assertEqual(result["summary"]["file_count"], 1)
         self.assertEqual(self.wins()["candidates"], [])
 
-    def test_candidates_use_the_existing_panel_rules(self):
+    def relative_kinds(self, candidates):
+        return {Path(c["path"]).relative_to(self.home).as_posix(): c["category"] for c in candidates}
+
+    def test_candidates_use_the_shared_cleanup_rules(self):
+        # Changed deliberately with the cleanup categories: a node_modules needs a
+        # package.json, ~/.cache and ~/Library/Caches list their children (never
+        # com.apple.*), and a Gradle home lists only its caches.
         for path in [
-            ".gradle/gradle.properties", ".npm/npmrc", ".cache/unknown/content",
+            ".gradle/gradle.properties", ".gradle/caches/file", ".npm/npmrc", ".cache/unknown/content",
             "no-manifest/node_modules/file", "no-manifest/.venv/file",
             "python/venv/pyvenv.cfg", "rust/Cargo.toml", "rust/target/file",
-            "web/package.json", "web/.next/file", "Library/Developer/Xcode/DerivedData/file",
-            "Library/Caches/com.apple.example/file", "CoreSimulator/Caches/file",
-            "iOS DeviceSupport/file", "macOS DeviceSupport/file", "watchOS DeviceSupport/file",
-            ".bun/install/cache/file",
+            "web/package.json", "web/node_modules/file", "web/.next/file",
+            "Library/Developer/Xcode/DerivedData/file",
+            "Library/Caches/com.apple.example/file", "Library/Caches/org.example.app/file",
+            "Library/Developer/CoreSimulator/Caches/file",
+            "Library/Developer/Xcode/iOS DeviceSupport/file", "Library/Developer/Xcode/macOS DeviceSupport/file",
+            "Library/Developer/Xcode/watchOS DeviceSupport/file",
+            ".bun/install/cache/file", "swift/Package.swift", "swift/.build/file",
         ]:
             self.file(path)
         candidates = self.wins("--limit", "100")["candidates"]
-        kinds = {Path(c["path"]).relative_to(self.home).as_posix(): c["category"] for c in candidates}
-        self.assertEqual(kinds, {
-            ".gradle": "tool_caches", ".npm": "tool_caches", ".cache": "tool_caches",
-            "no-manifest/node_modules": "node_modules", "no-manifest/.venv": "python_environment",
+        self.assertEqual(self.relative_kinds(candidates), {
+            ".gradle/caches": "gradle_cache", ".npm": "tool_caches", ".cache/unknown": "tool_caches",
+            "no-manifest/.venv": "python_environment", "web/node_modules": "node_modules",
             "python/venv": "python_environment", "rust/target": "rust_build", "web/.next": "next_build",
-            "Library/Developer/Xcode/DerivedData": "xcode_derived_data", "Library/Caches": "app_caches",
-            "CoreSimulator/Caches": "app_caches", "iOS DeviceSupport": "device_support",
-            "macOS DeviceSupport": "device_support", "watchOS DeviceSupport": "device_support",
-            ".bun/install/cache": "bun_cache",
+            "Library/Developer/Xcode/DerivedData": "xcode_derived_data",
+            "Library/Caches/org.example.app": "app_caches",
+            "Library/Developer/CoreSimulator/Caches": "app_caches",
+            "Library/Developer/Xcode/iOS DeviceSupport": "device_support",
+            "Library/Developer/Xcode/macOS DeviceSupport": "device_support",
+            "Library/Developer/Xcode/watchOS DeviceSupport": "device_support",
+            ".bun/install/cache": "bun_cache", "swift/.build": "swift_build",
         })
         self.assertTrue(all(c["requires_review"] for c in candidates))
         self.assertTrue(all(c["reason"] for c in candidates))
         self.assertEqual(self.run_cli("quick-wins")["options"]["min_bytes"], 50_000_000)
         self.assertEqual(self.run_cli("quick-wins")["report"]["candidates"], [])
 
+    def test_candidates_carry_group_section_and_verify(self):
+        for path in ["web/package.json", "web/node_modules/file", "tool/state/CACHEDIR.TAG", "tool/state/blob",
+                     ".m2/repository/file", ".claude/projects/p/session.jsonl"]:
+            self.file(path)
+        candidates = self.wins("--limit", "100")["candidates"]
+        fields = {Path(c["path"]).relative_to(self.home).as_posix(): (c["category"], c["group"], c["section"], c["verify"])
+                  for c in candidates}
+        self.assertEqual(fields, {
+            "web/node_modules": ("node_modules", "safe", "build", None),
+            "tool/state": ("tagged_cache", "safe", "packages", "cachedir_tag"),
+            ".m2/repository": ("maven_repository", "review", "packages", None),
+            ".claude/projects/p": ("agent_transcripts", "review", "agents", "recent_activity"),
+        })
+        self.assertTrue(all(c["contained_in"] is None for c in candidates))
+
+    def test_home_anchored_rules_follow_HOME(self):
+        layout = [".cache/pip/file", ".cargo/registry/file", ".cargo/bin/cargo", ".rustup/toolchains/stable/file",
+                  ".ollama/models/file", ".codex/sessions/2025/file", ".codex/auth.json",
+                  ".cache/huggingface/hub/models--org--name/file", ".cache/huggingface/token"]
+        for path in layout:
+            self.file(path)
+        expected = {
+            ".cache/pip": "tool_caches", ".cargo/registry": "cargo_cache",
+            ".rustup/toolchains/stable": "rust_toolchain", ".ollama/models": "ollama_models",
+            ".codex/sessions/2025": "codex_sessions", ".cache/huggingface/hub/models--org--name": "ml_model",
+        }
+        self.assertEqual(self.relative_kinds(self.wins("--limit", "100")["candidates"]), expected)
+        # The same folders under another HOME are ordinary folders: only the
+        # unanchored .cache rule applies, to the whole folder.
+        self.env["HOME"] = str(self.root)
+        self.assertEqual(self.relative_kinds(self.wins("--root", str(self.home), "--limit", "100")["candidates"]),
+                         {".cache": "tool_caches"})
+
+    def protected_entries(self):
+        return [".cargo/bin/cargo", ".cargo/config.toml", ".cargo/credentials.toml", ".cargo/env",
+                ".cargo/.crates.toml", ".cargo/.crates2.json",
+                ".gradle/gradle.properties", ".gradle/init.d/repos.gradle", ".gradle/init.gradle",
+                ".gradle/init.gradle.kts", ".m2/settings.xml", ".claude/settings.json", ".claude/.credentials.json",
+                ".claude/local/package.json", ".codex/auth.json", ".codex/config.toml",
+                ".cache/huggingface/token", ".cache/huggingface/stored_tokens"]
+
+    def assert_none_inside(self, candidates, protected):
+        for c in candidates:
+            for p in protected:
+                self.assertFalse(p == Path(c["path"]) or Path(c["path"]) in p.parents,
+                                 f"{p} is inside candidate {c['path']} ({c['category']})")
+
+    def test_gradle_properties_is_never_inside_a_candidate(self):
+        for path in [".gradle/gradle.properties", ".gradle/caches/file", ".gradle/native/file",
+                     "app/.gradle/gradle.properties", "app/.gradle/caches/file",
+                     ".cache/gradle/gradle.properties", ".cache/gradle/caches/file"]:
+            self.file(path)
+        candidates = self.wins("--limit", "100")["candidates"]
+        self.assertEqual(self.relative_kinds(candidates), {
+            ".gradle/caches": "gradle_cache", "app/.gradle/caches": "gradle_cache",
+            ".cache/gradle/caches": "gradle_cache"})
+        self.assert_none_inside(candidates, [p for p in self.home.rglob("gradle.properties")])
+
+    def test_credentials_are_never_inside_any_candidate(self):
+        for path in self.protected_entries():
+            self.file(path)
+        for path in [".cargo/registry/file", ".cargo/git/file", ".gradle/caches/file", ".m2/repository/file",
+                     ".claude/projects/p/file", ".claude/debug/file", ".claude/local/node_modules/file",
+                     ".codex/archived_sessions/file", ".cache/huggingface/hub/models--m/file", ".cache/pip/file",
+                     "lib/node_modules/npm/index.js"]:
+            self.file(path)
+        for root in [self.home, Path("/System/Volumes/Data") / self.home.relative_to("/")]:
+            if not root.exists():
+                continue
+            candidates = self.wins("--root", str(root), "--limit", "1000")["candidates"]
+            self.assertGreaterEqual(len(candidates), 9)
+            protected = [root / p for p in self.protected_entries()]
+            self.assert_none_inside(candidates, protected)
+            self.assertNotIn("lib/node_modules", {Path(c["path"]).relative_to(root).as_posix() for c in candidates})
+
+    def test_worktree_contents_are_listed_and_counted_once(self):
+        self.file("repo/.git/HEAD")
+        self.file("repo/.claude/worktrees/feature/.git", size=64)
+        self.file("repo/.claude/worktrees/feature/package.json")
+        self.file("repo/.claude/worktrees/feature/node_modules/file")
+        self.file("repo/sub/.git", size=64)
+        self.file("repo/sub/file")
+        report = self.wins("--limit", "100")
+        worktree = self.home / "repo/.claude/worktrees/feature"
+        by_path = {c["path"]: c for c in report["candidates"]}
+        self.assertEqual(set(by_path), {str(worktree), str(worktree / "node_modules")})
+        self.assertEqual(by_path[str(worktree)]["category"], "git_worktree")
+        self.assertEqual(by_path[str(worktree)]["verify"], "git_worktree")
+        self.assertIsNone(by_path[str(worktree)]["contained_in"])
+        self.assertEqual(by_path[str(worktree / "node_modules")]["contained_in"], str(worktree))
+        self.assertEqual(report["candidate_allocated_bytes"], by_path[str(worktree)]["allocated_bytes"])
+        self.assertEqual(report["displayed_allocated_bytes"], report["candidate_allocated_bytes"])
+        nested_only = self.wins("--limit", "1")
+        self.assertEqual(nested_only["displayed_allocated_bytes"], by_path[str(worktree)]["allocated_bytes"])
+
     def test_unrecognized_folders_and_trash_are_not_candidates(self):
         for path in ["unrelated/target/file", "unrelated/venv/file", "unrelated/.next/file",
                      "unrelated/Caches/file", "unrelated/DerivedData/file", "unrelated/install/cache/file",
-                     "swift/Package.swift", "swift/.build/file", ".Trash/node_modules/file"]:
+                     "swift/.build/file", "global/lib/node_modules/npm/file", ".Trash/node_modules/file",
+                     ".Trash/package.json"]:
             self.file(path)
         self.assertEqual(self.wins()["candidates"], [])
 
@@ -132,6 +239,7 @@ class AgentCLITests(unittest.TestCase):
     def test_json_escapes_untrusted_names(self):
         name = 'space " quote\n$(touch NEVER_EXECUTE)/node_modules'
         self.file(name + "/file")
+        self.file('space " quote\n$(touch NEVER_EXECUTE)/package.json')
         report = self.wins()
         self.assertEqual(report["candidates"][0]["path"], str(self.home / name))
         self.assertFalse((self.home / "NEVER_EXECUTE").exists())
@@ -163,6 +271,7 @@ class AgentCLITests(unittest.TestCase):
         outside = self.root / "external"
         (outside / "node_modules").mkdir(parents=True)
         (outside / "node_modules/file").write_bytes(b"x" * 8192)
+        (outside / "package.json").write_text("{}")
         self.env.pop("HOME")
         report = self.run_cli("quick-wins", "--root", str(outside), "--min-bytes", "1")
         self.assertEqual([c["path"] for c in report["report"]["candidates"]], [str(outside / "node_modules")])
@@ -231,7 +340,7 @@ class AgentCLITests(unittest.TestCase):
         try:
             result = self.run_cli("quick-wins", "--min-bytes", "1")
             self.assertFalse(result["coverage"]["complete"])
-            self.assertEqual(result["report"]["candidates"][0]["path"], str(self.home / ".cache"))
+            self.assertEqual(result["report"]["candidates"][0]["path"], str(self.home / ".cache/pip"))
             self.assertFalse(result["report"]["candidates"][0]["complete"])
             self.assertTrue(result["report"]["candidates"][0]["requires_review"])
             directory = next(d for d in result["report"]["inventory"]["largest_directories"] if d["path"] == str(self.home / ".cache/pip"))
@@ -247,7 +356,7 @@ class AgentCLITests(unittest.TestCase):
         self.assertIn(str(self.home / "Documents/archives"), [d["path"] for d in scan["largest_directories"]])
         wins = self.wins()
         self.assertEqual(wins["inventory"], scan)
-        self.assertEqual([c["path"] for c in wins["candidates"]], [str(self.home / ".cache")])
+        self.assertEqual([c["path"] for c in wins["candidates"]], [str(self.home / ".cache/pip")])
 
     def test_inventory_is_returned_even_outside_home(self):
         outside = self.root / "outside"
@@ -262,6 +371,8 @@ class AgentCLITests(unittest.TestCase):
         destination = self.home / "a/node_modules/file"
         destination.parent.mkdir(parents=True)
         os.link(source, destination)
+        for project in ["z", "a"]:
+            (self.home / project / "package.json").write_text("{}")
         reports = [self.wins() for _ in range(6)]
         self.assertTrue(all(r == reports[0] for r in reports))
         self.assertEqual([c["path"] for c in reports[0]["candidates"]], [str(destination.parent)])

@@ -7,8 +7,14 @@ trap 'rm -rf "$CLEANUP_TEST_TMP"' EXIT
 FLAGS=(-parse-as-library -swift-version 6 -default-isolation MainActor -target arm64-apple-macos14.0)
 swiftc app/CleanupCommand.swift tests/CleanupCommandChecks.swift "${FLAGS[@]}" -o "$CLEANUP_TEST_TMP/commands"
 "$CLEANUP_TEST_TMP/commands"
-swiftc app/CleanupSafety.swift tests/CleanupSafetyChecks.swift "${FLAGS[@]}" -o "$CLEANUP_TEST_TMP/paths"
+# The guard verifies linked git worktrees, so it compiles with GitWorktree and
+# the session-log reader it consults; the checks build fixtures with real git.
+GUARD=(app/CleanupSafety.swift app/GitWorktree.swift app/AgentSessions.swift tests/GitFixture.swift)
+swiftc "${GUARD[@]}" tests/CleanupSafetyChecks.swift "${FLAGS[@]}" -o "$CLEANUP_TEST_TMP/paths"
 "$CLEANUP_TEST_TMP/paths"
+swiftc "${GUARD[@]}" app/CleanupVerify.swift app/CleanupOperations.swift tests/WorktreeChecks.swift \
+  "${FLAGS[@]}" -Xcc -include -Xcc removefile.h -o "$CLEANUP_TEST_TMP/worktrees"
+"$CLEANUP_TEST_TMP/worktrees"
 cargo build --locked --release --lib
 SOURCES=(app/*.swift)
 SOURCES=(${SOURCES:#app/Main.swift})

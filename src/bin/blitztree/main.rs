@@ -164,12 +164,20 @@ fn run() -> Result<Value, (i32, String)> {
         Some(p) => PathBuf::from(p),
     };
     let root = absolute_directory(&root).map_err(|e| (1, e))?;
+    // Home rules compare against the same resolution as the scan root. An
+    // explicit root needs no home: an unusable HOME only disables home rules.
+    let anchor_home = home.or_else(|| {
+        let raw = PathBuf::from(std::env::var_os("HOME")?);
+        raw.is_absolute()
+            .then(|| absolute_directory(&raw).unwrap_or(raw))
+    });
+    let anchors = cleanup::Anchors::new(anchor_home.as_deref());
     let progress = Progress::default();
     let started = Instant::now();
     let tree = scan(&root, &progress);
     let elapsed = started.elapsed().as_secs_f64();
     let report = if command == "quick-wins" {
-        report::quick_wins(&tree, &options)
+        report::quick_wins(&tree, &options, &anchors)
     } else {
         report::inventory(&tree, &options)
     };
