@@ -110,6 +110,11 @@
 "Move to Trash" = "Çöp Kutusu'na Taşı";
 "Move “%@” to Trash?" = "“%@” Çöp Kutusu'na taşınsın mı?";
 "Couldn’t move “%@” to the Trash" = "“%@” Çöp Kutusu'na taşınamadı";
+"Files" = "Dosyalar";
+"Move %lld items to Trash?" = "%lld öğe Çöp Kutusu'na taşınsın mı?";
+"%@ in total" = "toplam %@";
+"and %lld more" = "ve %lld tane daha";
+"Couldn’t move %lld items to the Trash" = "%lld öğe Çöp Kutusu'na taşınamadı";
 "Open" = "Aç";
 "Zoom In" = "Yakınlaştır";
 "Ask %@ If It’s Safe to Clean" = "Silmenin güvenli olup olmadığını %@ uygulamasına sor";

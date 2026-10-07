@@ -28,6 +28,12 @@ BzScan *bz_fixture_create(uint32_t n, const uint32_t *parents,
     h->alloc = copied(alloc, n * sizeof(*alloc));
     h->flags = copied(flags, n * sizeof(*flags));
     h->nfiles = calloc(n, sizeof(*h->nfiles));
+    if (!h->nfiles) abort();
+    // Files below each folder, as the engine counts them. Fixture nodes are
+    // appended after their parent, so a reverse pass sees children first.
+    for (uint32_t i = n; i-- > 1;) {
+        h->nfiles[parents[i]] += (flags[i] & 1) ? h->nfiles[i] : 1;
+    }
     h->child_off = copied(child_off, (n + 1) * sizeof(*child_off));
     h->children = copied(children, child_off[n] * sizeof(*children));
     h->name_off = copied(name_off, (n + 1) * sizeof(*name_off));
@@ -49,6 +55,12 @@ const uint32_t *bz_children(BzScan *h) { return h->children; }
 const uint32_t *bz_name_off(BzScan *h) { return h->name_off; }
 const uint8_t *bz_name_blob(BzScan *h) { return h->name_blob; }
 uint64_t bz_errors(BzScan *h) { (void)h; return 0; }
+// No benchmark searches; the fixture has no index to search.
+BzSearch *bz_search(BzScan *h, const char *query, uint32_t limit) { (void)h; (void)query; (void)limit; abort(); }
+uint64_t bz_search_total_matches(BzSearch *s) { (void)s; abort(); }
+uint32_t bz_search_result_count(BzSearch *s) { (void)s; abort(); }
+const uint32_t *bz_search_result_nodes(BzSearch *s) { (void)s; abort(); }
+void bz_search_free(BzSearch *s) { (void)s; abort(); }
 void bz_fixture_add_cleanup(BzScan *h, uint32_t node, const char *description) {
     uint32_t n = h->cleanup_count;
     h->cleanup_nodes = realloc(h->cleanup_nodes, (n + 1) * sizeof(*h->cleanup_nodes));

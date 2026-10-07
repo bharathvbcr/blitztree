@@ -110,6 +110,11 @@
 "Move to Trash" = "Mover a la Papelera";
 "Move “%@” to Trash?" = "¿Mover «%@» a la Papelera?";
 "Couldn’t move “%@” to the Trash" = "No se pudo mover «%@» a la Papelera";
+"Files" = "Archivos";
+"Move %lld items to Trash?" = "¿Mover %lld elementos a la Papelera?";
+"%@ in total" = "%@ en total";
+"and %lld more" = "y %lld más";
+"Couldn’t move %lld items to the Trash" = "No se pudieron mover %lld elementos a la Papelera";
 "Open" = "Abrir";
 "Zoom In" = "Acercar";
 "Ask %@ If It’s Safe to Clean" = "Preguntar a %@ si es seguro eliminarlo";

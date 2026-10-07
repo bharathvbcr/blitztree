@@ -544,19 +544,51 @@ nonisolated enum Scan {
 final class NodeMenu: NSObject {
     private static let shared = NodeMenu()
 
-    /// What the chosen item acts on.
+    /// What the chosen item acts on: the nodes right-clicked, in the tree
+    /// the menu was opened on (a rescan may have replaced the model's).
     private final class Pick: NSObject {
-        let node: Int
-        let path: String
-        let displayPath: String
+        let nodes: [Int]
+        let tree: Tree
         weak var model: ScanModel?
-        init(node: Int, path: String, displayPath: String, model: ScanModel) {
-            self.node = node
-            self.path = path
-            self.displayPath = displayPath
+        init(nodes: [Int], tree: Tree, model: ScanModel) {
+            self.nodes = nodes
+            self.tree = tree
             self.model = model
         }
+        var urls: [URL] { nodes.map { URL(fileURLWithPath: tree.path($0)) } }
     }
+
+    /// One thing Move to Trash removes: its path, the path to show for it,
+    /// and its size when the scan knows it.
+    struct TrashTarget {
+        let path: String
+        let displayPath: String
+        let bytes: UInt64?
+        init(path: String, displayPath: String? = nil, bytes: UInt64? = nil) {
+            self.path = path
+            self.displayPath = displayPath ?? Tree.displayPath(path)
+            self.bytes = bytes
+        }
+    }
+
+    /// The nodes as Trash targets, minus any inside another chosen folder:
+    /// moving the folder moves them, and their size is already in its own.
+    static func trashTargets(_ nodes: [Int], in tree: Tree) -> [TrashTarget] {
+        let chosen = Set(nodes)
+        var seen = Set<Int>()
+        return nodes.filter { node in
+            guard seen.insert(node).inserted else { return false }
+            var cur = tree.parents[node]
+            while cur != UInt32.max {
+                if chosen.contains(Int(cur)) { return false }
+                cur = tree.parents[Int(cur)]
+            }
+            return true
+        }.map { TrashTarget(path: tree.path($0), displayPath: tree.displayPath($0), bytes: tree.alloc[$0]) }
+    }
+
+    /// Paths a multi-item alert lists before "and N more".
+    static let listedPaths = 8
 
     static func popUp(node: Int, model: ScanModel, with event: NSEvent, for view: NSView) {
         let menu = NSMenu()
@@ -573,10 +605,18 @@ final class NodeMenu: NSObject {
 
     /// Replaces the menu's items with the actions for `node`.
     static func fill(_ menu: NSMenu, node: Int, model: ScanModel) {
+        fill(menu, nodes: [node], model: model)
+    }
+
+    /// Replaces the menu's items with the actions for `nodes` (the list's
+    /// selected rows). Reveal, Copy Path and Move to Trash take them all;
+    /// Zoom In and Ask take one, and Open only files.
+    static func fill(_ menu: NSMenu, nodes: [Int], model: ScanModel) {
         menu.removeAllItems()
         menu.autoenablesItems = false
-        guard let tree = model.tree, node >= 0, node < tree.count else { return }
-        let pick = Pick(node: node, path: tree.path(node), displayPath: tree.displayPath(node), model: model)
+        guard let tree = model.tree, !nodes.isEmpty, nodes.allSatisfy({ $0 >= 0 && $0 < tree.count }) else { return }
+        let pick = Pick(nodes: nodes, tree: tree, model: model)
+        let one = nodes.count == 1 ? nodes[0] : nil
         func add(_ title: String, _ action: Selector, keyEquivalent: String = "", modifiers: NSEvent.ModifierFlags = [], enabled: Bool = true) {
             let item = NSMenuItem(title: title, action: action, keyEquivalent: keyEquivalent)
             if !modifiers.isEmpty { item.keyEquivalentModifierMask = modifiers }
@@ -585,19 +625,19 @@ final class NodeMenu: NSObject {
             item.isEnabled = enabled
             menu.addItem(item)
         }
-        if tree.isDir(node) {
-            add(String(localized: "Zoom In"), #selector(zoomIn(_:)),
-                enabled: node != model.viewRoot && !tree.children(node).isEmpty)
-        } else {
+        if nodes.allSatisfy({ !tree.isDir($0) }) {
             add(String(localized: "Open"), #selector(open(_:)))
+        } else {
+            add(String(localized: "Zoom In"), #selector(zoomIn(_:)),
+                enabled: one.map { $0 != model.viewRoot && !tree.children($0).isEmpty } ?? false)
         }
         add(String(localized: "Reveal in Finder"), #selector(revealInFinder(_:)))
         add(String(localized: "Copy Path"), #selector(copyPathFromMenu(_:)), keyEquivalent: "C", modifiers: [.command, .option])
         menu.addItem(.separator())
         // The scan root is the whole cleanup, which the panel already runs.
-        add(askTitle(model), #selector(ask(_:)), enabled: node != 0 && model.canStartRun)
+        add(askTitle(model), #selector(ask(_:)), enabled: one.map { $0 != 0 } == true && model.canStartRun)
         menu.addItem(.separator())
-        add(String(localized: "Move to Trash"), #selector(moveToTrashFromMenu(_:)), keyEquivalent: "\u{08}", modifiers: [.command], enabled: node != 0)
+        add(String(localized: "Move to Trash"), #selector(moveToTrashFromMenu(_:)), keyEquivalent: "\u{08}", modifiers: [.command], enabled: !nodes.contains(0))
     }
 
     static func copyPath(_ path: String) {
@@ -605,29 +645,49 @@ final class NodeMenu: NSObject {
         NSPasteboard.general.setString(path, forType: .string)
     }
 
-    static func trashItem(at path: String, model: ScanModel?,
-                          move: (URL) throws -> Void = { try FileManager.default.trashItem(at: $0, resultingItemURL: nil) }) throws {
-        try move(URL(fileURLWithPath: path))
-        model?.startScan()
+    static let trashMove: (URL) throws -> Void = { try FileManager.default.trashItem(at: $0, resultingItemURL: nil) }
+
+    static func trashItem(at path: String, model: ScanModel?, move: (URL) throws -> Void = trashMove) throws {
+        if let failure = trashItems([TrashTarget(path: path)], model: model, move: move).first {
+            throw failure.error
+        }
+    }
+
+    /// Moves every target, then rescans once if any moved. Returns the ones
+    /// that didn't, with why.
+    static func trashItems(_ targets: [TrashTarget], model: ScanModel?,
+                           move: (URL) throws -> Void = trashMove) -> [(target: TrashTarget, error: any Error)] {
+        var failures: [(target: TrashTarget, error: any Error)] = []
+        for target in targets {
+            do { try move(URL(fileURLWithPath: target.path)) } catch { failures.append((target, error)) }
+        }
+        if failures.count < targets.count { model?.startScan() }
+        return failures
     }
 
     static func trashAlert(path: String, displayPath: String? = nil) -> NSAlert {
-        let url = URL(fileURLWithPath: path)
+        trashAlert([TrashTarget(path: path, displayPath: displayPath)])
+    }
+
+    /// One confirmation for all of `targets`: by name for one, by count and
+    /// total size for several.
+    static func trashAlert(_ targets: [TrashTarget]) -> NSAlert {
         let alert = NSAlert()
-        alert.messageText = String(localized: "Move “\(url.lastPathComponent)” to Trash?")
-        let shown: String
-        if let displayPath {
-            shown = displayPath
+        if targets.count == 1, let target = targets.first {
+            alert.messageText = String(localized: "Move “\(URL(fileURLWithPath: target.path).lastPathComponent)” to Trash?")
+            alert.informativeText = target.displayPath
         } else {
-            let prefix = "/System/Volumes/Data"
-            if path.hasPrefix(prefix) {
-                let rest = String(path.dropFirst(prefix.count))
-                shown = rest.isEmpty ? "/" : rest
-            } else {
-                shown = path
+            alert.messageText = String(localized: "Move \(targets.count) items to Trash?")
+            var lines = targets.prefix(listedPaths).map(\.displayPath)
+            if targets.count > listedPaths {
+                lines.append(String(localized: "and \(targets.count - listedPaths) more"))
             }
+            let sizes = targets.compactMap(\.bytes)
+            if sizes.count == targets.count {
+                lines.insert(String(localized: "\(Fmt.size(sizes.reduce(0, +))) in total") + "\n", at: 0)
+            }
+            alert.informativeText = lines.joined(separator: "\n")
         }
-        alert.informativeText = shown
         alert.addButton(withTitle: String(localized: "Move to Trash"))
         alert.addButton(withTitle: String(localized: "Cancel"))
         return alert
@@ -636,53 +696,75 @@ final class NodeMenu: NSObject {
     static func moveToTrash(path: String, displayPath: String? = nil, model: ScanModel?,
                             confirm: ((NSAlert) -> NSApplication.ModalResponse)? = nil,
                             move: ((URL) throws -> Void)? = nil) {
-        let alert = trashAlert(path: path, displayPath: displayPath)
+        moveToTrash([TrashTarget(path: path, displayPath: displayPath)], model: model, confirm: confirm, move: move)
+    }
+
+    /// Move to Trash for selected nodes; a folder's chosen contents go with it.
+    static func moveToTrash(nodes: [Int], model: ScanModel,
+                            confirm: ((NSAlert) -> NSApplication.ModalResponse)? = nil,
+                            move: ((URL) throws -> Void)? = nil,
+                            report: ((NSAlert) -> Void)? = nil) {
+        guard let tree = model.tree, !nodes.contains(0) else { return }
+        moveToTrash(trashTargets(nodes, in: tree), model: model, confirm: confirm, move: move, report: report)
+    }
+
+    /// Asks once, moves everything, and reports what couldn't be moved.
+    static func moveToTrash(_ targets: [TrashTarget], model: ScanModel?,
+                            confirm: ((NSAlert) -> NSApplication.ModalResponse)? = nil,
+                            move: ((URL) throws -> Void)? = nil,
+                            report: ((NSAlert) -> Void)? = nil) {
+        guard !targets.isEmpty else { return }
+        let alert = trashAlert(targets)
         let response = confirm?(alert) ?? alert.runModal()
         guard response == .alertFirstButtonReturn else { return }
-        do {
-            if let move {
-                try trashItem(at: path, model: model, move: move)
-            } else {
-                try trashItem(at: path, model: model)
+        let failures = trashItems(targets, model: model, move: move ?? trashMove)
+        guard let first = failures.first else { return }
+        let failed = NSAlert()
+        failed.alertStyle = .warning
+        if failures.count == 1 {
+            failed.messageText = String(localized: "Couldn’t move “\(URL(fileURLWithPath: first.target.path).lastPathComponent)” to the Trash")
+            failed.informativeText = first.error.localizedDescription
+        } else {
+            failed.messageText = String(localized: "Couldn’t move \(failures.count) items to the Trash")
+            var lines = failures.prefix(listedPaths).map { "\($0.target.displayPath): \($0.error.localizedDescription)" }
+            if failures.count > listedPaths {
+                lines.append(String(localized: "and \(failures.count - listedPaths) more"))
             }
-        } catch {
-            let url = URL(fileURLWithPath: path)
-            let failed = NSAlert()
-            failed.alertStyle = .warning
-            failed.messageText = String(localized: "Couldn’t move “\(url.lastPathComponent)” to the Trash")
-            failed.informativeText = error.localizedDescription
-            failed.runModal()
+            failed.informativeText = lines.joined(separator: "\n")
         }
+        if let report { report(failed) } else { failed.runModal() }
     }
 
     @objc private func zoomIn(_ sender: NSMenuItem) {
-        guard let pick = sender.representedObject as? Pick, let model = pick.model else { return }
-        model.viewRoot = pick.node
+        guard let pick = sender.representedObject as? Pick, let model = pick.model,
+              pick.nodes.count == 1 else { return }
+        model.viewRoot = pick.nodes[0]
     }
 
     @objc private func open(_ sender: NSMenuItem) {
         guard let pick = sender.representedObject as? Pick else { return }
-        NSWorkspace.shared.open(URL(fileURLWithPath: pick.path))
+        for url in pick.urls { NSWorkspace.shared.open(url) }
     }
 
     @objc private func revealInFinder(_ sender: NSMenuItem) {
         guard let pick = sender.representedObject as? Pick else { return }
-        NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: pick.path)])
+        NSWorkspace.shared.activateFileViewerSelecting(pick.urls)
     }
 
     @objc private func copyPathFromMenu(_ sender: NSMenuItem) {
         guard let pick = sender.representedObject as? Pick else { return }
-        Self.copyPath(pick.displayPath)
+        Self.copyPath(pick.nodes.map(pick.tree.displayPath).joined(separator: "\n"))
     }
 
     @objc private func ask(_ sender: NSMenuItem) {
-        guard let pick = sender.representedObject as? Pick, let model = pick.model else { return }
-        model.ask(about: pick.node)
+        guard let pick = sender.representedObject as? Pick, let model = pick.model,
+              pick.nodes.count == 1 else { return }
+        model.ask(about: pick.nodes[0])
     }
 
     @objc private func moveToTrashFromMenu(_ sender: NSMenuItem) {
         guard let pick = sender.representedObject as? Pick else { return }
-        Self.moveToTrash(path: pick.path, displayPath: pick.displayPath, model: pick.model)
+        Self.moveToTrash(Self.trashTargets(pick.nodes, in: pick.tree), model: pick.model)
     }
 }
 

@@ -509,6 +509,121 @@ final class ValueCell: NSTableCellView {
     }
 }
 
+/// How the list orders a folder's children. Size descending is the engine's
+/// own order, so the default costs nothing; other orders keep it for ties.
+nonisolated struct ListOrder: Equatable, CustomStringConvertible {
+    enum Key: String { case name, size, files }
+    var key: Key
+    var ascending: Bool
+
+    static let engine = ListOrder(key: .size, ascending: false)
+
+    init(key: Key, ascending: Bool) {
+        self.key = key
+        self.ascending = ascending
+    }
+
+    /// The order a header click asked for.
+    init(_ descriptors: [NSSortDescriptor]) {
+        guard let first = descriptors.first, let key = first.key.flatMap(Key.init(rawValue:)) else {
+            self = .engine
+            return
+        }
+        self.init(key: key, ascending: first.ascending)
+    }
+
+    var descriptor: NSSortDescriptor { NSSortDescriptor(key: key.rawValue, ascending: ascending) }
+    var description: String { "\(key.rawValue) \(ascending ? "ascending" : "descending")" }
+
+    func children(of parent: Int, in tree: Tree) -> [Int] {
+        let ids = tree.children(parent)
+        switch key {
+        case .size:
+            return ascending ? ids.reversed().map(Int.init) : ids.map(Int.init)
+        case .files:
+            let counts = ids.map { tree.isDir(Int($0)) ? Int64(tree.nFiles[Int($0)]) : -1 }
+            return sorted(ids) { a, b in counts[a] == counts[b] ? 0 : counts[a] < counts[b] ? -1 : 1 }
+        case .name:
+            // All keys in one buffer, compared with memcmp.
+            var keys: [UInt8] = []
+            keys.reserveCapacity(ids.count * 24)
+            var ends: [Int] = []
+            ends.reserveCapacity(ids.count)
+            for id in ids {
+                Self.appendNameKey(tree.nameBytes(Int(id)), to: &keys)
+                ends.append(keys.count)
+            }
+            return keys.withUnsafeBufferPointer { buf in
+                sorted(ids) { a, b in
+                    let aStart = a == 0 ? 0 : ends[a - 1], bStart = b == 0 ? 0 : ends[b - 1]
+                    let aCount = ends[a] - aStart, bCount = ends[b] - bStart
+                    let common = min(aCount, bCount)
+                    let c = common == 0 ? 0 : memcmp(buf.baseAddress! + aStart, buf.baseAddress! + bStart, common)
+                    return c != 0 ? Int(c) : aCount - bCount
+                }
+            }
+        }
+    }
+
+    /// `ids` by a three-way `compare` of their positions; equal ones stay in
+    /// engine order whichever way it runs.
+    private func sorted(_ ids: UnsafeBufferPointer<UInt32>, by compare: (Int, Int) -> Int) -> [Int] {
+        var at = Array(ids.indices)
+        at.sort { a, b in
+            let c = compare(a, b)
+            return c != 0 ? (ascending ? c < 0 : c > 0) : a < b
+        }
+        return at.map { Int(ids[$0]) }
+    }
+
+    /// Finder's name order (`localizedStandardCompare`: case- and
+    /// accent-blind, digit runs by value) as bytes compared with memcmp.
+    /// Building one key per name is several times faster on a 100k-item
+    /// folder than calling the comparator in the sort. Scripts whose
+    /// collation isn't code-point order (pinyin, for one) come out by code point.
+    static func nameKey(_ name: String) -> [UInt8] {
+        var key: [UInt8] = []
+        var utf8 = Array(name.utf8)
+        utf8.withUnsafeMutableBufferPointer { appendNameKey(UnsafeBufferPointer($0), to: &key) }
+        return key
+    }
+
+    static func appendNameKey(_ name: UnsafeBufferPointer<UInt8>, to key: inout [UInt8]) {
+        if name.allSatisfy({ $0 < 0x80 }) {
+            appendFoldedKey(name, to: &key)
+            return
+        }
+        // Folded, then composed: byte order is then code-point order.
+        var folded = Array(String(decoding: name, as: UTF8.self)
+            .folding(options: [.caseInsensitive, .diacriticInsensitive, .widthInsensitive], locale: nil)
+            .precomposedStringWithCanonicalMapping.utf8)
+        folded.withUnsafeMutableBufferPointer { appendFoldedKey(UnsafeBufferPointer($0), to: &key) }
+    }
+
+    /// ASCII letters lowercased (folding already did the rest); each digit
+    /// run as a control byte for its width, then its digits without leading
+    /// zeros, so shorter numbers come first and numbers precede letters.
+    private static func appendFoldedKey(_ bytes: UnsafeBufferPointer<UInt8>, to key: inout [UInt8]) {
+        let zero = UInt8(ascii: "0"), nine = UInt8(ascii: "9")
+        var i = 0
+        while i < bytes.count {
+            let byte = bytes[i]
+            if byte >= zero && byte <= nine {
+                var end = i
+                while end < bytes.count && bytes[end] >= zero && bytes[end] <= nine { end += 1 }
+                var start = i
+                while start < end && bytes[start] == zero { start += 1 }
+                key.append(UInt8(1 + min(end - start, 30)))
+                key.append(contentsOf: bytes[start..<end])
+                i = end
+            } else {
+                key.append(byte >= UInt8(ascii: "A") && byte <= UInt8(ascii: "Z") ? byte + 32 : byte)
+                i += 1
+            }
+        }
+    }
+}
+
 struct OutlinePanel: NSViewRepresentable {
     let model: ScanModel
 
@@ -519,13 +634,25 @@ struct OutlinePanel: NSViewRepresentable {
         private(set) var id: Int
         private(set) var tree: Tree
         private var kids: [Item]?
+        private var kidsOrder = ListOrder.engine
         init(id: Int, tree: Tree) {
             self.id = id
             self.tree = tree
         }
-        var children: [Item] {
-            if kids == nil { kids = tree.children(id).map { Item(id: Int($0), tree: tree) } }
+        func children(_ order: ListOrder) -> [Item] {
+            if let kids, kidsOrder == order { return kids }
+            let ids = order.children(of: id, in: tree)
+            kids = kids.map { Item.reorder($0, to: ids) } ?? ids.map { Item(id: $0, tree: tree) }
+            kidsOrder = order
             return kids!
+        }
+
+        /// The same wrappers in a new order: AppKit keeps rows expanded and
+        /// selected by item identity, so a re-sort must not replace them.
+        static func reorder(_ items: [Item], to ids: [Int]) -> [Item] {
+            var byID = [Int: Item](minimumCapacity: items.count)
+            for item in items { byID[item.id] = item }
+            return ids.map { byID[$0]! }
         }
 
         /// Only an untouched, collapsed item can be rebound without leaving
@@ -549,19 +676,28 @@ struct OutlinePanel: NSViewRepresentable {
         var tree: Tree?
         var viewRoot = -1
         var roots: [Item] = []
+        /// The column the user sorted by; size descending until they click one.
+        private(set) var order = ListOrder.engine
         weak var outline: NSOutlineView?
         private var iconCache: [String: NSImage] = [:]
+
+        /// The selected rows' nodes, top to bottom; empty while the list
+        /// still shows a tree a rescan replaced.
+        var selectedNodes: [Int] {
+            guard let outline, let tree, model?.tree === tree else { return [] }
+            return outline.selectedRowIndexes.compactMap { (outline.item(atRow: $0) as? Item)?.id }
+        }
 
         func rebuildIfNeeded() {
             guard let model, let t = model.tree else { return }
             if t !== tree || model.viewRoot != viewRoot {
-                let childIDs = t.children(model.viewRoot)
+                let childIDs = order.children(of: model.viewRoot, in: t)
                 // Bound name comparisons for extremely wide directories.
                 let reuseRows = t !== tree && model.viewRoot == viewRoot
                     && roots.count <= 4_096
                     && outline?.numberOfRows == roots.count && childIDs.count == roots.count
                     && zip(roots, childIDs).allSatisfy { item, id in
-                        item.canRebind(to: Int(id), in: t) && outline?.isItemExpanded(item) == false
+                        item.canRebind(to: id, in: t) && outline?.isItemExpanded(item) == false
                     }
                 tree = t
                 viewRoot = model.viewRoot
@@ -569,7 +705,7 @@ struct OutlinePanel: NSViewRepresentable {
                 if reuseRows, let outline {
                     // A rescan often has the same top-level shape. Keep row
                     // views/disclosure buttons and refresh only their cells.
-                    for (item, id) in zip(roots, childIDs) { item.rebind(to: Int(id), in: t) }
+                    for (item, id) in zip(roots, childIDs) { item.rebind(to: id, in: t) }
                     outline.deselectAll(nil)
                     outline.enumerateAvailableRowViews { rowView, row in
                         guard self.roots.indices.contains(row) else { return }
@@ -580,7 +716,7 @@ struct OutlinePanel: NSViewRepresentable {
                         }
                     }
                 } else {
-                    roots = childIDs.map { Item(id: Int($0), tree: t) }
+                    roots = childIDs.map { Item(id: $0, tree: t) }
                     outline?.reloadData()
                 }
                 if ProcessInfo.processInfo.environment["BZ_TIMING"] != nil {
@@ -639,11 +775,36 @@ struct OutlinePanel: NSViewRepresentable {
             return item.tree.children(item.id).count
         }
         func outlineView(_ v: NSOutlineView, child index: Int, ofItem item: Any?) -> Any {
-            item == nil ? roots[index] : (item as! Item).children[index]
+            item == nil ? roots[index] : (item as! Item).children(order)[index]
         }
         func outlineView(_ v: NSOutlineView, isItemExpandable item: Any) -> Bool {
             let it = item as! Item
             return it.tree.isDir(it.id) && !it.tree.children(it.id).isEmpty
+        }
+
+        /// A header click. Folders already opened re-sort lazily, when the
+        /// reload asks for their rows; the selection follows its items.
+        func outlineView(_ v: NSOutlineView, sortDescriptorsDidChange old: [NSSortDescriptor]) {
+            let next = ListOrder(v.sortDescriptors)
+            OutlinePanel.showSortIndicator(v, for: next)
+            guard next != order else { return }
+            order = next
+            guard let tree, tree === model?.tree else { return }
+            let started = Date()
+            let selected = v.selectedRowIndexes.compactMap { v.item(atRow: $0) as? Item }
+            let primary = model?.selection
+            roots = Item.reorder(roots, to: order.children(of: viewRoot, in: tree))
+            v.reloadData()
+            let rows = IndexSet(selected.map { v.row(forItem: $0) }.filter { $0 >= 0 })
+            v.selectRowIndexes(rows, byExtendingSelection: false)
+            if let primary, let it = selected.first(where: { $0.id == primary }) {
+                model?.selection = primary
+                v.scrollRowToVisible(v.row(forItem: it))
+            }
+            if ProcessInfo.processInfo.environment["BZ_TIMING"] != nil {
+                NSLog("BZ list sort (%@, %d rows): %.1f ms", order.description, v.numberOfRows,
+                      -started.timeIntervalSinceNow * 1000)
+            }
         }
 
         // MARK: cells
@@ -679,6 +840,8 @@ struct OutlinePanel: NSViewRepresentable {
                 cell.imageView?.image = icon(for: name, isDir: tree.isDir(it.id))
             } else if column == "size" {
                 cell.textField?.stringValue = Fmt.size(tree.alloc[it.id])
+            } else if column == "files" {
+                cell.textField?.stringValue = tree.isDir(it.id) ? Fmt.num(UInt64(tree.nFiles[it.id])) : ""
             } else {
                 let parent = Int(tree.parents[it.id])
                 let pAlloc = parent == Int(UInt32.max) ? tree.alloc[0] : tree.alloc[parent]
@@ -691,15 +854,18 @@ struct OutlinePanel: NSViewRepresentable {
         func outlineViewSelectionDidChange(_ n: Notification) {
             // While a rescan runs the list still shows the old tree, hidden.
             guard let outline, let model, model.tree != nil, model.tree === tree else { return }
+            // With several rows selected the maps show the one picked last.
             if let it = outline.item(atRow: outline.selectedRow) as? Item {
                 model.selection = it.id
             }
         }
 
         /// Treemap click → expand ancestors, select and reveal the row here.
+        /// A node already among several selected rows keeps that selection.
         func syncSelection() {
             guard let outline, let tree, let sel = model?.selection else { return }
             if let cur = outline.item(atRow: outline.selectedRow) as? Item, cur.id == sel { return }
+            if outline.selectedRowIndexes.contains(where: { (outline.item(atRow: $0) as? Item)?.id == sel }) { return }
 
             var chain: [Int] = []
             var cur = sel
@@ -717,7 +883,7 @@ struct OutlinePanel: NSViewRepresentable {
                 target = it
                 if id != chain.last {
                     outline.expandItem(it)
-                    level = it.children
+                    level = it.children(order)
                 }
             }
             if let target {
@@ -754,27 +920,30 @@ struct OutlinePanel: NSViewRepresentable {
                   row >= 0, let it = item(atRow: row) as? OutlinePanel.Item else {
                 return nil
             }
-            if row != selectedRow {
+            // As in Finder: a right-click inside the selection acts on all of
+            // it, one outside replaces it.
+            if !isRowSelected(row) {
                 selectRowIndexes(IndexSet(integer: row), byExtendingSelection: false)
             }
             model.selection = it.id
             let menu = NSMenu()
-            NodeMenu.fill(menu, node: it.id, model: model)
+            NodeMenu.fill(menu, nodes: coordinator.selectedNodes, model: model)
             return menu
         }
 
         @objc(copy:)
         func copySelection(_ sender: Any?) {
-            guard let coordinator, let model = coordinator.model, let tree = model.tree,
-                  let sel = model.selection else { return }
-            NodeMenu.copyPath(tree.displayPath(sel))
+            guard let coordinator, let tree = coordinator.model?.tree else { return }
+            let nodes = coordinator.selectedNodes
+            guard !nodes.isEmpty else { return }
+            NodeMenu.copyPath(nodes.map(tree.displayPath).joined(separator: "\n"))
         }
 
         override func keyDown(with event: NSEvent) {
             let cmdDelete = event.modifierFlags.contains(.command) && (event.keyCode == 51 || event.keyCode == 117)
-            if cmdDelete, let coordinator, let model = coordinator.model, let tree = model.tree,
-               let sel = model.selection, sel != 0 {
-                NodeMenu.moveToTrash(path: tree.path(sel), displayPath: tree.displayPath(sel), model: model)
+            if cmdDelete, let coordinator, let model = coordinator.model,
+               case let nodes = coordinator.selectedNodes, !nodes.isEmpty, !nodes.contains(0) {
+                NodeMenu.moveToTrash(nodes: nodes, model: model)
                 return
             }
             super.keyDown(with: event)
@@ -791,32 +960,61 @@ struct OutlinePanel: NSViewRepresentable {
 
     func makeCoordinator() -> Coordinator { Coordinator() }
 
-    func makeNSView(context: Context) -> NSScrollView {
-        let outline = OutlineView()
-        let coord = context.coordinator
-        outline.coordinator = coord
+    /// Columns, sorting and selection; the data source is attached after, so
+    /// showing the default sort in the header doesn't re-sort anything.
+    static func configure(_ outline: NSOutlineView) {
         outline.style = .plain
         Self.configureRows(outline)
         outline.usesAlternatingRowBackgroundColors = true
         outline.floatsGroupRows = false
         outline.indentationPerLevel = 13
         outline.autoresizesOutlineColumn = false
+        outline.allowsMultipleSelection = true
 
+        // Each column's first click sorts the way people usually want it:
+        // names A–Z, sizes and counts largest first.
         let name = NSTableColumn(identifier: .init("name"))
         name.title = String(localized: "Name")
         name.minWidth = 120
+        name.sortDescriptorPrototype = ListOrder(key: .name, ascending: true).descriptor
         let size = NSTableColumn(identifier: .init("size"))
         size.title = String(localized: "Size")
         size.width = 92; size.minWidth = 84; size.maxWidth = 116
+        size.sortDescriptorPrototype = ListOrder.engine.descriptor
         let pct = NSTableColumn(identifier: .init("pct"))
         pct.title = "%"
         pct.width = 34; pct.minWidth = 30; pct.maxWidth = 44
+        let files = NSTableColumn(identifier: .init("files"))
+        files.title = String(localized: "Files")
+        files.width = 60; files.minWidth = 44; files.maxWidth = 84
+        files.sortDescriptorPrototype = ListOrder(key: .files, ascending: false).descriptor
 
         outline.addTableColumn(name)
         outline.addTableColumn(size)
         outline.addTableColumn(pct)
+        outline.addTableColumn(files)
         outline.outlineTableColumn = name
         outline.columnAutoresizingStyle = .firstColumnOnlyAutoresizingStyle
+        outline.sortDescriptors = [ListOrder.engine.descriptor]
+        showSortIndicator(outline, for: .engine)
+    }
+
+    /// The header's arrow and highlight. AppKit draws them for a header
+    /// click but not for sort descriptors set in code, such as the default.
+    static func showSortIndicator(_ outline: NSOutlineView, for order: ListOrder) {
+        let arrow = NSImage(named: order.ascending ? "NSAscendingSortIndicator" : "NSDescendingSortIndicator")
+        for column in outline.tableColumns {
+            let sorted = column.identifier.rawValue == order.key.rawValue
+            outline.setIndicatorImage(sorted ? arrow : nil, in: column)
+            if sorted { outline.highlightedTableColumn = column }
+        }
+    }
+
+    func makeNSView(context: Context) -> NSScrollView {
+        let outline = OutlineView()
+        let coord = context.coordinator
+        outline.coordinator = coord
+        Self.configure(outline)
 
         coord.model = model
         coord.outline = outline

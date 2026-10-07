@@ -110,6 +110,11 @@
 "Move to Trash" = "Déplacer à la Corbeille";
 "Move “%@” to Trash?" = "Déplacer « %@ » à la Corbeille ?";
 "Couldn’t move “%@” to the Trash" = "Impossible de déplacer « %@ » à la Corbeille";
+"Files" = "Fichiers";
+"Move %lld items to Trash?" = "Déplacer %lld éléments à la Corbeille ?";
+"%@ in total" = "%@ au total";
+"and %lld more" = "et %lld de plus";
+"Couldn’t move %lld items to the Trash" = "Impossible de déplacer %lld éléments à la Corbeille";
 "Open" = "Ouvrir";
 "Zoom In" = "Zoomer";
 "Ask %@ If It’s Safe to Clean" = "Demander à %@ si on peut le supprimer sans risque";

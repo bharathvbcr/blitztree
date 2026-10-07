@@ -35,4 +35,8 @@ swiftc "${SOURCES[@]}" tests/TypesIntegrationChecks.swift "${FLAGS[@]}" \
   -import-objc-header app/bz.h -L target/release -lblitztree \
   -framework AppKit -framework SwiftUI -o "$CLEANUP_TEST_TMP/types"
 "$CLEANUP_TEST_TMP/types"
+swiftc "${SOURCES[@]}" tests/ListIntegrationChecks.swift "${FLAGS[@]}" \
+  -import-objc-header app/bz.h -L target/release -lblitztree \
+  -framework AppKit -framework SwiftUI -o "$CLEANUP_TEST_TMP/list"
+"$CLEANUP_TEST_TMP/list"
 

@@ -236,12 +236,60 @@ struct UIPerformance {
         before = []; after = []
         for _ in 0..<9 {
             let oldItem = OutlinePanel.Item(id: wideParent, tree: wideTree)
-            before.append(milliseconds { check(oldItem.children.count == 100_000, "Baseline outline count") })
+            before.append(milliseconds { check(oldItem.children(.engine).count == 100_000, "Baseline outline count") })
             check(!childrenAreUnmaterialized(oldItem), "Baseline did not materialize wrappers")
             let newItem = OutlinePanel.Item(id: wideParent, tree: wideTree)
             after.append(milliseconds { check(coordinator.outlineView(outline, numberOfChildrenOfItem: newItem) == 100_000, "Optimized outline count") })
             check(childrenAreUnmaterialized(newItem), "Wide count allocated wrappers")
         }
         print(String(format: "outline child_count=100000 baseline_ms=%.3f optimized_ms=%.6f baseline_wrappers=100000 optimized_wrappers=0", median(before), median(after)))
+
+        // A header click on a 100k-item folder, end to end: the sort, the
+        // outline reload and the selection carried across, in a real window.
+        var sortFixture = Fixture()
+        var sortState: UInt64 = 0x5047
+        let stems = ["IMG_", "Report ", "café-", "data", "Ünïcode ", "zeta", "Alpha", "文件"]
+        for child in 0..<100_000 {
+            sortState = sortState &* 6364136223846793005 &+ 1442695040888963407
+            sortFixture.add("\(stems[Int(sortState >> 60) % stems.count])\((sortState >> 20) % 1_000_000).\(child)",
+                            bytes: (sortState >> 24) % 10_000_000, directory: child.isMultiple(of: 3))
+        }
+        let sortTree = sortFixture.tree()
+        let sortModel = ScanModel()
+        sortModel.tree = sortTree
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 400, height: 800), styleMask: [.titled],
+                              backing: .buffered, defer: false)
+        let list = OutlinePanel.OutlineView(frame: window.contentLayoutRect)
+        OutlinePanel.configure(list)
+        window.contentView = list
+        let sortCoordinator = OutlinePanel.Coordinator()
+        sortCoordinator.model = sortModel
+        sortCoordinator.outline = list
+        list.coordinator = sortCoordinator
+        list.dataSource = sortCoordinator
+        list.delegate = sortCoordinator
+        sortCoordinator.rebuildIfNeeded()
+        list.selectRowIndexes(IndexSet([10, 500, 90_000]), byExtendingSelection: false)
+        let picked = Set(sortCoordinator.selectedNodes)
+        let orders = [ListOrder(key: .name, ascending: true), ListOrder(key: .files, ascending: false),
+                      ListOrder(key: .size, ascending: true), ListOrder(key: .name, ascending: false), .engine]
+        var sortSamples = [String: [Double]]()
+        for _ in 0..<5 {
+            for order in orders {
+                let ms = milliseconds {
+                    list.sortDescriptors = [order.descriptor]
+                    window.displayIfNeeded()
+                }
+                check(sortCoordinator.order == order, "Header click did not change the order")
+                check(Set(sortCoordinator.selectedNodes) == picked, "Sorting lost the selection")
+                sortSamples[order.description, default: []].append(ms)
+            }
+        }
+        for order in orders {
+            let samples = sortSamples[order.description]!
+            let ordering = (0..<9).map { _ in milliseconds { _ = order.children(of: 0, in: sortTree) } }
+            print(String(format: "list sort rows=%d order=%@ median_ms=%.1f max_ms=%.1f (ordering alone median_ms=%.1f)",
+                         list.numberOfRows, order.description, median(samples), samples.max()!, median(ordering)))
+        }
     }
 }

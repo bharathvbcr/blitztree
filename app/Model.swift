@@ -60,11 +60,13 @@ nonisolated final class Tree: @unchecked Sendable {
         return String(cString: label)
     }
 
-    func name(_ i: Int) -> String {
+    func name(_ i: Int) -> String { String(decoding: nameBytes(i), as: UTF8.self) }
+
+    /// The name's UTF-8, borrowed from the tree.
+    func nameBytes(_ i: Int) -> UnsafeBufferPointer<UInt8> {
         let start = Int(nameOff[i])
         let end = Int(nameOff[i + 1])
-        let buf = UnsafeBufferPointer(start: nameBlob + start, count: end - start)
-        return String(decoding: buf, as: UTF8.self)
+        return UnsafeBufferPointer(start: nameBlob + start, count: end - start)
     }
 
     func children(_ i: Int) -> UnsafeBufferPointer<UInt32> {
@@ -120,8 +122,9 @@ nonisolated final class Tree: @unchecked Sendable {
     }
 
     /// Human-facing path: the Data-volume firmlink prefix reads as "/".
-    func displayPath(_ i: Int) -> String {
-        let p = path(i)
+    func displayPath(_ i: Int) -> String { Self.displayPath(path(i)) }
+
+    static func displayPath(_ p: String) -> String {
         let prefix = "/System/Volumes/Data"
         if p.hasPrefix(prefix) {
             let rest = String(p.dropFirst(prefix.count))

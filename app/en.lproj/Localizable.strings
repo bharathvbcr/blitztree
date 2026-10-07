@@ -107,6 +107,11 @@
 "Move to Trash" = "Move to Trash";
 "Move “%@” to Trash?" = "Move “%@” to Trash?";
 "Couldn’t move “%@” to the Trash" = "Couldn’t move “%@” to the Trash";
+"Files" = "Files";
+"Move %lld items to Trash?" = "Move %lld items to Trash?";
+"%@ in total" = "%@ in total";
+"and %lld more" = "and %lld more";
+"Couldn’t move %lld items to the Trash" = "Couldn’t move %lld items to the Trash";
 "Open" = "Open";
 "Zoom In" = "Zoom In";
 "Ask %@ If It’s Safe to Clean" = "Ask %@ If It’s Safe to Clean";

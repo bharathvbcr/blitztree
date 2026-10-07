@@ -110,6 +110,11 @@
 "Move to Trash" = "ゴミ箱に移動";
 "Move “%@” to Trash?" = "「%@」をゴミ箱に移動しますか？";
 "Couldn’t move “%@” to the Trash" = "「%@」をゴミ箱に移動できませんでした";
+"Files" = "ファイル";
+"Move %lld items to Trash?" = "%lld 項目をゴミ箱に移動しますか？";
+"%@ in total" = "合計 %@";
+"and %lld more" = "ほか %lld 項目";
+"Couldn’t move %lld items to the Trash" = "%lld 項目をゴミ箱に移動できませんでした";
 "Open" = "開く";
 "Zoom In" = "拡大";
 "Ask %@ If It’s Safe to Clean" = "削除しても安全か%@に聞く";

@@ -497,6 +497,13 @@ struct CleanupIntegrationChecks {
             "Recognised by BlitzTree as %@",
             "Inside %@, recognised by BlitzTree as %@",
             "BlitzTree won't remove this: %@",
+
+            /* Directory list: Files column, several items to the Trash */
+            "Files",
+            "Move %lld items to Trash?",
+            "%@ in total",
+            "and %lld more",
+            "Couldn’t move %lld items to the Trash",
         ]
 
         for lang in languages {

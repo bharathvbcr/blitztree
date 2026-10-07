@@ -110,6 +110,11 @@
 "Move to Trash" = "移到废纸篓";
 "Move “%@” to Trash?" = "将“%@”移到废纸篓？";
 "Couldn’t move “%@” to the Trash" = "无法将“%@”移到废纸篓";
+"Files" = "文件";
+"Move %lld items to Trash?" = "将 %lld 个项目移到废纸篓？";
+"%@ in total" = "共 %@";
+"and %lld more" = "以及另外 %lld 个";
+"Couldn’t move %lld items to the Trash" = "无法将 %lld 个项目移到废纸篓";
 "Open" = "打开";
 "Zoom In" = "放大";
 "Ask %@ If It’s Safe to Clean" = "询问 %@ 是否可以安全删除";
