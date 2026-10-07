@@ -8,6 +8,7 @@
 "Scan without it" = "Bu olmadan tara";
 "Macintosh HD" = "Macintosh HD";
 "Home" = "Ev";
+"%@ — %@ of %@ used" = "%@ — %@ / %@ kullanılıyor";
 "Choose Folder…" = "Klasör Seç…";
 "Scan" = "Tara";
 "Choose what to scan" = "Neyin taranacağını seçin";
@@ -26,6 +27,9 @@
 "%@ files · %@ folders · %@s" = "%@ dosya · %@ klasör · %@s";
 "%@ files · %@" = "%@ dosya · %@";
 "%@ system folders unreadable%@" = "%@ sistem klasörü okunamadı%@";
+"~%@ root-only" = "~%@ yalnızca root";
+"Sizes exceed disk usage by %@" = "Boyutlar disk kullanımını %@ aşıyor";
+"Files cloned on APFS and edited afterwards share most of their blocks, but each one is counted in full." = "APFS'te klonlanıp sonradan düzenlenen dosyalar bloklarının çoğunu paylaşır, ancak her biri tam boyutuyla sayılır.";
 "%@ folders skipped — grant Full Disk Access" = "%@ klasör atlandı — Tam Disk Erişimi verin";
 "scanned in %@" = "%@ içinde tarandı";
 "Name" = "Ad";
@@ -227,3 +231,7 @@
 "%@ matches" = "%@ eşleşme";
 "Showing %1$@ of %2$@ matches" = "%2$@ eşleşmeden %1$@ tanesi gösteriliyor";
 "Largest first" = "Önce en büyükler";
+"Folders" = "Klasörler";
+"Largest Files" = "En Büyük Dosyalar";
+"%@ largest files" = "En büyük %@ dosya";
+"No files" = "Dosya yok";

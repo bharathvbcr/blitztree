@@ -44,7 +44,7 @@ Method, full results and a comparison with other tools: [BENCHMARKS.md](BENCHMAR
 
 ## Accuracy
 
-Sizes are allocated bytes, matching `du`. Hard-linked files count once, the scan stays on one volume, and cloud-only iCloud folders are never downloaded. Root-only system data that no app can read is reported in the status bar instead of hidden.
+Sizes are allocated bytes, as `du` counts them, except that shared data counts once: hard links and whole APFS clones (`cp -c`, Chrome's code-signing clones) are charged to their first path and show 0 bytes elsewhere, where `du` would count every copy. A clone edited after copying still counts in full; if that makes the scan larger than the disk's used space, the status bar says by how much. The scan stays on one volume, and cloud-only iCloud folders are never downloaded. Root-only system data that no app can read is reported in the status bar instead of hidden.
 
 ## AI cleanup
 

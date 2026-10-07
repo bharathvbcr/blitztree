@@ -31,6 +31,16 @@ const char *bz_cleanup_description(BzScan *h, uint64_t index);
 
 void bz_free(BzScan *h);
 
+// Largest files anywhere in the scan (directories excluded), selected in the
+// engine without copying the tree: the same function behind the CLI's
+// `largest_files`. Nodes are tree indices, largest first, valid until
+// bz_largest_free. NULL before a finished scan.
+typedef struct BzLargest BzLargest;
+BzLargest *bz_largest_files(BzScan *h, uint32_t limit, uint64_t min_bytes);
+uint32_t bz_largest_count(BzLargest *l);
+const uint32_t *bz_largest_nodes(BzLargest *l);
+void bz_largest_free(BzLargest *l);
+
 typedef struct BzSearch BzSearch;
 
 // Interactive search over all nodes in the tree, off main thread.

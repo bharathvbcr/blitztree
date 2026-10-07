@@ -8,6 +8,7 @@
 "Scan without it" = "Escanear sin él";
 "Macintosh HD" = "Macintosh HD";
 "Home" = "Casa";
+"%@ — %@ of %@ used" = "%@ — %@ de %@ usados";
 "Choose Folder…" = "Elegir carpeta…";
 "Scan" = "Escanear";
 "Choose what to scan" = "Elige qué escanear";
@@ -26,6 +27,9 @@
 "%@ files · %@ folders · %@s" = "%@ archivos · %@ carpetas · %@s";
 "%@ files · %@" = "%@ archivos · %@";
 "%@ system folders unreadable%@" = "%@ carpetas del sistema ilegibles%@";
+"~%@ root-only" = "~%@ solo para root";
+"Sizes exceed disk usage by %@" = "Los tamaños superan el uso del disco en %@";
+"Files cloned on APFS and edited afterwards share most of their blocks, but each one is counted in full." = "Los archivos clonados en APFS y editados después comparten la mayoría de sus bloques, pero cada uno se cuenta completo.";
 "%@ folders skipped — grant Full Disk Access" = "%@ carpetas omitidas — concede el Acceso Total al Disco";
 "scanned in %@" = "escaneado en %@";
 "Name" = "Nombre";
@@ -227,3 +231,7 @@
 "%@ matches" = "%@ coincidencias";
 "Showing %1$@ of %2$@ matches" = "Mostrando %1$@ de %2$@ coincidencias";
 "Largest first" = "Los más grandes primero";
+"Folders" = "Carpetas";
+"Largest Files" = "Archivos grandes";
+"%@ largest files" = "%@ archivos más grandes";
+"No files" = "Sin archivos";

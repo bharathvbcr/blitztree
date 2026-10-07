@@ -1,5 +1,9 @@
 # Benchmarks
 
+The [clone accounting measurements](benchmarks/CLONE_ACCOUNTING.md) cover what
+reading APFS clone ids costs a scan, the whole-volume totals before and after,
+and the randomized stress runs on APFS, HFS+, exFAT and FAT32 images.
+
 The [path-ordering measurements](benchmarks/PATH_ORDER.md) cover hard-link-heavy
 trees and complete JSON CLI latency, including report construction and output.
 They distinguish workload-specific gains from unchanged ordinary scan times.

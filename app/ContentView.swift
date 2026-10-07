@@ -5,6 +5,7 @@ import AppKit
 struct ContentView: View {
     @State private var model = ScanModel()
     @State private var showTable = true
+    @State private var listMode: ListMode = .folders
     @FocusState private var isSearchFocused: Bool
     @AppStorage("bz.showCleanup") private var showCleanup = false
     @AppStorage("bz.listWidth") private var listWidth = 390.0
@@ -25,8 +26,25 @@ struct ContentView: View {
                     // seconds after every scan with the panel open.
                     HStack(spacing: 0) {
                         if showTable {
-                            OutlinePanel(model: model)
-                                .frame(width: listWidth)
+                            VStack(spacing: 0) {
+                                Picker("List", selection: $listMode) {
+                                    Text("Folders").tag(ListMode.folders)
+                                    Text("Largest Files").tag(ListMode.largestFiles)
+                                }
+                                .pickerStyle(.segmented)
+                                .labelsHidden()
+                                .padding(.horizontal, 8)
+                                .padding(.vertical, 6)
+                                // The outline stays in the hierarchy (see above);
+                                // the file list covers it rather than replacing it.
+                                ZStack {
+                                    OutlinePanel(model: model)
+                                    if listMode == .largestFiles {
+                                        LargestFilesList(model: model)
+                                    }
+                                }
+                            }
+                            .frame(width: listWidth)
                             ListDivider(width: $listWidth)
                         }
                         Group {
@@ -67,6 +85,7 @@ struct ContentView: View {
         }
         .toolbar { toolbar }
         .task {
+            model.watchVolumes()
             model.agentEnv = await AgentLocator.find()
             model.openPanelAfterLaunchScan()
         }
@@ -170,7 +189,17 @@ struct ContentView: View {
 
         ToolbarItemGroup(placement: .automatic) {
             Menu {
-                Button("Macintosh HD") { model.startScan(path: "/System/Volumes/Data") }
+                ForEach(model.volumes) { volume in
+                    Button {
+                        model.startScan(path: volume.path)
+                    } label: {
+                        Label(volume.total > 0
+                              ? String(localized: "\(volume.name) — \(Fmt.size(volume.used)) of \(Fmt.size(volume.total)) used")
+                              : volume.name,
+                              systemImage: volume.isInternal ? "internaldrive" : "externaldrive")
+                    }
+                }
+                Divider()
                 Button("Home") { model.startScan(path: FileManager.default.homeDirectoryForCurrentUser.path) }
                 Divider()
                 Button("Choose Folder…") { chooseFolder() }
@@ -335,12 +364,18 @@ private struct ScanStatusBar: View {
                     Text("\(Fmt.num(UInt64(tree.nFiles[model.viewRoot]))) files · \(Fmt.size(tree.alloc[model.viewRoot]))")
                         .monospacedDigit()
                     Spacer()
+                    if model.overcountedBytes > 1_000_000_000 {
+                        Text("Sizes exceed disk usage by \(Fmt.size(model.overcountedBytes))")
+                            .font(.caption)
+                            .foregroundStyle(.tertiary)
+                            .help(String(localized: "Files cloned on APFS and edited afterwards share most of their blocks, but each one is counted in full."))
+                    }
                     if tree.errors > 0 {
                         if FDA.isActive() {
                             // Root-owned system dirs: unreadable by design,
                             // not a permissions problem the user can fix.
                             let gap = model.unscannedBytes > 1_000_000_000
-                                ? " · ~\(Fmt.size(model.unscannedBytes)) root-only" : ""
+                                ? " · " + String(localized: "~\(Fmt.size(model.unscannedBytes)) root-only") : ""
                             Text("\(String(tree.errors)) system folders unreadable\(gap)")
                                 .font(.caption)
                                 .foregroundStyle(.tertiary)
@@ -412,6 +447,8 @@ private struct ListDivider: View {
 final class NameCell: NSTableCellView {
     private static let font = NSFont.systemFont(ofSize: 13)
     private static let lineHeight = ceil(font.ascender - font.descender + font.leading)
+    /// Text height plus breathing room, so the glyphs never touch the row edges.
+    static let rowHeight = lineHeight + 8
 
     override init(frame: NSRect) {
         super.init(frame: frame)
@@ -732,6 +769,14 @@ struct OutlinePanel: NSViewRepresentable {
         }
     }
 
+    /// The cells use fixed fonts, so the row height must not follow the system
+    /// "Sidebar icon size" setting: Small made rows shorter than the 13pt text
+    /// and clipped it.
+    static func configureRows(_ outline: NSOutlineView) {
+        outline.rowSizeStyle = .custom
+        outline.rowHeight = NameCell.rowHeight
+    }
+
     func makeCoordinator() -> Coordinator { Coordinator() }
 
     func makeNSView(context: Context) -> NSScrollView {
@@ -739,7 +784,7 @@ struct OutlinePanel: NSViewRepresentable {
         let coord = context.coordinator
         outline.coordinator = coord
         outline.style = .plain
-        outline.rowSizeStyle = .default
+        Self.configureRows(outline)
         outline.usesAlternatingRowBackgroundColors = true
         outline.floatsGroupRows = false
         outline.indentationPerLevel = 13

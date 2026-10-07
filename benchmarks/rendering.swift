@@ -5,7 +5,8 @@ import ImageIO
 @MainActor let renderingScale: CGFloat = CommandLine.arguments.contains("--scale1") ? 1 : 2
 
 // Minimal immutable adapter for the production Tree read interface. Every
-// rendering algorithm, shader and event hit test is compiled from app sources.
+// rendering algorithm, shader and event hit test is compiled from app sources;
+// rendering.py splices Tree.drawn in from app/Model.swift.
 nonisolated final class Tree: @unchecked Sendable {
     let alloc: [UInt64]
     let parents: [UInt32]
@@ -88,6 +89,11 @@ nonisolated final class Tree: @unchecked Sendable {
     var selection: Int?
     var scanRoot = "fixture"
     var agentRun: AgentRun?
+    // The node menu's actions; no fixture opens it, so they do nothing.
+    var plannerName: String? { nil }
+    var canStartRun: Bool { false }
+    func startScan(path: String? = nil) {}
+    func ask(about node: Int) {}
 }
 @MainActor struct AgentRun { func highlights(in tree: Tree?) -> [Int] { [] } }
 enum Fmt {

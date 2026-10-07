@@ -41,7 +41,9 @@ for legacy in (True, False):
     for name in sources:
         source = (subprocess.check_output(["git", "show", f"{args.baseline}:app/{name}"], cwd=ROOT).decode()
                   if legacy else (ROOT / "app" / name).read_text())
-        source = re.sub(r"\bprivate\s+", "", source)
+        # Widen access for the bench, except file-private extensions (NSFont helpers):
+        # nothing calls them from outside, and widened they clash between the copies.
+        source = re.sub(r"\bprivate\s+(?!extension\b)", "", source)
         source = source.replace("window?.backingScaleFactor ?? 2", "window?.backingScaleFactor ?? renderingScale")
         if legacy and name == "Treemap.swift":
             baseline_has_renderer = "enum TreemapRenderer" in source
@@ -67,10 +69,6 @@ for legacy in (True, False):
         if legacy:
             for symbol in renames:
                 source = re.sub(rf"\b{symbol}\b", "Legacy" + symbol, source)
-            source = source.replace("rounded()", "legacyRounded()") if name == "SunburstView.swift" else source
-            # Only the font convenience method gets renamed, not CGFloat.rounded().
-            source = source.replace(".legacyRounded()", ".rounded()")
-            source = source.replace(".semibold).rounded()", ".semibold).legacyRounded()")
         path = work / (("Legacy" if legacy else "") + name)
         path.write_text(source)
         files.append(str(path))
@@ -109,6 +107,21 @@ extension RenderingBench {
     }
 }
 """
+if not args.real:
+    # The fixture Tree stands in for the Rust-backed one, but Tree.drawn is pure
+    # over parents/alloc: compile the app's own copy instead of a second one.
+    model = (ROOT / "app" / "Model.swift").read_text()
+    start = model.find("    func drawn(_ node: Int, isDrawn: (Int) -> Bool) -> Int? {")
+    if start < 0:
+        raise SystemExit("rendering.py: Tree.drawn not found in app/Model.swift; update the splice")
+    depth, end = 0, start
+    for end in range(model.index("{", start), len(model)):
+        depth += {"{": 1, "}": -1}.get(model[end], 0)
+        if depth == 0:
+            break
+    if depth != 0:
+        raise SystemExit("rendering.py: unbalanced braces in Tree.drawn in app/Model.swift")
+    runner += "\nnonisolated extension Tree {\n" + model[start:end + 1] + "\n}\n"
 runner_path = work / "RenderingBench.swift"
 runner_path.write_text(runner)
 if args.real:

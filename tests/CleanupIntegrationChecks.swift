@@ -412,6 +412,11 @@ struct CleanupIntegrationChecks {
         outlineView.outlineTableColumn = col
         outlineView.dataSource = coord
         outlineView.delegate = coord
+        outlineView.rowSizeStyle = .small
+        OutlinePanel.configureRows(outlineView)
+        let textHeight = ceil(NSFont.systemFont(ofSize: 13).boundingRectForFont.height)
+        precondition(outlineView.rowSizeStyle == .custom && outlineView.rowHeight >= textHeight + 6,
+                     "outline rows are taller than their text regardless of system row size: \(outlineView.rowHeight)")
         coord.rebuildIfNeeded()
         outlineView.reloadData()
         window.displayIfNeeded()
@@ -582,6 +587,12 @@ struct CleanupIntegrationChecks {
         testModelTrue.agentEnv = AgentEnvironment(agents: [InstalledAgent(kind: .claude, path: "/fake/claude", signedIn: true)], loaded: true)
         testModelTrue.openPanelAfterLaunchScan()
         precondition(testModelTrue.agentRun != nil, "autoAnalyze=true must start agent run automatically")
+
+        // Ask about an item while a run is already active: the panel must be
+        // requested again (the agentRun-nil observer would not fire).
+        let requestsBeforeAsk = testModelTrue.panelRequests
+        testModelTrue.ask(about: 1)
+        precondition(testModelTrue.panelRequests == requestsBeforeAsk + 1, "ask(about:) requests the panel even when agentRun is already set")
 
         // When autoAnalyze is true but no agent/provider ready: gracefully opens panel without crash
         let testModelNoAgent = ScanModel()

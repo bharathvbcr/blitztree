@@ -8,6 +8,7 @@
 "Scan without it" = "不授权直接扫描";
 "Macintosh HD" = "Macintosh HD";
 "Home" = "主目录";
+"%@ — %@ of %@ used" = "%@ — 已用 %@，共 %@";
 "Choose Folder…" = "选择文件夹…";
 "Scan" = "扫描";
 "Choose what to scan" = "选择扫描目标";
@@ -26,6 +27,9 @@
 "%@ files · %@ folders · %@s" = "%@ 个文件 · %@ 个文件夹 · %@ 秒";
 "%@ files · %@" = "%@ 个文件 · %@";
 "%@ system folders unreadable%@" = "%@ 个系统文件夹无法读取%@";
+"~%@ root-only" = "约 %@ 仅限 root";
+"Sizes exceed disk usage by %@" = "大小合计超出磁盘用量 %@";
+"Files cloned on APFS and edited afterwards share most of their blocks, but each one is counted in full." = "在 APFS 上克隆后又被编辑的文件共享大部分数据块，但每个文件都按完整大小计算。";
 "%@ folders skipped — grant Full Disk Access" = "%@ 个文件夹已跳过 — 请授予完全磁盘访问权限";
 "scanned in %@" = "扫描用时 %@";
 "Name" = "名称";
@@ -227,3 +231,7 @@
 "%@ matches" = "%@ 个匹配项";
 "Showing %1$@ of %2$@ matches" = "显示 %2$@ 个匹配项中的 %1$@ 个";
 "Largest first" = "从大到小";
+"Folders" = "文件夹";
+"Largest Files" = "最大文件";
+"%@ largest files" = "最大的 %@ 个文件";
+"No files" = "没有文件";

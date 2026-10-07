@@ -9,6 +9,7 @@
 "Scan without it" = "Scan without it";
 "Macintosh HD" = "Macintosh HD";
 "Home" = "Home";
+"%@ — %@ of %@ used" = "%@ — %@ of %@ used";
 "Choose Folder…" = "Choose Folder…";
 "Scan" = "Scan";
 "Choose what to scan" = "Choose what to scan";
@@ -27,6 +28,9 @@
 "%@ files · %@ folders · %@s" = "%@ files · %@ folders · %@s";
 "%@ files · %@" = "%@ files · %@";
 "%@ system folders unreadable%@" = "%@ system folders unreadable%@";
+"~%@ root-only" = "~%@ root-only";
+"Sizes exceed disk usage by %@" = "Sizes exceed disk usage by %@";
+"Files cloned on APFS and edited afterwards share most of their blocks, but each one is counted in full." = "Files cloned on APFS and edited afterwards share most of their blocks, but each one is counted in full.";
 "%@ folders skipped — grant Full Disk Access" = "%@ folders skipped — grant Full Disk Access";
 "scanned in %@" = "scanned in %@";
 "Name" = "Name";
@@ -218,3 +222,7 @@
 "%@ matches" = "%@ matches";
 "Showing %1$@ of %2$@ matches" = "Showing %1$@ of %2$@ matches";
 "Largest first" = "Largest first";
+"Folders" = "Folders";
+"Largest Files" = "Largest Files";
+"%@ largest files" = "%@ largest files";
+"No files" = "No files";

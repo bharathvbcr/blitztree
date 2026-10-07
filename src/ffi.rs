@@ -7,7 +7,7 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
-use crate::{cleanup, scan, Progress, Tree};
+use crate::{cleanup, ranking, scan, Progress, Tree};
 
 pub struct BzScan {
     progress: Arc<Progress>,
@@ -159,6 +159,53 @@ pub unsafe extern "C" fn bz_cleanup_description(h: *mut BzScan, index: u64) -> *
         .map_or(std::ptr::null(), |s| s.as_ptr())
 }
 
+pub struct BzLargest {
+    nodes: Vec<u32>,
+}
+
+/// The `limit` largest files of at least `min_bytes` allocated, as tree node
+/// indices (largest first). Selected from the scan in place; no tree copy.
+/// Returns NULL without a finished scan.
+#[no_mangle]
+pub extern "C" fn bz_largest_files(h: *mut BzScan, limit: u32, min_bytes: u64) -> *mut BzLargest {
+    if h.is_null() {
+        return std::ptr::null_mut();
+    }
+    let h = unsafe { &*h };
+    let Some(flat) = h.flat.as_ref() else {
+        return std::ptr::null_mut();
+    };
+    let nodes = ranking::largest_files(&flat.tree, min_bytes, limit as usize)
+        .into_iter()
+        .map(|i| i as u32)
+        .collect();
+    Box::into_raw(Box::new(BzLargest { nodes }))
+}
+
+#[no_mangle]
+pub extern "C" fn bz_largest_count(l: *mut BzLargest) -> u32 {
+    if l.is_null() {
+        return 0;
+    }
+    unsafe { &*l }.nodes.len() as u32
+}
+
+/// Valid for `bz_largest_count(l)` elements until `bz_largest_free(l)`.
+#[no_mangle]
+pub extern "C" fn bz_largest_nodes(l: *mut BzLargest) -> *const u32 {
+    if l.is_null() {
+        return std::ptr::null();
+    }
+    unsafe { &*l }.nodes.as_ptr()
+}
+
+#[no_mangle]
+pub extern "C" fn bz_largest_free(l: *mut BzLargest) {
+    if !l.is_null() {
+        drop(unsafe { Box::from_raw(l) });
+    }
+}
+
 #[no_mangle]
 pub extern "C" fn bz_errors(h: *mut BzScan) -> u64 {
     let h = unsafe { &*h };
@@ -266,6 +313,32 @@ mod tests {
             }
             assert!(unsafe { bz_cleanup_description(h, expected.len() as u64) }.is_null());
         }
+    }
+
+    #[test]
+    fn bridge_lists_largest_files_like_the_library() {
+        let mut tree = Tree::with_root("/root");
+        tree.push("dir", 0, 1000, 1000, true);
+        tree.push("a.bin", 1, 300, 300, false);
+        tree.push("b.bin", 0, 700, 700, false);
+        tree.push("c.bin", 1, 5, 5, false);
+        tree.link_children();
+        let expected = ranking::largest_files(&tree, 10, 5);
+        let mut handle = BzScan {
+            progress: Arc::new(Progress::default()),
+            done: Arc::new(AtomicBool::new(true)),
+            result: Arc::new(std::sync::Mutex::new(None)),
+            flat: Some(Box::new(with_cleanup(tree))),
+        };
+        let h = &mut handle as *mut BzScan;
+        let l = bz_largest_files(h, 5, 10);
+        assert!(!l.is_null());
+        assert_eq!(bz_largest_count(l) as usize, expected.len());
+        let nodes = unsafe { std::slice::from_raw_parts(bz_largest_nodes(l), expected.len()) };
+        assert_eq!(nodes, [3, 2]); // b.bin, a.bin: not the directory, not c.bin
+        assert_eq!(nodes.iter().map(|&n| n as usize).collect::<Vec<_>>(), expected);
+        bz_largest_free(l);
+        assert!(bz_largest_files(std::ptr::null_mut(), 5, 0).is_null());
     }
 
     #[test]

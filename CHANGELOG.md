@@ -1,5 +1,17 @@
 # Changelog
 
+## Unreleased
+
+- A Largest Files list above the directory list shows the biggest files anywhere in the scan, so a 20 GB file buried deep in the tree is one click away. Picking one reveals it on the map; right-click gives the same menu as the map. The Rust engine picks the files and the CLI's `largest_files` uses the same code, so the two always agree.
+- APFS clones count once. Copies made with `cp -c` or Chrome's code-signing clones in `/private/var/folders/…/X/com.google.Chrome.code_sign_clone` share one set of blocks but each reported the full size, so a 1 TB disk could show 1.7 TB used. Whole clones now count once, under their first path, like hard links. On the machine that reported it, the data volume went from 1.61 TB scanned to 816 GB (852 GB in use), and the Chrome folder from 767 GB to 0.76 GB.
+- A clone edited after copying gets its own identity on APFS and still counts in full, so a scan can still exceed what the disk holds. When it does, the status bar says by how much instead of saying nothing.
+- FAT32 drives (through FSKit) listed every file at 0 bytes allocated, because the volume leaves that size out of directory listings. BlitzTree now reads it per file there.
+- A malformed directory entry from a file system is counted as an unreadable item instead of crashing the scan.
+- The CLI reports `coverage.shared_allocated_bytes` (what hard links and clones would have added again) and `coverage.clone_ids_unavailable_directories` (folders on volumes without clone tracking).
+- The "root-only" note in the status bar is translated.
+- The Scan menu lists every mounted local volume with its used and total space, so an external drive is one click instead of browsing to `/Volumes`. The list follows drives as they mount, unmount or are renamed. Network shares are left out: each folder read is a round trip to the server, so a large share scans slowly and loads the server, and the capacity it reports may be a quota. Choose Folder… still opens them.
+- Free space on exFAT, FAT and NTFS drives showed as zero, so the free-space tile was missing after scanning one. Those volumes now report their plain free space.
+
 ## 0.6.0 — 2026-10-06
 
 This release adds search, custom model providers, a translated interface, and per-item cleanup advice.

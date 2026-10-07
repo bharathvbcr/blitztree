@@ -23,4 +23,12 @@ swiftc "${SOURCES[@]}" tests/SearchIntegrationChecks.swift "${FLAGS[@]}" \
   -import-objc-header app/bz.h -L target/release -lblitztree \
   -framework AppKit -framework SwiftUI -o "$CLEANUP_TEST_TMP/search"
 "$CLEANUP_TEST_TMP/search"
+swiftc "${SOURCES[@]}" tests/VolumeChecks.swift "${FLAGS[@]}" \
+  -import-objc-header app/bz.h -L target/release -lblitztree \
+  -framework AppKit -framework SwiftUI -o "$CLEANUP_TEST_TMP/volumes"
+"$CLEANUP_TEST_TMP/volumes"
+swiftc "${SOURCES[@]}" tests/PlannerFallbackChecks.swift "${FLAGS[@]}" \
+  -import-objc-header app/bz.h -L target/release -lblitztree \
+  -framework AppKit -framework SwiftUI -o "$CLEANUP_TEST_TMP/planner"
+"$CLEANUP_TEST_TMP/planner"
 
