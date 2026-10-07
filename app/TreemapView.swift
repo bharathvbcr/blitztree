@@ -29,6 +29,7 @@ final class TreemapNSView: NSView {
     private var lastTreeID: ObjectIdentifier?
     private var lastShowFree = false
     private var lastFreeBytes: UInt64 = 0
+    private var lastHighlight: [UInt8]?
 
     private var displayedFreeBytes: UInt64 {
         guard let model, model.showFreeSpace else { return 0 }
@@ -46,7 +47,8 @@ final class TreemapNSView: NSView {
         guard let model, let tree = model.tree else { return }
         let treeID = ObjectIdentifier(tree)
         if bounds.size != lastSize || model.viewRoot != lastRoot || treeID != lastTreeID
-            || model.showFreeSpace != lastShowFree || displayedFreeBytes != lastFreeBytes {
+            || model.showFreeSpace != lastShowFree || displayedFreeBytes != lastFreeBytes
+            || model.highlightedType != lastHighlight {
             relayout()
         }
     }
@@ -65,6 +67,7 @@ final class TreemapNSView: NSView {
         lastTreeID = ObjectIdentifier(tree)
         lastShowFree = model.showFreeSpace
         lastFreeBytes = displayedFreeBytes
+        lastHighlight = model.highlightedType
 
         rects.removeAll(keepingCapacity: true)
         leaves.removeAll(keepingCapacity: true)
@@ -83,7 +86,8 @@ final class TreemapNSView: NSView {
         let ph = max(1, Int((bounds.height * scale).rounded()))
         let r = TreemapRenderer.render(
             tree: tree, pw: pw, ph: ph, scale: scale, root: model?.viewRoot ?? 0,
-            showFree: model?.showFreeSpace ?? false, freeBytes: model?.freeBytes ?? 0
+            showFree: model?.showFreeSpace ?? false, freeBytes: model?.freeBytes ?? 0,
+            highlight: model?.highlightedType
         )
         if ProcessInfo.processInfo.environment["BZ_TIMING"] != nil {
             NSLog("BZ render %dx%d: %d steps, layout %.1f ms, paint %.1f ms (%d bands)",
@@ -686,6 +690,8 @@ struct TreemapView: NSViewRepresentable {
     let model: ScanModel
     // A value input makes SwiftUI update this representable when capacity arrives.
     let freeBytes: UInt64
+    // Likewise when a file type is picked in the list.
+    let highlight: [UInt8]?
 
     func makeNSView(context: Context) -> TreemapNSView {
         let v = TreemapNSView()

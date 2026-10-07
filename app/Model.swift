@@ -105,6 +105,19 @@ nonisolated final class Tree: @unchecked Sendable {
         return (total, nodes)
     }
 
+    /// Allocated bytes and file counts per extension under `root`, largest
+    /// first, totalled by the engine in one pass over the files.
+    func types(root: Int) -> [TypeRow] {
+        guard root >= 0, root < count, let t = bz_types(handle, UInt32(root)) else { return [] }
+        defer { bz_types_free(t) }
+        let n = Int(bz_types_count(t))
+        guard n > 0, let off = bz_types_ext_off(t), let blob = bz_types_ext_blob(t),
+              let alloc = bz_types_alloc(t), let files = bz_types_files(t) else { return [] }
+        return (0..<n).map { i in
+            let ext = Array(UnsafeBufferPointer(start: blob + Int(off[i]), count: Int(off[i + 1] - off[i])))
+            return TypeRow(ext: ext, alloc: alloc[i], files: files[i])
+        }
+    }
 
     /// Human-facing path: the Data-volume firmlink prefix reads as "/".
     func displayPath(_ i: Int) -> String {
@@ -155,6 +168,18 @@ nonisolated final class Tree: @unchecked Sendable {
         }
         return cur
     }
+}
+
+/// One extension's share of a folder. `ext` is ASCII-lowercased bytes
+/// without the dot, empty for files without an extension.
+nonisolated struct TypeRow: Sendable, Identifiable {
+    let ext: [UInt8]
+    let alloc: UInt64
+    let files: UInt64
+    var id: [UInt8] { ext }
+    var name: String { String(decoding: ext, as: UTF8.self) }
+    /// Its colour group, from the table the treemap paints with.
+    var kind: TypeColor.Kind { TypeColor.kind(ofExtension: name) }
 }
 
 enum FDA {
@@ -394,6 +419,7 @@ final class ScanModel {
         didSet {
             // A selection outside the folder on screen would read as over 100%.
             if let sel = selection, let tree, !tree.ancestry(sel).contains(viewRoot) { selection = nil }
+            if viewRoot != oldValue { refreshTypes() }
         }
     }
     var selection: Int? = nil
@@ -484,6 +510,48 @@ final class ScanModel {
     }
 
 
+    // MARK: file types
+
+    var showTypes: Bool = UserDefaults.standard.bool(forKey: "bz.showTypes") {
+        didSet {
+            UserDefaults.standard.set(showTypes, forKey: "bz.showTypes")
+            refreshTypes()
+        }
+    }
+    /// Extensions under `typesRoot`, largest first; empty while hidden.
+    var typeRows: [TypeRow] = []
+    /// The folder `typeRows` describes: the view root they were made for.
+    var typesRoot: Int = 0
+    /// The extension picked in the list (see `TypeRow.ext`).
+    var selectedType: [UInt8]?
+    /// What the treemap highlights: the picked type while the list is shown.
+    var highlightedType: [UInt8]? { showTypes ? selectedType : nil }
+    private var typesTask: Task<Void, Never>?
+
+    /// Re-total the folder on screen, off the main thread. Only while the
+    /// list is shown; a zoom or a new tree calls this again.
+    func refreshTypes() {
+        typesTask?.cancel()
+        guard showTypes, let tree else {
+            typeRows = []
+            return
+        }
+        let root = viewRoot
+        typesTask = Task.detached(priority: .userInitiated) { [tree] in
+            let rows = tree.types(root: root)
+            if Task.isCancelled { return }
+            await MainActor.run { [weak self] in
+                guard let self, self.tree === tree, self.viewRoot == root, self.showTypes else { return }
+                self.typeRows = rows
+                self.typesRoot = root
+                // A type with no files in this folder has nothing to light.
+                if let picked = self.selectedType, !rows.contains(where: { $0.ext == picked }) {
+                    self.selectedType = nil
+                }
+            }
+        }
+    }
+
     private var handle: OpaquePointer?
     private var timer: Timer?
     private var startedAt: Date?
@@ -502,6 +570,9 @@ final class ScanModel {
         searchResults = []
         searchTotalMatches = 0
         isSearching = false
+        typesTask?.cancel()
+        typeRows = []
+        selectedType = nil
         viewRoot = 0
         selection = nil
         hovered = nil
@@ -595,6 +666,7 @@ final class ScanModel {
             if !searchQuery.trimmingCharacters(in: .whitespaces).isEmpty {
                 performSearch()
             }
+            refreshTypes()
             NSLog("BZ scan done: %llu nodes, %llu unreadable dirs", UInt64(tree.count), tree.errors)
         }
         if let activity { ProcessInfo.processInfo.endActivity(activity) }

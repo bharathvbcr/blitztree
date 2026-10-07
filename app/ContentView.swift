@@ -9,6 +9,7 @@ struct ContentView: View {
     @FocusState private var isSearchFocused: Bool
     @AppStorage("bz.showCleanup") private var showCleanup = false
     @AppStorage("bz.listWidth") private var listWidth = 390.0
+    @AppStorage("bz.typesWidth") private var typesWidth = 300.0
 
     var body: some View {
         VStack(spacing: 0) {
@@ -47,10 +48,16 @@ struct ContentView: View {
                             .frame(width: listWidth)
                             ListDivider(width: $listWidth)
                         }
+                        if model.showTypes {
+                            TypesPanel(model: model)
+                                .frame(width: typesWidth)
+                            ListDivider(width: $typesWidth)
+                        }
                         Group {
                             switch model.mapStyle {
                             case .treemap:
-                                TreemapView(model: model, freeBytes: model.showFreeSpace ? model.freeBytes : 0)
+                                TreemapView(model: model, freeBytes: model.showFreeSpace ? model.freeBytes : 0,
+                                            highlight: model.highlightedType)
                             case .rings:
                                 SunburstView(model: model, freeBytes: model.showFreeSpace && model.viewRoot == 0 ? model.freeBytes : 0)
                             }
@@ -253,6 +260,11 @@ struct ContentView: View {
                 Label("Directory List", systemImage: "sidebar.leading")
             }
             .help("Show directory list")
+
+            Toggle(isOn: $model.showTypes) {
+                Label("File Types", systemImage: "chart.bar.doc.horizontal")
+            }
+            .help("Show space by file type")
 
             Toggle(isOn: $showCleanup) {
                 Label("Clean Up", systemImage: "sparkles")
@@ -1043,6 +1055,105 @@ struct SearchResultRow: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+    }
+}
+
+/// Space by file type in the folder on screen (WizTree's Extensions tab).
+/// Picking a row lights that type's files in the treemap.
+struct TypesPanel: View {
+    let model: ScanModel
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            HStack {
+                Text("File Types")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.secondary)
+                Spacer()
+                Text(String(localized: "Largest first"))
+                    .font(.caption)
+                    .foregroundStyle(.tertiary)
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 8)
+            Divider()
+            if let tree = model.tree, model.typesRoot < tree.count {
+                let total = max(tree.alloc[model.typesRoot], 1)
+                ScrollView {
+                    LazyVStack(spacing: 1) {
+                        ForEach(model.typeRows) { row in
+                            TypeRowView(row: row, fraction: Double(row.alloc) / Double(total),
+                                        isSelected: model.selectedType == row.ext) {
+                                model.selectedType = model.selectedType == row.ext ? nil : row.ext
+                            }
+                        }
+                    }
+                    .padding(.vertical, 4)
+                    .padding(.horizontal, 6)
+                }
+                if model.selectedType != nil && model.mapStyle == .rings {
+                    Text("Highlighting shows in the treemap")
+                        .font(.caption)
+                        .foregroundStyle(.tertiary)
+                        .padding(8)
+                }
+            }
+        }
+        .frame(maxHeight: .infinity, alignment: .top)
+    }
+}
+
+private struct TypeRowView: View {
+    let row: TypeRow
+    let fraction: Double
+    let isSelected: Bool
+    let onSelect: () -> Void
+
+    var body: some View {
+        let kind = row.kind
+        Button(action: onSelect) {
+            HStack(spacing: 8) {
+                RoundedRectangle(cornerRadius: 3, style: .continuous)
+                    .fill(Color(nsColor: NSColor(deviceRed: kind.color.r, green: kind.color.g, blue: kind.color.b, alpha: 1)))
+                    .frame(width: 12, height: 12)
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(row.ext.isEmpty ? String(localized: "No extension") : "." + row.name)
+                        .font(.system(size: 12, weight: .medium))
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                    if !row.ext.isEmpty {
+                        Text(kind.name)
+                            .font(.system(size: 10))
+                            .foregroundStyle(isSelected ? Color.white.opacity(0.75) : Color.secondary)
+                    }
+                }
+                Spacer(minLength: 6)
+                VStack(alignment: .trailing, spacing: 1) {
+                    Text("\(Fmt.size(row.alloc)) · \(String(format: "%.1f%%", 100 * fraction))")
+                        .font(.system(size: 11))
+                        .monospacedDigit()
+                    Text("\(Fmt.num(row.files)) files")
+                        .font(.system(size: 10))
+                        .monospacedDigit()
+                        .foregroundStyle(isSelected ? Color.white.opacity(0.75) : Color.secondary)
+                }
+            }
+            .foregroundStyle(isSelected ? Color.white : Color.primary)
+            .padding(.horizontal, 8)
+            .padding(.vertical, 4)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(alignment: .leading) {
+                // Share of the folder, as a bar behind the row.
+                GeometryReader { g in
+                    RoundedRectangle(cornerRadius: 6, style: .continuous)
+                        .fill(isSelected ? Color.accentColor : Color.primary.opacity(0.07))
+                        .frame(width: isSelected ? g.size.width : g.size.width * min(1, fraction))
+                }
+            }
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .help(isSelected ? String(localized: "Click to stop highlighting") : String(localized: "Highlight these files in the treemap"))
     }
 }
 

@@ -1,0 +1,2 @@
+{"mode":"types","root":"root","entries":4820889,"files":4257926,"types":10678,"runs":21,"min_seconds":0.010817500,"median_seconds":0.011372791}
+{"mode":"types","root":"largest-folder","entries":4820889,"files":2154585,"types":8021,"runs":21,"min_seconds":0.006139500,"median_seconds":0.006452125}
