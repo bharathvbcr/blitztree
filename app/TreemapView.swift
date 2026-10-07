@@ -26,7 +26,7 @@ final class TreemapNSView: NSView {
     private var bitmap: CGImage?
     private var lastSize: CGSize = .zero
     private var lastRoot: Int = -1
-    private var lastTreeID: ObjectIdentifier?
+    private var lastTreeGeneration: UInt64?
     private var lastShowFree = false
     private var lastFreeBytes: UInt64 = 0
     private var lastHighlight: [UInt8]?
@@ -38,15 +38,19 @@ final class TreemapNSView: NSView {
 
     override var isFlipped: Bool { true }
 
+    /// The layout arrays were built from the tree on screen. Between a tree
+    /// swap and the relayout they hold the old tree's node numbers, which
+    /// must not be read against the new one.
+    private var layoutIsCurrent: Bool { model.map { $0.tree != nil && $0.treeGeneration == lastTreeGeneration } ?? false }
+
     override func layout() {
         super.layout()
         relayoutIfNeeded()
     }
 
     func relayoutIfNeeded() {
-        guard let model, let tree = model.tree else { return }
-        let treeID = ObjectIdentifier(tree)
-        if bounds.size != lastSize || model.viewRoot != lastRoot || treeID != lastTreeID
+        guard let model, model.tree != nil else { return }
+        if bounds.size != lastSize || model.viewRoot != lastRoot || model.treeGeneration != lastTreeGeneration
             || model.showFreeSpace != lastShowFree || displayedFreeBytes != lastFreeBytes
             || model.highlightedType != lastHighlight {
             relayout()
@@ -64,7 +68,7 @@ final class TreemapNSView: NSView {
         }
         lastSize = bounds.size
         lastRoot = model.viewRoot
-        lastTreeID = ObjectIdentifier(tree)
+        lastTreeGeneration = model.treeGeneration
         lastShowFree = model.showFreeSpace
         lastFreeBytes = displayedFreeBytes
         lastHighlight = model.highlightedType
@@ -231,6 +235,7 @@ final class TreemapNSView: NSView {
 
     /// The hovered file's rect and its parent directory's, if on screen.
     private func hoverRects(_ node: Int) -> (leaf: CGRect, parent: CGRect?)? {
+        guard layoutIsCurrent else { return nil }
         if let m = leafMemo, m.node == node { return m.rects }
         // Only files are in `leaves`.
         guard let tree = model?.tree, !tree.isDir(node) else { return nil }
@@ -246,6 +251,7 @@ final class TreemapNSView: NSView {
 
     /// A folder's rect, or for the selection any node's (see `Tree.drawn`).
     private func dirRect(_ node: Int) -> CGRect? {
+        guard layoutIsCurrent else { return nil }
         if let r = dirMemo[node] { return r }
         let r = Scan.dir(rects, node) ?? model?.tree.flatMap { tree in
             tree.isDir(node) ? tree.drawn(node) { Scan.dir(rects, $0) != nil }.flatMap { Scan.dir(rects, $0) }
@@ -284,7 +290,7 @@ final class TreemapNSView: NSView {
             }
         }
 
-        guard let model, let tree = model.tree else { return }
+        guard let model, let tree = model.tree, layoutIsCurrent else { return }
 
         // Label hover boundary FIRST, so strip text always renders above it.
         if let hl = shown.label, let i = Scan.label(labels, hl), case let lab = labels[i],
@@ -422,6 +428,7 @@ final class TreemapNSView: NSView {
 
     @discardableResult
     func hover(at p: CGPoint) -> [CGRect] {
+        relayoutIfNeeded() // a tree swapped in since the last layout
         let lab = Scan.hit(labelHits, p)
         hoveredLabel = lab
         let leaf = lab == nil ? hit(p) : nil
@@ -450,6 +457,7 @@ final class TreemapNSView: NSView {
 
     override func mouseDown(with event: NSEvent) {
         window?.makeFirstResponder(self)
+        relayoutIfNeeded()
         let p = convert(event.locationInWindow, from: nil)
         guard let model, let tree = model.tree else { return }
         if event.clickCount == 2 {
@@ -478,6 +486,7 @@ final class TreemapNSView: NSView {
     }
 
     override func rightMouseDown(with event: NSEvent) {
+        relayoutIfNeeded()
         let p = convert(event.locationInWindow, from: nil)
         // A folder's label strip picks the folder, as a left click does.
         guard let model, model.tree != nil, let node = Scan.hit(labelHits, p, slop: 2) ?? hit(p)?.node else { return }
@@ -738,7 +747,7 @@ final class NodeMenu: NSObject {
 
     @objc private func zoomIn(_ sender: NSMenuItem) {
         guard let pick = sender.representedObject as? Pick, let model = pick.model,
-              pick.nodes.count == 1 else { return }
+              pick.nodes.count == 1, pick.tree === model.tree else { return }
         model.viewRoot = pick.nodes[0]
     }
 
@@ -759,7 +768,7 @@ final class NodeMenu: NSObject {
 
     @objc private func ask(_ sender: NSMenuItem) {
         guard let pick = sender.representedObject as? Pick, let model = pick.model,
-              pick.nodes.count == 1 else { return }
+              pick.nodes.count == 1, pick.tree === model.tree else { return }
         model.ask(about: pick.nodes[0])
     }
 

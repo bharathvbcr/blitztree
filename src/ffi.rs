@@ -228,7 +228,9 @@ pub unsafe extern "C" fn bz_remove(h: *mut BzScan, nodes: *const u32, count: u32
     };
     let nodes = if count == 0 { &[][..] } else { unsafe { std::slice::from_raw_parts(nodes, count as usize) } };
     Box::into_raw(Box::new(BzScan {
-        progress: h.progress.clone(),
+        // Its own counters, all zero: no walk ran for it, and sharing the
+        // scan's would report the totals from before the removal.
+        progress: Arc::new(Progress::default()),
         done: Arc::new(AtomicBool::new(true)),
         result: Arc::new(std::sync::Mutex::new(None)),
         flat: Some(Box::new(with_cleanup(flat.tree.without(nodes), &cleanup::Anchors::from_env()))),
@@ -518,12 +520,17 @@ mod tests {
             result: Arc::new(std::sync::Mutex::new(None)),
             flat: Some(Box::new(with_cleanup(tree, &cleanup::Anchors::default()))),
         };
+        handle.progress.files.store(3, Ordering::Relaxed);
+        handle.progress.bytes.store(total, Ordering::Relaxed);
         let h = &mut handle as *mut BzScan;
         assert_eq!(unsafe { bz_cleanup_count(h) }, 1, "the folder is a Clean Up candidate");
 
         let gone = [junk];
         let new = unsafe { bz_remove(h, gone.as_ptr(), 1) };
         assert!(!new.is_null());
+        let (mut files, mut dirs, mut bytes, mut done) = (9, 9, 9, 0);
+        bz_progress(new, &mut files, &mut dirs, &mut bytes, &mut done);
+        assert_eq!((files, dirs, bytes, done), (0, 0, 0, 1), "its own counters, not the scan's pre-removal totals");
         assert_eq!(bz_take_tree(new), 3);
         assert_eq!(unsafe { *bz_alloc(new) }, 10, "ancestor sizes dropped");
         assert_eq!(unsafe { bz_cleanup_count(new) }, 0, "candidates are found again in the new tree");

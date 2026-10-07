@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+- After a Move to Trash, search results, Clean Up's list, the Largest Files list and the maps could briefly read the updated scan with the old item numbers. That showed the wrong items, and could crash. Clean Up's checkboxes could also end up on different folders than the ones picked. Everything tied to the old scan is now cleared the moment the map updates, and Clean Up remembers picks by path.
+- An item moved to the Trash while a rescan was running could reappear when that scan finished. It now stays off the map.
+- A folder no longer stays marked incomplete after its only unreadable part goes to the Trash.
+- Known limitation: a hard-linked or cloned file's bytes count once, under the first path scanned. If you trash that path while another link or clone remains, the map drops those bytes until the next scan rather than moving them to the copy that is left.
+
 ## 0.6.1 — 2026-10-07
 
 This release adds a Largest Files list, counts APFS clones once, puts every mounted volume in the Scan menu, and teaches Clean Up many more kinds of reclaimable space.

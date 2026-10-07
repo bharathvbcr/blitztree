@@ -39,7 +39,7 @@ final class SunburstNSView: NSView {
     private var bitmap: CGImage?
     private var lastSize: CGSize = .zero
     private var lastRoot: Int = -1
-    private var lastTreeID: ObjectIdentifier?
+    private var lastTreeGeneration: UInt64?
     private var lastShowFree = false
     private var lastFreeBytes: UInt64 = 0
     private var hoveredSegment: Int?
@@ -68,11 +68,11 @@ final class SunburstNSView: NSView {
     }
 
     func relayoutIfNeeded() {
-        guard let model, let tree = model.tree else { return }
-        if bounds.size != lastSize || model.viewRoot != lastRoot || ObjectIdentifier(tree) != lastTreeID
+        guard let model, model.tree != nil else { return }
+        if bounds.size != lastSize || model.viewRoot != lastRoot || model.treeGeneration != lastTreeGeneration
             || model.showFreeSpace != lastShowFree || displayedFreeBytes != lastFreeBytes {
             // Zooming crossfades; resizing and rescans just redraw.
-            let zoomed = lastTreeID == ObjectIdentifier(tree) && model.viewRoot != lastRoot
+            let zoomed = lastTreeGeneration == model.treeGeneration && model.viewRoot != lastRoot
             relayout()
             // Not during SwiftUI's update pass: this writes to the model.
             DispatchQueue.main.async { [weak self] in self?.refreshHover() }
@@ -96,7 +96,7 @@ final class SunburstNSView: NSView {
         }
         lastSize = bounds.size
         lastRoot = model.viewRoot
-        lastTreeID = ObjectIdentifier(tree)
+        lastTreeGeneration = model.treeGeneration
         lastShowFree = model.showFreeSpace
         lastFreeBytes = displayedFreeBytes
 
@@ -392,7 +392,9 @@ final class SunburstNSView: NSView {
             in: bounds, from: .zero, operation: .copy, fraction: 1,
             respectFlipped: true, hints: nil
         )
-        guard let model, let tree = model.tree, let ctx = NSGraphicsContext.current?.cgContext else { return }
+        // Segments from before a tree swap hold the old tree's node numbers.
+        guard let model, let tree = model.tree, model.treeGeneration == lastTreeGeneration,
+              let ctx = NSGraphicsContext.current?.cgContext else { return }
 
         if !highlights.isEmpty {
             if litSegments == nil {
@@ -578,6 +580,7 @@ final class SunburstNSView: NSView {
     }
 
     private func updateHover(at point: CGPoint) {
+        relayoutIfNeeded() // a tree swapped in since the last layout
         let found = hit(point)
         var seg: Int?
         var onCenter = false
@@ -613,6 +616,7 @@ final class SunburstNSView: NSView {
     /// file is selected.
     override func mouseDown(with event: NSEvent) {
         window?.makeFirstResponder(self)
+        relayoutIfNeeded()
         // The second click of a double-click would land on the zoomed chart
         // and zoom again.
         guard event.clickCount == 1, let model, let tree = model.tree else { return }
@@ -636,6 +640,7 @@ final class SunburstNSView: NSView {
     }
 
     override func rightMouseDown(with event: NSEvent) {
+        relayoutIfNeeded()
         guard let model, model.tree != nil,
               case let .segment(i) = hit(convert(event.locationInWindow, from: nil)),
               segments[i].node >= 0

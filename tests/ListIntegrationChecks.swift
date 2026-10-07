@@ -282,7 +282,106 @@ struct ListIntegrationChecks {
                      "one failure keeps its own wording")
         precondition(model.tree === tree, "no rescan when nothing moved")
 
+        // A removal renumbers the nodes. Nothing computed from the old tree
+        // (search hits, Clean Up's list, the map's layout) may be read against
+        // the new one: an old number names another item, or none at all.
+        let staleModel = ScanModel()
+        staleModel.tree = tree
+        staleModel.scanRoot = root
+        staleModel.searchQuery = ".bin"
+        for _ in 0..<400 where staleModel.isSearching || staleModel.searchResults.isEmpty {
+            try await Task.sleep(for: .milliseconds(5))
+        }
+        precondition(staleModel.searchResults.contains(node("folder2/one.bin")), "the search lists the fixture's .bin files")
+        let folder2Path = tree.path(node("folder2"))
+        staleModel.cleanup = [CleanupItem(node: node("folder2"), path: folder2Path, display: "folder2",
+                                          kind: "test", bytes: tree.alloc[node("folder2")])]
+        let mapFrame = NSRect(x: 0, y: 0, width: 400, height: 300)
+        let map = TreemapNSView(frame: mapFrame)
+        map.model = staleModel
+        // A point over the largest file, and one over something else.
+        let grid = stride(from: 5.0, to: 400.0, by: 10.0).flatMap { x in
+            stride(from: 5.0, to: 300.0, by: 10.0).map { CGPoint(x: x, y: $0) }
+        }
+        func hovered(_ view: TreemapNSView, _ m: ScanModel, at p: CGPoint) -> Int? { view.hover(at: p); return m.hovered }
+        guard let probe = grid.first(where: { hovered(map, staleModel, at: $0) == node("folder2/one.bin") }),
+              let elsewhere = grid.first(where: { hovered(map, staleModel, at: $0).map { $0 != node("folder2/one.bin") } ?? false })
+        else { fatalError("no map point over folder2/one.bin and another item") }
+
+        let generationBefore = staleModel.treeGeneration
+        staleModel.forget(paths: [root + "/Folder1"])
+        await staleModel.settled()
+        let renumbered = staleModel.tree!
+        precondition(renumbered !== tree && renumbered.node(at: root + "/Folder1") == nil, "Folder1 left the tree")
+        precondition(staleModel.treeGeneration != generationBefore, "views see the swap by generation, not by address")
+        precondition(staleModel.searchResults.allSatisfy { $0 < renumbered.count && renumbered.name($0).hasSuffix(".bin") },
+                     "search hits name .bin files of the new tree, never old numbers")
+        precondition(staleModel.cleanup.allSatisfy { $0.node < renumbered.count && renumbered.path($0.node) == $0.path },
+                     "Clean Up's items name their own folders in the new tree")
+        // Clean Up's picks are paths: a pick made before the renumbering
+        // still means that folder, never the item now holding its old number.
+        // Picked as node N; after the swap N names another movable folder.
+        let emile = root + "/Émile", other = root + "/other"
+        try fm.createDirectory(atPath: other, withIntermediateDirectories: true)
+        let pickedAs = node("Émile")
+        let relisted = [CleanupItem(node: pickedAs, path: other, display: "other", kind: "test", bytes: 1, root: root),
+                        CleanupItem(node: renumbered.count, path: emile, display: "Émile", kind: "test", bytes: 1, root: root)]
+        precondition(relisted.allSatisfy { $0.target != nil }, "both folders can be moved: \(relisted.compactMap(\.blocked))")
+        precondition(Cleanup.picked([emile], in: relisted).map(\.path) == [emile],
+                     "the pick is the folder chosen, not whatever holds its old number")
+        // The map hit-tests the tree on screen, not the layout it drew for
+        // the old one: the same answer as a map built for the new tree.
+        let freshModel = ScanModel()
+        freshModel.tree = renumbered
+        let freshMap = TreemapNSView(frame: mapFrame)
+        freshMap.model = freshModel
+        _ = hovered(map, staleModel, at: elsewhere)
+        let got = hovered(map, staleModel, at: probe)
+        let expected = hovered(freshMap, freshModel, at: probe)
+        func describe(_ n: Int?) -> String { n.map { $0 < renumbered.count ? renumbered.path($0) : "node \($0) of \(renumbered.count)" } ?? "nothing" }
+        precondition(got == expected, "hover after a removal: \(describe(got)) vs \(describe(expected))")
+        precondition(map.toolTip == expected.map { "\(renumbered.displayPath($0))\n\(Fmt.size(renumbered.alloc[$0]))" },
+                     "the tooltip describes the item under the pointer")
+        // The list's rows belong to the tree it was built from: a right-click
+        // before it rebuilds selects nothing in the new one.
+        model.tree = renumbered
+        let staleMenu = rightClick(row("folder2"))
+        precondition(staleMenu == nil && model.selection == nil, "no old row number becomes the selection: \(String(describing: model.selection))")
+
+        // A Move to Trash while a rescan is under way: the walk may already
+        // have listed the item, so the tree it delivers must still drop it.
+        let raceRoot = fixture.appendingPathComponent("race").path
+        try fm.createDirectory(atPath: raceRoot + "/gone", withIntermediateDirectories: true)
+        try Data(repeating: 1, count: 40_000).write(to: URL(fileURLWithPath: raceRoot + "/gone/f.bin"))
+        try Data(repeating: 2, count: 4_000).write(to: URL(fileURLWithPath: raceRoot + "/keep.bin"))
+        let raceModel = ScanModel()
+        raceModel.startScan(path: raceRoot)
+        // Block the main thread so the walk finishes before the first poll:
+        // the scan has seen "gone" but not handed its tree over yet.
+        usleep(500_000)
+        try moveToBin(URL(fileURLWithPath: raceRoot + "/gone"))
+        raceModel.forget(paths: [raceRoot + "/gone"])
+        let deadline = Date().addingTimeInterval(20)
+        // The model polls the scan from a run-loop timer whose tick queues a
+        // main-actor task: run the loop, then yield so that task runs.
+        while raceModel.scanning && Date() < deadline {
+            runLoop(for: 0.01)
+            try await Task.sleep(for: .milliseconds(1))
+        }
+        precondition(!raceModel.scanning, "the fixture scan finished")
+        await raceModel.settled()
+        precondition(raceModel.files == 2, "the walk listed the trashed file before it went (counted \(raceModel.files))")
+        let landed = raceModel.tree!
+        precondition(landed.node(at: raceRoot + "/gone") == nil && landed.node(at: raceRoot + "/keep.bin") != nil,
+                     "an item trashed during the scan stays gone when the scan lands")
+        precondition(landed.alloc[0] == landed.alloc[landed.node(at: raceRoot + "/keep.bin")!], "its bytes left the total")
+
         print("PASS: list sorting, Files column, multi-select menu and Trash")
+    }
+
+    /// Runs the main run loop (timers, main-queue work) for `seconds`.
+    private static func runLoop(for seconds: TimeInterval) {
+        RunLoop.main.run(until: Date().addingTimeInterval(seconds))
     }
 }
 

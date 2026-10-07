@@ -71,6 +71,9 @@ const BUF_SIZE: usize = 256 * 1024;
 // ---- Tree model ----
 
 pub const NO_PARENT: u32 = u32::MAX;
+/// `Tree::flags` bit: the node itself was not fully read (see `Tree::complete`).
+/// Kept so a removal can recompute subtree completeness without the walk.
+pub const SELF_INCOMPLETE: u8 = 2;
 
 /// The finished tree as flat arrays, the layout the Swift UI reads in place
 /// (see app/bz.h). Node 0 is the root; children come after their parent.
@@ -84,9 +87,12 @@ pub struct Tree {
     pub logical: Vec<u64>,
     /// Subtree file count for directories, 0 for files.
     pub n_files: Vec<u32>,
-    pub flags: Vec<u8>, // bit0 = is_dir
+    /// bit0 = is_dir; bit1 (`SELF_INCOMPLETE`, set by `finish`) = this node's
+    /// own listing or entry was incomplete, whatever its subtree holds.
+    pub flags: Vec<u8>,
     /// False when an entry was unreadable or a cloud/mount boundary was skipped
     /// anywhere in this subtree. The observed sizes then describe a partial walk.
+    /// The walk sets each node's own state; `finish` spreads it upward.
     pub complete: Vec<bool>,
     /// Node i's children are children[child_off[i]..child_off[i + 1]],
     /// largest allocated size first (treemap layout order).
@@ -1095,6 +1101,13 @@ fn runs(parents: &[u32]) -> Vec<(u32, u32, u32)> {
 
 /// Derive subtree totals and the sorted child lists from the walk's arrays.
 fn finish(t: &mut Tree) {
+    // `complete` still holds each node's own state: record it before it is
+    // folded into the subtree's.
+    for (f, &c) in t.flags.iter_mut().zip(&t.complete) {
+        if !c {
+            *f |= SELF_INCOMPLETE;
+        }
+    }
     let runs = runs(&t.parents);
     // Bottom-up: a directory's run starts after its parent's run, so reverse
     // run order finishes every child before its parent.
@@ -1154,72 +1167,75 @@ impl Tree {
     /// and still holds the data on disk. The scan does not keep which paths
     /// share a stream, so the bytes are not handed to a survivor.
     ///
-    /// `complete` and `errors` are kept as scanned: a skipped entry is still
-    /// skipped. Needs a finished tree (totals and child lists built).
+    /// `complete` is recomputed from each survivor's own state (the
+    /// `SELF_INCOMPLETE` flag), so a folder whose only partial subtree went
+    /// reads complete again. `errors` counts the scan's failed reads and is
+    /// kept as scanned. Needs a finished tree (totals and child lists built).
     pub fn without(&self, nodes: &[u32]) -> Tree {
         let n = self.len();
-        let mut gone = vec![false; n];
+        // NO_PARENT marks a removed node; the rest get their new number.
+        let mut renumber = vec![0u32; n];
         for &c in nodes {
             if c != 0 && (c as usize) < n {
-                gone[c as usize] = true;
+                renumber[c as usize] = NO_PARENT;
             }
-        }
-        // Parents come first, so one forward pass spreads "gone" down and
-        // finds the outermost chosen nodes.
-        let mut tops = Vec::new();
-        for i in 1..n {
-            let parent_gone = gone[self.parents[i] as usize];
-            if gone[i] {
-                if !parent_gone {
-                    tops.push(i);
-                }
-            } else if parent_gone {
-                gone[i] = true;
-            }
-        }
-
-        let (mut alloc, mut logical, mut n_files) = (self.alloc.clone(), self.logical.clone(), self.n_files.clone());
-        for &top in &tops {
-            let files = if self.is_dir(top) { self.n_files[top] } else { 1 };
-            let mut up = self.parents[top];
-            while up != NO_PARENT {
-                let a = up as usize;
-                alloc[a] = alloc[a].saturating_sub(self.alloc[top]);
-                logical[a] = logical[a].saturating_sub(self.logical[top]);
-                n_files[a] = n_files[a].saturating_sub(files);
-                up = self.parents[a];
-            }
-        }
-
-        fn kept<T: Copy>(v: &[T], gone: &[bool]) -> Vec<T> {
-            v.iter().zip(gone).filter(|(_, &g)| !g).map(|(&x, _)| x).collect()
-        }
-        let mut renumber = vec![NO_PARENT; n];
-        let mut next = 0u32;
-        for i in (0..n).filter(|&i| !gone[i]) {
-            renumber[i] = next;
-            next += 1;
         }
         let mut t = Tree {
-            parents: kept(&self.parents, &gone)
-                .into_iter()
-                .map(|p| if p == NO_PARENT { p } else { renumber[p as usize] })
-                .collect(),
-            alloc: kept(&alloc, &gone),
-            logical: kept(&logical, &gone),
-            n_files: kept(&n_files, &gone),
-            flags: kept(&self.flags, &gone),
-            complete: kept(&self.complete, &gone),
-            name_off: Vec::with_capacity(next as usize + 1),
+            parents: Vec::with_capacity(n),
+            alloc: Vec::with_capacity(n),
+            logical: Vec::with_capacity(n),
+            n_files: Vec::with_capacity(n),
+            flags: Vec::with_capacity(n),
+            complete: Vec::with_capacity(n),
+            name_off: Vec::with_capacity(n + 1),
+            name_blob: Vec::with_capacity(self.name_blob.len()),
             errors: self.errors,
             ..Default::default()
         };
         t.name_off.push(0);
-        for i in (0..n).filter(|&i| !gone[i]) {
+        // One forward pass copies the survivors. Parents come first, so a
+        // parent's fate is known when its child is reached: a removed parent
+        // takes the child with it, and a chosen node under a surviving parent
+        // is an outermost one, whose totals leave its ancestors.
+        let mut tops = Vec::new();
+        for i in 0..n {
+            let parent = self.parents[i];
+            let parent_gone = parent != NO_PARENT && renumber[parent as usize] == NO_PARENT;
+            if renumber[i] == NO_PARENT || parent_gone {
+                if !parent_gone {
+                    tops.push(i);
+                }
+                renumber[i] = NO_PARENT;
+                continue;
+            }
+            renumber[i] = t.parents.len() as u32;
+            t.parents.push(if parent == NO_PARENT { parent } else { renumber[parent as usize] });
+            t.alloc.push(self.alloc[i]);
+            t.logical.push(self.logical[i]);
+            t.n_files.push(self.n_files[i]);
+            t.flags.push(self.flags[i]);
+            t.complete.push(self.flags[i] & SELF_INCOMPLETE == 0);
             t.name_blob.extend_from_slice(self.name_bytes(i));
             t.name_off.push(t.name_blob.len() as u32);
         }
+        // Ancestors of a removed node all survive (it is outermost).
+        for &top in &tops {
+            let files = if self.is_dir(top) { self.n_files[top] } else { 1 };
+            let mut up = self.parents[top];
+            while up != NO_PARENT {
+                let a = renumber[up as usize] as usize;
+                t.alloc[a] = t.alloc[a].saturating_sub(self.alloc[top]);
+                t.logical[a] = t.logical[a].saturating_sub(self.logical[top]);
+                t.n_files[a] = t.n_files[a].saturating_sub(files);
+                up = self.parents[up as usize];
+            }
+        }
         let runs = runs(&t.parents);
+        // Bottom-up, as in `finish`: every child's run before its parent's.
+        for &(p, first, len) in runs.iter().rev() {
+            let c = t.complete[first as usize..(first + len) as usize].iter().all(|&c| c);
+            t.complete[p as usize] &= c;
+        }
         link(&mut t, &runs);
         t
     }
@@ -1612,6 +1628,11 @@ mod tests {
     /// totals in reverse index order, then each child list sorted on its own.
     fn reference_finish(mut t: Tree) -> Tree {
         let n = t.len();
+        for i in 0..n {
+            if !t.complete[i] {
+                t.flags[i] |= SELF_INCOMPLETE;
+            }
+        }
         t.n_files = vec![0; n];
         let mut lists = vec![Vec::new(); n];
         for i in (1..n).rev() {
@@ -2237,15 +2258,177 @@ mod tests {
         std::fs::write(root.join("x/y/f1"), vec![1u8; 100_000]).unwrap();
         std::fs::write(root.join("x/f2"), vec![2u8; 30_000]).unwrap();
         std::fs::write(root.join("keep"), vec![3u8; 9_000]).unwrap();
+        std::fs::create_dir_all(root.join("other/deeper")).unwrap();
+        std::fs::write(root.join("other/deeper/f3"), vec![4u8; 50_000]).unwrap();
+        std::fs::write(root.join("other/f4"), vec![5u8; 7_000]).unwrap();
         let t = scan(&root, &Progress::default());
         let r = t.without(&[node(&t, "x") as u32]);
         std::fs::remove_dir_all(root.join("x")).unwrap();
         let rescanned = scan(&root, &Progress::default());
         let _ = std::fs::remove_dir_all(&root);
         assert_consistent(&r);
-        assert_eq!(r.alloc, rescanned.alloc);
-        assert_eq!(r.n_files, rescanned.n_files);
-        assert_eq!(r.parents, rescanned.parents);
+        // Node numbers follow the walk's thread scheduling, so compare what
+        // each path holds, not the arrays.
+        assert_eq!(by_path(&r), by_path(&rescanned));
+    }
+
+    /// Every node's totals, completeness and kind, by path.
+    fn by_path(t: &Tree) -> std::collections::BTreeMap<PathBuf, (u64, u64, u32, bool, u8)> {
+        (0..t.len()).map(|i| (t.path(i), (t.alloc[i], t.logical[i], t.n_files[i], t.complete[i], t.flags[i]))).collect()
+    }
+
+    #[test]
+    fn removing_the_only_incomplete_subtree_makes_its_ancestors_complete() {
+        // root/{a/{partial/{x}, ok}, b/{unread}}: partial lost an entry and
+        // b could not list itself; unread is fine on its own.
+        let mut t = Tree::with_root("/root");
+        let a = t.push("a", 0, 0, 0, true);
+        let b = t.push("b", 0, 0, 0, true);
+        let partial = t.push("partial", a, 0, 0, true);
+        t.push("ok", a, 10, 4096, false);
+        t.push("unread", b, 5, 4096, false);
+        t.push("x", partial, 20, 4096, false);
+        t.complete[partial as usize] = false;
+        t.complete[b as usize] = false;
+        finish(&mut t);
+        assert_eq!(t.complete[..3], [false, false, false]);
+
+        let r = t.without(&[partial]);
+        assert_consistent(&r);
+        assert!(r.complete[find(&r, "a") as usize], "a's only incomplete subtree is gone");
+        assert!(!r.complete[find(&r, "b") as usize], "b itself was not fully read; that stays");
+        assert!(!r.complete[0], "the root still holds b");
+        assert!(r.complete[find(&r, "b/unread") as usize]);
+
+        let r = r.without(&[find(&r, "b")]);
+        assert!(r.complete.iter().all(|&c| c), "nothing incomplete is left");
+        assert!(r.flags.iter().all(|&f| f & SELF_INCOMPLETE == 0));
+        // A deleted folder's own incompleteness doesn't move to its parent.
+        let r = t.without(&[find(&t, "b/unread")]);
+        assert!(!r.complete[find(&r, "b") as usize] && r.complete[find(&r, "a/ok") as usize]);
+    }
+
+    /// The removal before it became one pass: three full copies, then each
+    /// column filtered on its own, `complete` copied as scanned. Kept as an
+    /// independent reference for the other columns and for the benchmark.
+    fn reference_without(s: &Tree, nodes: &[u32]) -> Tree {
+        let n = s.len();
+        let mut gone = vec![false; n];
+        for &c in nodes {
+            if c != 0 && (c as usize) < n {
+                gone[c as usize] = true;
+            }
+        }
+        let mut tops = Vec::new();
+        for i in 1..n {
+            let parent_gone = gone[s.parents[i] as usize];
+            if gone[i] {
+                if !parent_gone {
+                    tops.push(i);
+                }
+            } else if parent_gone {
+                gone[i] = true;
+            }
+        }
+        let (mut alloc, mut logical, mut n_files) = (s.alloc.clone(), s.logical.clone(), s.n_files.clone());
+        for &top in &tops {
+            let files = if s.is_dir(top) { s.n_files[top] } else { 1 };
+            let mut up = s.parents[top];
+            while up != NO_PARENT {
+                let a = up as usize;
+                alloc[a] = alloc[a].saturating_sub(s.alloc[top]);
+                logical[a] = logical[a].saturating_sub(s.logical[top]);
+                n_files[a] = n_files[a].saturating_sub(files);
+                up = s.parents[a];
+            }
+        }
+        fn kept<T: Copy>(v: &[T], gone: &[bool]) -> Vec<T> {
+            v.iter().zip(gone).filter(|(_, &g)| !g).map(|(&x, _)| x).collect()
+        }
+        let mut renumber = vec![NO_PARENT; n];
+        let mut next = 0u32;
+        for i in (0..n).filter(|&i| !gone[i]) {
+            renumber[i] = next;
+            next += 1;
+        }
+        let mut t = Tree {
+            parents: kept(&s.parents, &gone)
+                .into_iter()
+                .map(|p| if p == NO_PARENT { p } else { renumber[p as usize] })
+                .collect(),
+            alloc: kept(&alloc, &gone),
+            logical: kept(&logical, &gone),
+            n_files: kept(&n_files, &gone),
+            flags: kept(&s.flags, &gone),
+            complete: kept(&s.complete, &gone),
+            name_off: Vec::with_capacity(next as usize + 1),
+            errors: s.errors,
+            ..Default::default()
+        };
+        t.name_off.push(0);
+        for i in (0..n).filter(|&i| !gone[i]) {
+            t.name_blob.extend_from_slice(s.name_bytes(i));
+            t.name_off.push(t.name_blob.len() as u32);
+        }
+        let runs = runs(&t.parents);
+        link(&mut t, &runs);
+        t
+    }
+
+    /// Every 7th folder and every 13th file of the synthetic fixture, plus
+    /// nodes inside chosen folders, repeats, the root and strays.
+    fn removal_picks(t: &Tree) -> Vec<u32> {
+        let mut picks: Vec<u32> = (1..t.len() as u32)
+            .filter(|&i| if t.is_dir(i as usize) { i % 7 == 0 } else { i % 13 == 0 })
+            .collect();
+        picks.extend([0, 1, 1, u32::MAX, t.len() as u32]);
+        picks
+    }
+
+    #[test]
+    fn one_pass_removal_matches_the_reference_on_every_column() {
+        for (dirs, files) in [(0, 0), (3, 0), (1, 1024), (128, 4), (40, 40)] {
+            let mut t = fixture(dirs, files);
+            finish(&mut t);
+            for picks in [removal_picks(&t), vec![], t.kids(0).to_vec()] {
+                let (got, mut want) = (t.without(&picks), reference_without(&t, &picks));
+                assert_consistent(&got);
+                // The reference copies `complete` as scanned; recompute it
+                // independently: own state, then node by node in reverse
+                // index order (children come after their parent).
+                for i in 0..want.len() {
+                    want.complete[i] = want.flags[i] & SELF_INCOMPLETE == 0;
+                }
+                for i in (1..want.len()).rev() {
+                    let p = want.parents[i] as usize;
+                    want.complete[p] &= want.complete[i];
+                }
+                assert_eq!(got, want, "{dirs} dirs x {files} files, {} picks", picks.len());
+            }
+        }
+        let t = removal_fixture();
+        assert_eq!(t.without(&[find(&t, "a")]), reference_without(&t, &[find(&t, "a")]));
+    }
+
+    #[test]
+    #[ignore = "isolated performance measurement; run in release with --nocapture"]
+    fn removal_benchmark() {
+        let mut t = fixture(2048, 512);
+        finish(&mut t);
+        let picks = removal_picks(&t);
+        // Interleaved, alternating which goes first; report min-of-N.
+        let mut best = [u128::MAX; 2];
+        for round in 0..12 {
+            for variant in [round % 2, 1 - round % 2] {
+                let start = std::time::Instant::now();
+                let r = if variant == 0 { reference_without(&t, &picks) } else { t.without(&picks) };
+                let elapsed = start.elapsed().as_nanos();
+                std::hint::black_box(&r);
+                best[variant] = best[variant].min(elapsed);
+                println!("without,{round},{variant},{elapsed}");
+            }
+        }
+        println!("without min ns: reference {} one-pass {} ({} nodes)", best[0], best[1], t.len());
     }
 }
 

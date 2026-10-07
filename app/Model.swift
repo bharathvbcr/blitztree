@@ -276,7 +276,15 @@ final class ScanModel {
     var bytes: UInt64 = 0
     var scanning = false
     var elapsed: Double = 0
-    var tree: Tree?
+    /// The tree on screen. Node numbers belong to the tree that made them:
+    /// a rescan or a removal renumbers, so every replacement goes through
+    /// `treeChanged` before anything reads the new one.
+    var tree: Tree? {
+        didSet { if tree !== oldValue { treeChanged() } }
+    }
+    /// Bumped on every tree replacement. Views key node-indexed caches on it
+    /// (a freed tree's address can come back, so its identity cannot).
+    private(set) var treeGeneration: UInt64 = 0
     var scanRoot: String = {
         // `BlitzTree /some/path` scans that path on launch (also handy for QA).
         if CommandLine.arguments.count > 1 {
@@ -605,17 +613,7 @@ final class ScanModel {
         if let path { scanRoot = path }
         scanGeneration &+= 1
         tree = nil
-        cleanup = []
-        searchTask?.cancel()
-        searchResults = []
-        searchTotalMatches = 0
-        isSearching = false
-        typesTask?.cancel()
-        typeRows = []
         selectedType = nil
-        viewRoot = 0
-        selection = nil
-        hovered = nil
         // Capacity is unknown until the snapshot for this scan arrives.
         freeBytes = 0
         unscannedBytes = 0
@@ -697,9 +695,32 @@ final class ScanModel {
         if let tree {
             refreshForNewTree(tree)
             NSLog("BZ scan done: %llu nodes, %llu unreadable dirs", UInt64(tree.count), tree.errors)
+            // Items trashed while the walk ran may be in it.
+            if !deletedPaths.isEmpty { forget(paths: []) }
         }
         if let activity { ProcessInfo.processInfo.endActivity(activity) }
         activity = nil
+    }
+
+    /// The one place node-indexed state is dropped when the tree is replaced,
+    /// in the same main-actor turn as the swap: nothing computed from the old
+    /// tree is ever read against the new one. Runs for rescans, removals and
+    /// any other assignment. Callers that keep the zoom or selection (by
+    /// path) set them again afterwards.
+    private func treeChanged() {
+        treeGeneration &+= 1
+        searchTask?.cancel()
+        searchResults = []
+        searchTotalMatches = 0
+        isSearching = false
+        cleanup = []
+        typesTask?.cancel()
+        typeRows = []
+        typesRoot = 0
+        // Selection first: viewRoot's didSet reads it against the new tree.
+        selection = nil
+        hovered = nil
+        viewRoot = 0
     }
 
     /// Redoes what is keyed by node numbers (Clean Up candidates, search hits,
@@ -730,6 +751,8 @@ final class ScanModel {
     /// them; sizes above them drop by their allocated bytes. Calls overlap
     /// safely: paths that arrive while one is being built are applied to the
     /// result, one after another. Awaiting `settled()` waits for all of them.
+    /// Paths handed over while a rescan runs are applied to the tree it
+    /// delivers: the walk may have listed them before they went.
     ///
     /// The agent run still rescans when it finishes: besides the folders it
     /// trashes it runs tool commands (cache cleanups) whose affected paths
@@ -748,14 +771,26 @@ final class ScanModel {
 
     private func drainDeletedPaths() async {
         while !deletedPaths.isEmpty {
-            let paths = deletedPaths
+            guard let old = tree else {
+                // A scan under way may already have walked past them: keep
+                // them for the tree it delivers (see finishScan). With no
+                // scan there is no tree to take them out of.
+                if !scanning { deletedPaths = [] }
+                return
+            }
+            // Only what is still gone: a path kept for a later tree may hold
+            // something new by the time that tree lands.
+            let paths = deletedPaths.filter { !Self.exists($0) }
             deletedPaths = []
-            // A rescan under way or finished sees the disk as it is now.
-            guard let old = tree else { deletedPaths = []; return }
             let nodes = paths.compactMap { old.node(at: $0) }.filter { $0 > 0 }
             if nodes.isEmpty { continue }
             let next = await Task.detached(priority: .userInitiated) { old.removing(nodes) }.value
-            guard tree === old else { continue }
+            guard tree === old else {
+                // Replaced meanwhile (a rescan started or landed): apply them
+                // to the tree on screen next.
+                deletedPaths = paths + deletedPaths
+                continue
+            }
             guard let next else {
                 // No new tree: a stale map is worse than waiting for a scan.
                 startScan()
@@ -765,6 +800,12 @@ final class ScanModel {
         }
     }
 
+    /// Whether anything is at `path`, a dangling symlink included.
+    private nonisolated static func exists(_ path: String) -> Bool {
+        var info = stat()
+        return lstat(path, &info) == 0
+    }
+
     /// Swaps in the tree without the deleted items and keeps what the user
     /// was looking at: the zoomed folder and the selection by path (nearest
     /// surviving folder when theirs went), nothing hovered.
@@ -772,7 +813,6 @@ final class ScanModel {
         let rootPath = old.ancestry(viewRoot).reversed().lazy.compactMap { next.node(at: old.path($0)) }.first
         let kept = selection.flatMap { next.node(at: old.path($0)) }
         tree = next
-        hovered = nil
         selection = kept
         viewRoot = rootPath ?? 0
         refreshForNewTree(next)

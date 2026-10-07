@@ -916,8 +916,10 @@ struct OutlinePanel: NSViewRepresentable {
             if row < 0 && event.type != .rightMouseDown {
                 row = selectedRow
             }
-            guard let coordinator, let model = coordinator.model, model.tree != nil,
-                  row >= 0, let it = item(atRow: row) as? OutlinePanel.Item else {
+            // Rows from a tree since replaced (a removal renumbers) name
+            // other items in the new one; the list rebuilds before acting.
+            guard let coordinator, let model = coordinator.model,
+                  row >= 0, let it = item(atRow: row) as? OutlinePanel.Item, it.tree === model.tree else {
                 return nil
             }
             // As in Finder: a right-click inside the selection acts on all of

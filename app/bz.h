@@ -15,7 +15,7 @@ const uint32_t *bz_parents(BzScan *h);
 const uint64_t *bz_alloc(BzScan *h);
 const uint64_t *bz_logical(BzScan *h);
 const uint32_t *bz_nfiles(BzScan *h);
-const uint8_t *bz_flags(BzScan *h); // bit0 = is_dir
+const uint8_t *bz_flags(BzScan *h); // bit0 = is_dir; bit1 = own listing incomplete (engine-internal)
 const uint32_t *bz_child_off(BzScan *h); // length N+1
 const uint32_t *bz_children(BzScan *h);
 const uint32_t *bz_name_off(BzScan *h); // length N+1
@@ -47,7 +47,13 @@ void bz_free(BzScan *h);
 // and everything under them (ancestor sizes and file counts drop to match;
 // the root, repeats and out-of-range nodes are ignored). `h` is left
 // untouched and must still be freed: a tree is never edited once handed over.
-// NULL without a tree.
+// NULL without a tree. Node numbers are reassigned: an index into `h` means
+// nothing in the result. bz_progress on the result reports done with every
+// counter 0 (no walk ran); read totals from the tree (alloc[0], nfiles[0]).
+// Hard links and whole clones count once, on the first path scanned. Removing
+// that path takes their bytes off, and they are not moved to a surviving
+// link or clone (the tree does not record which paths share data), so the
+// result under-reports until the next scan.
 BzScan *bz_remove(BzScan *h, const uint32_t *nodes, uint32_t count);
 
 // Largest files anywhere in the scan (directories excluded), selected in the

@@ -11,10 +11,15 @@ enum ListMode: Hashable {
 /// same selection as the CLI's `largest_files`); this only shows them.
 struct LargestFilesList: View {
     let model: ScanModel
-    @State private var nodes: [Int] = []
-    @State private var loadedFor: ObjectIdentifier?
+    @State private var loaded: [Int] = []
+    /// The tree generation `loaded` was picked from (see ScanModel.treeGeneration).
+    @State private var loadedFor: UInt64?
 
     private nonisolated static let limit = 1000
+
+    /// Only the list made for the tree on screen: after a rescan or a
+    /// removal the old node numbers name other files until the reload lands.
+    private var nodes: [Int] { loadedFor == model.treeGeneration ? loaded : [] }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -34,7 +39,7 @@ struct LargestFilesList: View {
                 if nodes.isEmpty {
                     VStack(spacing: 8) {
                         Spacer()
-                        if loadedFor == ObjectIdentifier(tree) {
+                        if loadedFor == model.treeGeneration {
                             Image(systemName: "doc")
                                 .font(.system(size: 24))
                                 .foregroundStyle(.tertiary)
@@ -68,18 +73,19 @@ struct LargestFilesList: View {
             }
         }
         .background(Color(nsColor: .windowBackgroundColor))
-        .task(id: model.tree.map(ObjectIdentifier.init)) {
+        .task(id: model.treeGeneration) {
+            let generation = model.treeGeneration
             guard let tree = model.tree else {
-                nodes = []
+                loaded = []
                 loadedFor = nil
                 return
             }
             let found = await Task.detached(priority: .userInitiated) {
                 tree.largestFiles(limit: Self.limit)
             }.value
-            guard !Task.isCancelled, model.tree === tree else { return }
-            nodes = found
-            loadedFor = ObjectIdentifier(tree)
+            guard !Task.isCancelled, model.treeGeneration == generation else { return }
+            loaded = found
+            loadedFor = generation
         }
     }
 }

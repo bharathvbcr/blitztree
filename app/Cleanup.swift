@@ -65,6 +65,13 @@ nonisolated enum Cleanup {
                                verify: tree.cleanupVerify(index))
         }
     }
+
+    /// The listed items the user picked, by path, that can still be moved.
+    /// A pick whose folder left the list (trashed, or gone from a newer
+    /// scan) counts for nothing.
+    static func picked(_ paths: Set<String>, in items: [CleanupItem]) -> [CleanupItem] {
+        items.filter { paths.contains($0.path) && $0.target != nil }
+    }
 }
 
 /// A manual cleanup batch keeps file coordination off the main actor and
@@ -114,12 +121,14 @@ final class CleanupTrashBatch {
 /// agent cleanup is on screen, the whole panel is that run.
 struct CleanupPanel: View {
     let model: ScanModel
-    @State private var picked: Set<Int> = []
+    /// Picked folders by path: node numbers change when the map drops a
+    /// trashed item, and an old number would name a different folder.
+    @State private var picked: Set<String> = []
     @State private var confirming = false
 
     private var agent: InstalledAgent? { model.preferredAgent }
 
-    private var pickedItems: [CleanupItem] { model.cleanup.filter { picked.contains($0.id) && $0.target != nil } }
+    private var pickedItems: [CleanupItem] { Cleanup.picked(picked, in: model.cleanup) }
     private var pickedBytes: UInt64 { pickedItems.reduce(0) { $0 + $1.bytes } }
     private var totalBytes: UInt64 { model.cleanup.reduce(0) { $0 + $1.bytes } }
 
@@ -136,7 +145,7 @@ struct CleanupPanel: View {
                     .transition(.opacity)
             }
         }
-        .confirmationDialog(picked.count == 1 ? "Move 1 folder to the Trash?" : "Move \(String(picked.count)) folders to the Trash?", isPresented: $confirming) {
+        .confirmationDialog(pickedItems.count == 1 ? "Move 1 folder to the Trash?" : "Move \(String(pickedItems.count)) folders to the Trash?", isPresented: $confirming) {
             Button("Move to Trash (\(Fmt.size(pickedBytes)))", role: .destructive) { trashPicked() }
             Button("Cancel", role: .cancel) {}
         } message: {
@@ -164,8 +173,8 @@ struct CleanupPanel: View {
             List(model.cleanup) { item in
                 HStack(alignment: .top, spacing: 8) {
                     Toggle("", isOn: Binding(
-                        get: { picked.contains(item.id) },
-                        set: { on in if on { picked.insert(item.id) } else { picked.remove(item.id) } }
+                        get: { picked.contains(item.path) },
+                        set: { on in if on { picked.insert(item.path) } else { picked.remove(item.path) } }
                     ))
                     .labelsHidden()
                     .toggleStyle(.checkbox)
@@ -217,13 +226,13 @@ struct CleanupPanel: View {
                 Button {
                     confirming = true
                 } label: {
-                    Text(picked.isEmpty ? "Select folders to clean up"
-                         : "Move \(String(picked.count)) to Trash · \(Fmt.size(pickedBytes))")
+                    Text(pickedItems.isEmpty ? "Select folders to clean up"
+                         : "Move \(String(pickedItems.count)) to Trash · \(Fmt.size(pickedBytes))")
                         .frame(maxWidth: .infinity)
                 }
                 .buttonStyle(.bordered)
                 .controlSize(.large)
-                .disabled(picked.isEmpty || model.scanning || model.cleanupTrash.running)
+                .disabled(pickedItems.isEmpty || model.scanning || model.cleanupTrash.running)
             }
             .padding(12)
         }
