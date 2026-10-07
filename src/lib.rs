@@ -7,6 +7,7 @@
 pub mod cleanup;
 pub mod ffi;
 pub mod searchfs;
+pub mod types;
 
 use std::cell::RefCell;
 use std::collections::HashMap;

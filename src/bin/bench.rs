@@ -9,6 +9,8 @@
 //!   BZ_INCOMPLETE=<file> (bulk) writes the sorted paths of incomplete subtrees.
 //!          search      - scan path, then benchmark interactive query matching
 //!          search-synth- benchmark matching over synthetic 3.6M-entry disk scan
+//!          types       - scan path, then time the file-type breakdown of the root
+//!                        and of its largest folder (BZ_RUNS, default 11)
 //!          naive       - serial read_dir + per-file lstat (Disk Inventory X style)
 //!          naive-par   - parallel read_dir + per-file lstat
 //!   BZ_TOP=1 also prints each top-level entry's allocated bytes (for diffing).
@@ -168,6 +170,46 @@ fn main() {
                 min_dt.as_secs_f64() * 1000.0,
                 eps
             );
+            return;
+        }
+        "types" => {
+            // The file-type breakdown for the scan root and for its largest
+            // folder (a zoomed-in view), with the totals checked against the tree.
+            let progress = Progress::default();
+            let tree = scan(&path, &progress);
+            let runs: usize = std::env::var("BZ_RUNS").ok().and_then(|s| s.parse().ok()).unwrap_or(11);
+            let largest_dir = tree.kids(0).iter().map(|&k| k as usize).find(|&k| tree.is_dir(k));
+            for (label, root) in [("root", Some(0)), ("largest-folder", largest_dir)] {
+                let Some(root) = root else { continue };
+                let mut times = Vec::with_capacity(runs);
+                let mut rows = 0;
+                for _ in 0..runs {
+                    let t0 = Instant::now();
+                    let b = tree.types(root);
+                    times.push(t0.elapsed());
+                    assert_eq!(b.alloc.iter().sum::<u64>(), tree.alloc[root], "rows add up to the folder");
+                    assert_eq!(b.files.iter().sum::<u64>(), tree.n_files[root] as u64, "every file counted once");
+                    rows = b.len();
+                }
+                times.sort();
+                let (min, median) = (times[0], times[runs / 2]);
+                let files = tree.n_files[root];
+                if std::env::var_os("BZ_JSON").is_some() {
+                    println!(
+                        "{{\"mode\":\"types\",\"root\":\"{label}\",\"entries\":{},\"files\":{files},\"types\":{rows},\"runs\":{runs},\"min_seconds\":{:.9},\"median_seconds\":{:.9}}}",
+                        tree.len(),
+                        min.as_secs_f64(),
+                        median.as_secs_f64()
+                    );
+                } else {
+                    println!(
+                        "types {label:>14}: {files:>9} files -> {rows:>6} extensions  min {:.2} ms  median {:.2} ms  ({runs} runs, {:.0} files/s)",
+                        min.as_secs_f64() * 1e3,
+                        median.as_secs_f64() * 1e3,
+                        files as f64 / min.as_secs_f64()
+                    );
+                }
+            }
             return;
         }
         "search-synth" => {

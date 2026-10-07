@@ -93,3 +93,24 @@ Interactive matching runs in the Rust engine over the flat name arrays, in paral
 
 Every query resolves in under 12 ms, well within a 16.6 ms 60 Hz frame budget, ensuring typing remains responsive during whole-disk scans.
 
+## File-type breakdown (WizTree parity)
+
+The File Types list totals allocated bytes and file counts per extension for
+the folder on screen, in the Rust engine, in one pass over that folder's
+files (folders with 32k+ files fan out across Rayon threads). It reruns on
+every zoom. Measured with `BZ_RUNS=21 cargo run --release --bin bench --
+types <path>` on real scans, M5 Pro (18 cores), macOS 27.0.1, warm cache,
+load average 12–17 from other work. Each run asserts that the rows add up to
+the folder's bytes and file count. Raw output:
+[benchmarks/results/2026-10-06](benchmarks/results/2026-10-06).
+
+| folder | files | extensions | min | median of 21 |
+|---|---|---|---|---|
+| home folder (root) | 4,257,926 | 10,678 | **10.8 ms** | 11.4 ms |
+| home folder's largest subfolder | 2,154,585 | 8,021 | **6.1 ms** | 6.5 ms |
+| /Applications (root) | 502,516 | 591 | **0.8 ms** | 1.0 ms |
+| /Applications' largest subfolder | 136,968 | 244 | **0.4 ms** | 0.5 ms |
+
+These are engine times only; the app copies the rows and redraws the list
+after them.
+

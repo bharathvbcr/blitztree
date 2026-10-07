@@ -7,6 +7,7 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
+use crate::types::Breakdown;
 use crate::{cleanup, scan, Progress, Tree};
 
 pub struct BzScan {
@@ -233,6 +234,51 @@ pub extern "C" fn bz_search_free(s: *mut BzSearch) {
     }
 }
 
+/// Bytes and file counts per extension under `root`. Null without a tree or
+/// for a node outside it.
+#[no_mangle]
+pub extern "C" fn bz_types(h: *mut BzScan, root: u32) -> *mut Breakdown {
+    if h.is_null() {
+        return std::ptr::null_mut();
+    }
+    let h = unsafe { &*h };
+    match h.flat.as_ref() {
+        Some(flat) if (root as usize) < flat.tree.len() => Box::into_raw(Box::new(flat.tree.types(root as usize))),
+        _ => std::ptr::null_mut(),
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn bz_types_count(t: *mut Breakdown) -> u32 {
+    if t.is_null() {
+        return 0;
+    }
+    unsafe { &*t }.len() as u32
+}
+
+macro_rules! types_getter {
+    ($name:ident, $field:ident, $ty:ty) => {
+        #[no_mangle]
+        pub extern "C" fn $name(t: *mut Breakdown) -> *const $ty {
+            if t.is_null() {
+                return std::ptr::null();
+            }
+            unsafe { &*t }.$field.as_ptr()
+        }
+    };
+}
+
+types_getter!(bz_types_ext_off, ext_off, u32);
+types_getter!(bz_types_ext_blob, ext_blob, u8);
+types_getter!(bz_types_alloc, alloc, u64);
+types_getter!(bz_types_files, files, u64);
+
+#[no_mangle]
+pub extern "C" fn bz_types_free(t: *mut Breakdown) {
+    if !t.is_null() {
+        drop(unsafe { Box::from_raw(t) });
+    }
+}
 
 
 #[cfg(test)]
@@ -293,6 +339,49 @@ mod tests {
         // Largest first: photo_big (node 2, 900), photo_mid (node 3, 500)
         assert_eq!(nodes, [2, 3]);
         bz_search_free(s);
+    }
+
+    #[test]
+    fn bridge_returns_the_type_breakdown_of_a_folder() {
+        let mut tree = Tree::with_root("/root");
+        let pics = tree.push("pics", 0, 0, 0, true);
+        tree.push("notes", 0, 3, 3, false);
+        tree.push("a.JPG", pics, 900, 900, false);
+        tree.push("b.png", pics, 100, 100, false);
+        crate::finish(&mut tree);
+
+        let mut handle = BzScan {
+            progress: Arc::new(Progress::default()),
+            done: Arc::new(AtomicBool::new(true)),
+            result: Arc::new(std::sync::Mutex::new(None)),
+            flat: Some(Box::new(with_cleanup(tree))),
+        };
+        let h = &mut handle as *mut BzScan;
+        let t = bz_types(h, 0);
+        assert!(!t.is_null());
+        let n = bz_types_count(t) as usize;
+        assert_eq!(n, 3);
+        let (off, alloc, files) = unsafe {
+            (
+                std::slice::from_raw_parts(bz_types_ext_off(t), n + 1),
+                std::slice::from_raw_parts(bz_types_alloc(t), n),
+                std::slice::from_raw_parts(bz_types_files(t), n),
+            )
+        };
+        let blob = unsafe { std::slice::from_raw_parts(bz_types_ext_blob(t), off[n] as usize) };
+        let exts: Vec<&[u8]> = (0..n).map(|i| &blob[off[i] as usize..off[i + 1] as usize]).collect();
+        assert_eq!(exts, [&b"jpg"[..], b"png", b""]);
+        assert_eq!(alloc, [900, 100, 3]);
+        assert_eq!(files, [1, 1, 1]);
+        bz_types_free(t);
+
+        // Scoped to "pics": the root's own file is not in it.
+        let t = bz_types(h, pics);
+        assert_eq!(bz_types_count(t), 2);
+        bz_types_free(t);
+        assert!(bz_types(h, 5).is_null(), "a node past the end");
+        assert!(bz_types(std::ptr::null_mut(), 0).is_null());
+        assert_eq!(bz_types_count(std::ptr::null_mut()), 0);
     }
 }
 
