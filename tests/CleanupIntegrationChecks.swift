@@ -62,8 +62,8 @@ struct CleanupIntegrationChecks {
         let partial = plan(spec([secret, cache, cache + "/data", cache]))
         precondition(partial.paths == [cache] && partial.note != nil)
         precondition(partial.bytes == valid.bytes, "nested and duplicate targets counted once")
-        precondition(plan(spec([], action: "command", command: "docker system prune -f")).blocked != nil)
-        let original = plan(spec([cache], action: "command", command: "docker system prune -f"))
+        precondition(plan(spec([], action: "command", command: "docker builder prune -f")).blocked != nil)
+        let original = plan(spec([cache], action: "command", command: "docker builder prune -f"))
         precondition(original.blocked == nil && !original.selected && original.note != nil)
         for state in [PlanItem.Status.waiting, .running] {
             original.status = state
@@ -95,7 +95,7 @@ struct CleanupIntegrationChecks {
         precondition(!PlanItem.reconcile([newValid], previous: [original], tree: tree)[0].selected)
         let invalidCommand = await AgentRun.runCommand("docker system prune -f --volumes", path: "/usr/bin")
         precondition(invalidCommand != nil, "execution must independently reject changed arguments")
-        let relativeTool = await AgentRun.runCommand("docker system prune -f", path: ".:relative:")
+        let relativeTool = await AgentRun.runCommand("docker builder prune -f", path: ".:relative:")
         precondition(relativeTool != nil, "relative executable lookup must be refused")
 
         // "Is this safe to clean?": a focused run keeps every card inside the
@@ -109,7 +109,7 @@ struct CleanupIntegrationChecks {
         precondition(scoped(spec([cache + "/data"]), uvNode).blocked == nil)
         for (value, scope) in [(spec([other]), uvNode), (spec([cache, other]), uvNode),
                                (spec([cache], action: "command", command: "uv cache clean"), dataNode),
-                               (spec([other], action: "command", command: "docker system prune -f"), uvNode)] {
+                               (spec([other], action: "command", command: "docker builder prune -f"), uvNode)] {
             let item = scoped(value, scope)
             precondition(item.blocked == "Outside the item you asked about" && !item.selected
                          && item.cleanupTargets.isEmpty, "a path or command past the item blocks the card")

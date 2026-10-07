@@ -198,7 +198,59 @@ enum CleanupSafetyChecks {
             print("SKIP cloud-only flag (filesystem denied chflags)")
         }
 
+        try worktreeGuard(home: home, outside: outside)
+
         print("PASS CleanupSafetyChecks")
+    }
+
+    /// A linked worktree is allowed only while it verifies as clean and
+    /// unused, at capture and again at validate; every other `.git` stays blocked.
+    private static func worktreeGuard(home: URL, outside: URL) throws {
+        let fixture = GitFixture(base: home.deletingLastPathComponent())
+        let repo = fixture.repository(home.appendingPathComponent("work/gitrepo").path)
+        func capture(_ path: String) throws -> CleanupTarget {
+            try CleanupPathSafety.capture(path: path, root: home.path, home: home.path)
+        }
+
+        let clean = fixture.worktree(of: repo, at: home.appendingPathComponent("work/wt-clean").path)
+        fixture.backdate(clean)
+        expectAllowed("clean, unused linked worktree") { _ = try capture(clean) }
+
+        let dirtied = fixture.worktree(of: repo, at: home.appendingPathComponent("work/wt-dirtied").path)
+        fixture.backdate(dirtied)
+        let planned = try capture(dirtied)
+        fixture.write(dirtied + "/new-file.txt", "not committed\n")
+        expectGitRejection("worktree dirtied between planning and action", .gitWorktree(.changes(dirtied))) { try planned.validate() }
+
+        let fresh = fixture.worktree(of: repo, at: home.appendingPathComponent("work/wt-fresh").path)
+        expectGitRejection("worktree used in the last 2 days", .gitWorktree(.recentlyUsed(fresh))) { _ = try capture(fresh) }
+
+        let saved = GitWorktree.lookup
+        GitWorktree.lookup = GitLookup(searchPath: "", useDeveloperDir: false)
+        expectGitRejection("git missing blocks a worktree", .gitWorktree(.gitMissing(clean))) { _ = try capture(clean) }
+        GitWorktree.lookup = saved
+
+        // A `.git` directory, a `.git` symlink, an unverifiable `.git` file,
+        // and a path through a `.git` component all stay blocked.
+        expectGitRejection("main repository with a .git directory", .gitPath(repo + "/.git")) { _ = try capture(repo) }
+        let linked = home.appendingPathComponent("work/git-symlink").path
+        try fm.createDirectory(atPath: linked, withIntermediateDirectories: true)
+        try fm.createSymbolicLink(atPath: linked + "/.git", withDestinationPath: clean + "/.git")
+        expectGitRejection(".git symlink", .gitPath(linked + "/.git")) { _ = try capture(linked) }
+        let copied = home.appendingPathComponent("work/git-file-copy").path
+        try fm.createDirectory(atPath: copied, withIntermediateDirectories: true)
+        try fm.copyItem(atPath: clean + "/.git", toPath: copied + "/.git")
+        expectGitRejection(".git file whose admin entry names another worktree", .gitPath(copied + "/.git")) { _ = try capture(copied) }
+        let stray = home.appendingPathComponent("work/git-file-stray").path
+        try fm.createDirectory(atPath: stray, withIntermediateDirectories: true)
+        fixture.write(stray + "/.git", "gitdir: \(outside.path)\n")
+        expectGitRejection(".git file pointing outside any repository", .gitPath(stray + "/.git")) { _ = try capture(stray) }
+        let admin = fixture.admin(of: clean)
+        try fm.createDirectory(atPath: admin + "/sub", withIntermediateDirectories: true)
+        expectRejected("inside a worktree admin entry") { _ = try capture(admin + "/sub") }
+
+        // Each case above fails for its own reason, not because git is unusable.
+        expectAllowed("clean worktree still allowed after the blocked cases") { _ = try capture(clean) }
     }
 
     private static func expectAllowed(_ label: String, _ operation: () throws -> Void) {
@@ -216,6 +268,18 @@ enum CleanupSafetyChecks {
         } catch {
             // Every rejection is useful here; the production caller presents
             // the localized reason and the policy tests focus on the boundary.
+        }
+    }
+
+    private static func expectGitRejection(_ label: String, _ expected: CleanupPathError,
+                                           _ operation: () throws -> Void) {
+        do {
+            try operation()
+            fatalError("\(label): unexpectedly accepted")
+        } catch let error as CleanupPathError {
+            precondition(error == expected, "\(label): rejected for the wrong reason: \(error)")
+        } catch {
+            fatalError("\(label): unexpected error \(error)")
         }
     }
 

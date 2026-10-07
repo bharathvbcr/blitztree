@@ -67,51 +67,117 @@ files are inventory, without any judgment about whether they can be removed.
 `quick-wins` returns:
 
 - `candidates`: path, kind, allocated/logical bytes, file count, category,
-  reason, `complete` and `requires_review=true`.
+  reason, group, section, verify, contained_in, `complete` and
+  `requires_review=true`.
 - `candidate_count`, `truncated`, `candidate_allocated_bytes` (all candidates)
-  and `displayed_allocated_bytes` (only returned candidates).
+  and `displayed_allocated_bytes` (only returned candidates). Both count each
+  byte once: a candidate inside another candidate is not added again.
 - `reclaimable_bytes=null`: the API does not predict recoverable space.
 - `inventory`: the same factual inventory as `scan`, computed from the same walk.
 
 For candidates, `kind` is `directory`; `category` identifies the matched rule
-(for example `node_modules`), and `reason` is its shared panel label.
+(for example `node_modules`), and `reason` is its shared English panel label.
+These fields were added within schema version 1 (additive):
+
+- `group`: `safe` (rebuilt or re-downloaded) or `review` (recreatable at a
+  cost, or history the user may want).
+- `section`: `build`, `packages`, `apps`, `devtools`, `models`, `agents` or
+  `worktrees`.
+- `verify`: `null`, or the check the panel performs before acting that this
+  report did **not** perform: `cachedir_tag` (the tag's signature line),
+  `git_worktree` (a clean, unlocked linked worktree, unused for 2 days, no
+  process inside) or `recent_activity` (nothing modified in the last 2 days).
+  The CLI matches markers by name and never reads file contents, so treat a
+  non-null `verify` as an open question, not a result.
+- `contained_in`: `null`, or the path of the enclosing candidate. Only
+  `git_worktree` candidates contain others (their own build output is listed
+  separately); never add a contained candidate to its container's size.
 
 ## Shared Clean Up rules
 
-The GUI's Rust bridge and the CLI both call `cleanup::find` in `src/cleanup.rs`. The existing
-panel's recognition, threshold, traversal and labels are defined once in Rust.
-The C bridge exposes the selected node indices and labels; Swift only formats
-their display paths. JSON is another view of those same candidates. This does
-not invoke or change the separate AI cleanup workflow.
+The GUI's Rust bridge and the CLI both call `cleanup::find` in `src/cleanup.rs`,
+the single owner of recognition, threshold, traversal, labels, groups and
+sections. The C bridge exposes the selected node indices, labels and rule
+metadata; Swift formats display paths and runs the verifiers. JSON is another
+view of those same candidates. This does not invoke or change the separate AI
+cleanup workflow.
 
-The existing rules recognize `node_modules`, `.venv`, `venv` with `pyvenv.cfg`,
-Rust `target` next to `Cargo.toml`, `.next` next to `package.json`, Xcode
-`DerivedData`, device support folders, `Caches` under `Library` or
-`CoreSimulator`, `.cache`, `.npm`, `.gradle`, and `.bun/install/cache`.
-Marker checks use entry names, as the panel already does. No additional rules
-or activity filters are introduced by the CLI.
+Rules (`~` is `$HOME`; marker = an entry with that name beside the folder):
+
+- Project output, gated on a marker: `node_modules` + `package.json` (a
+  `node_modules` without one, such as a global npm prefix, is skipped);
+  `.venv`; `venv` containing `pyvenv.cfg`; `target` + `Cargo.toml`; `.next` +
+  `package.json`; `.build` + `Package.swift`; `build` + `build.gradle[.kts]` or
+  `settings.gradle[.kts]`; `.dart_tool` + `pubspec.yaml`; `.turbo`,
+  `.parcel-cache`, `.nuxt`, `.svelte-kit`, `.expo`, `.angular` + `package.json`;
+  `Pods` + `Podfile`; `.tox`, `.nox`; `.zig-cache`, `zig-cache`, `zig-out` +
+  `build.zig`; `_build`, `deps` + `mix.exs`; `.stack-work`; `dist-newstyle`.
+- Caches: each child of `~/.cache` (except `huggingface`; `torch` is a model);
+  a `.cache` elsewhere, whole; `.npm`; `.bun/install/cache`; each child of
+  `~/Library/Caches` except `com.apple.*`; `Library/Caches` deeper inside the
+  home (app containers) and `CoreSimulator/Caches`, whole; Electron caches
+  (`Cache`, `Code Cache`, `GPUCache`, `CachedData`, `CachedExtensionVSIXs`,
+  `DawnGraphiteCache`, `DawnWebGPUCache`, `ShaderCache`) directly inside
+  `~/Library/Application Support/<App>`; a folder containing a `CACHEDIR.TAG`
+  file (checked after every named rule).
+- Package managers: `~/.cargo/registry`, `~/.cargo/git`; in a Gradle home (a
+  `.gradle` holding `gradle.properties`, `init.d` or `init.gradle[.kts]`, or
+  `~/.gradle`): `caches`, `wrapper`, `daemon`, `jdks`, `workers`,
+  `kotlin-profile`, `build-scan-data`; another `.gradle`, whole;
+  `~/.m2/repository` (review).
+- Developer tools: Xcode `DerivedData`, `Archives` (review),
+  `UserData/Previews`, `Developer/XCTestDevices`, device support folders;
+  `~/.rustup/toolchains/<toolchain>` (review), `~/.rustup/downloads|tmp`.
+- Models (review): `~/.cache/huggingface/hub/models--*|datasets--*|spaces--*`,
+  `~/.cache/torch`, `~/.ollama/models`.
+- Coding agents (review unless noted): each `~/.claude/projects/<project>`,
+  `~/.claude/file-history`, `~/.claude/debug` (safe); `~/.codex/sessions/<year>`,
+  `~/.codex/archived_sessions`; each `~/.codex/worktrees/<child>` (a Git
+  worktree, or a leftover folder).
+- Git worktrees (review): a folder whose `.git` is a file, not a directory,
+  when its parent is named `worktrees` or no ancestor in the scan has a `.git`
+  entry (submodules always have one and are excluded).
+
+Never listed: `~/.cache`, `~/Library/Caches`, `~/.cargo`, `~/.gradle`, `~/.m2`,
+`~/.ollama`, `~/.rustup`, `~/.claude`, `~/.codex` and `~/.cache/huggingface`
+themselves, nor anything
+inside them that the list above does not name (credentials and configuration
+such as `~/.cargo/credentials.toml`, `~/.gradle/gradle.properties`,
+`~/.codex/auth.json` and `~/.cache/huggingface/token` live there); a folder
+holding Gradle configuration (its caches are listed instead); system
+`/Library/Caches` and other users' `Library/Caches`; the home, its ancestors,
+its direct non-dot children and the folders the panel always refuses as too
+broad (`~/Library`, `~/Library/Developer`, `~/Downloads`, ...).
+
+Home rules are anchored to `$HOME`, resolved like the scan root, and match both
+its normal spelling and its Data-volume spelling (a whole-disk scan rooted at
+`/System/Volumes/Data` sees `/Users/x` as `/System/Volumes/Data/Users/x`), also
+when the scan root is inside the home. With an explicit root outside the home,
+or no usable `$HOME`, home rules never match; the unanchored rules (for example
+a whole `.cache`) still do.
 
 Both interfaces visit descendants, excluding the scan root itself and `.Trash`
-subtrees. A recognized directory is never descended into, even below the size
-threshold, so candidates never nest. Sort order is allocated bytes descending,
-then path ascending to make size ties deterministic. Default threshold:
+subtrees. A recognized directory is not descended into, even below the size
+threshold, so candidates do not nest, except inside a `git_worktree`
+candidate, which is listed and descended. Sort order is allocated bytes
+descending, then path ascending to make size ties deterministic. Default threshold:
 **50,000,000 bytes**, the panel's existing threshold. `--min-bytes` overrides it
 for the CLI and accepts bytes as an unsigned integer. Default output limit:
 **20**, maximum **1000**; limiting affects presentation, not selection or totals.
 
-For the same root and threshold, the CLI exposes the panel's candidates. An
-explicit root can be outside the home; there is no CLI-only home restriction.
+For the same root, threshold and home, the CLI exposes the panel's candidates.
+An explicit root can be outside the home; there is no CLI-only home restriction.
 The default CLI root is the home folder, while the GUI defaults to the Data
 volume. Choose the same root when comparing their output.
 
-These name/structure heuristics are **not a safety assessment**. In particular,
-whole `.gradle`, `.npm`, `.cache` and `Library/Caches` directories can be listed.
-No project activity, ownership, local edits or reproducibility check is made.
-`reason` preserves the existing panel label; it is not a guarantee about a
-folder's contents. Every candidate needs review before any removal. Partially
-scanned candidates remain visible, like in the panel, with `complete=false`;
-their reported sizes describe only observed data. Improving these rules is a
-separate change shared by both callers, not a second policy inside the CLI.
+These name/structure heuristics are **not a safety assessment**. Apart from
+what `verify` names (and the CLI does not run), no project activity, ownership,
+local edits or reproducibility check is made. `reason` is the shared panel
+label; it is not a guarantee about a folder's contents. Every candidate needs
+review before any removal. Partially scanned candidates remain visible, like in
+the panel, with `complete=false`; their reported sizes describe only observed
+data. Improving these rules is a change shared by both callers, not a second
+policy inside the CLI.
 
 ## Reproducibility
 
@@ -144,8 +210,11 @@ cargo build --locked --release --features cli --bin blitztree
 python3 -m unittest discover -s tests -v
 ```
 
-The Rust tests cover the existing rule set, traversal, threshold, stable ordering
-and the C bridge, including empty results. The contract tests require Python 3 and use temporary fixtures only. Set
+The Rust tests cover the rule set (including rules whose ancestor is the scan
+root), home anchoring, traversal, threshold, stable ordering and the C bridge,
+including empty results. A seeded random-tree test checks the invariants over
+thousands of generated trees (set `BZ_STRESS_SEED`/`BZ_STRESS_CASES` to replay
+or widen it). The contract tests require Python 3 and use temporary fixtures only. Set
 `BLITZTREE_BIN` to test a binary in a custom target directory. To verify that
 the default engine/GUI build remains independent of the CLI, also run
 `cargo test --locked --release --no-default-features` and

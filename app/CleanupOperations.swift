@@ -7,8 +7,12 @@ nonisolated struct CleanupReceipt: Sendable {
     let sourcePath: String
     let identity: CleanupIdentity
     let parentIdentity: CleanupIdentity
+    /// Set when the moved item was a verified linked git worktree: its admin
+    /// entry, removed only after the item itself is deleted for good.
+    let worktree: WorktreeAdminEntry?
 
-    init(url: URL, sourcePath: String, original: CleanupIdentity) throws {
+    init(url: URL, sourcePath: String, original: CleanupIdentity,
+         worktree: WorktreeAdminEntry? = nil) throws {
         let identity = try CleanupIdentity.capture(path: url.path)
         guard identity == original else {
             throw CleanupOperations.failure("The moved item changed identity; leave it in the Trash and review it")
@@ -17,6 +21,7 @@ nonisolated struct CleanupReceipt: Sendable {
         self.sourcePath = sourcePath
         self.identity = identity
         self.parentIdentity = try CleanupIdentity.capture(path: url.deletingLastPathComponent().path)
+        self.worktree = worktree
     }
 
     func validate() throws {
@@ -36,9 +41,13 @@ nonisolated enum CleanupOperations {
     /// Both manual and agent cleanup use this boundary, immediately before I/O.
     static func trash(_ target: CleanupTarget,
                       move: (URL) throws -> URL = systemTrash) throws -> CleanupReceipt {
-        try target.validate()
+        // A linked worktree is re-verified here (clean, unused, nothing
+        // running inside) and its admin entry recorded before it moves.
+        let worktree = try CleanupPathSafety.validatedWorktree(target)
+        let entry = try worktree.map { try GitWorktree.adminEntry(for: $0) }
         let destination = try move(URL(fileURLWithPath: target.path))
-        return try CleanupReceipt(url: destination, sourcePath: target.path, original: target.identity)
+        return try CleanupReceipt(url: destination, sourcePath: target.path, original: target.identity,
+                                  worktree: entry)
     }
 
     private static func systemTrash(_ source: URL) throws -> URL {
@@ -58,6 +67,9 @@ nonisolated enum CleanupOperations {
     struct RemovalResult: Sendable {
         let remaining: [CleanupReceipt]
         let errors: [String]
+        /// Worktree admin entries left in place after their worktree was
+        /// deleted (the item itself was freed; these are not failures).
+        var notices: [String] = []
     }
 
     private final class Failures: @unchecked Sendable {
@@ -110,6 +122,7 @@ nonisolated enum CleanupOperations {
                     } catch { failures.record(index, error.localizedDescription) }
                 }
                 group.wait()
+                var notices: [String] = []
                 for (index, receipt) in receipts.enumerated() where !failures.has(index) {
                     do {
                         try receipt.validate()
@@ -118,9 +131,18 @@ nonisolated enum CleanupOperations {
                         slots.signal()
                         if let error { failures.record(index, error) }
                     } catch { failures.record(index, error.localizedDescription) }
+                    // Only after this worktree is gone for good, and only its
+                    // own admin entry; never `git worktree prune`.
+                    if let entry = receipt.worktree, !failures.has(index) {
+                        slots.wait()
+                        let notice = GitWorktree.removeAdminEntry(entry, erase: erase)
+                        slots.signal()
+                        if let notice { notices.append(notice) }
+                    }
                 }
                 let remaining = receipts.enumerated().filter { failures.has($0.offset) }.map(\.element)
-                continuation.resume(returning: RemovalResult(remaining: remaining, errors: failures.all))
+                continuation.resume(returning: RemovalResult(remaining: remaining, errors: failures.all,
+                                                             notices: notices))
             }
         }
     }

@@ -60,6 +60,29 @@ nonisolated final class Tree: @unchecked Sendable {
         return String(cString: label)
     }
 
+    /// Stable rule id ("node_modules", "git_worktree", ...); "" out of range.
+    func cleanupKindID(_ index: Int) -> String {
+        guard let id = bz_cleanup_kind_id(handle, UInt64(index)) else { return "" }
+        return String(cString: id)
+    }
+
+    /// Section id ("build", "packages", ...); "" out of range.
+    func cleanupSectionID(_ index: Int) -> String {
+        guard let id = bz_cleanup_section_id(handle, UInt64(index)) else { return "" }
+        return String(cString: id)
+    }
+
+    /// 0 safe, 1 review, 255 out of range. Anything but 0 must be treated as review.
+    func cleanupGroup(_ index: Int) -> UInt8 {
+        bz_cleanup_group(handle, UInt64(index))
+    }
+
+    /// Check required before acting: "" none, else a verifier id. nil out of
+    /// range, so a missing answer never reads as "no check needed".
+    func cleanupVerify(_ index: Int) -> String? {
+        bz_cleanup_verify(handle, UInt64(index)).map { String(cString: $0) }
+    }
+
     func name(_ i: Int) -> String {
         let start = Int(nameOff[i])
         let end = Int(nameOff[i + 1])

@@ -249,151 +249,6 @@ final class AgentSetup {
     }
 }
 
-// MARK: - Guards (enforced here, never left to the model)
-
-/// When a coding agent last worked in each folder, from its session logs:
-/// every log is a .jsonl file that names the working folder ("cwd") near its
-/// start and is appended to as the session goes on.
-nonisolated enum AgentSessions {
-    /// Codex rollouts: $CODEX_HOME/sessions/<date>/*.jsonl.
-    static var codex: URL {
-        let home = ProcessInfo.processInfo.environment["CODEX_HOME"] ?? NSHomeDirectory() + "/.codex"
-        return URL(fileURLWithPath: home + "/sessions")
-    }
-
-    /// Claude Code transcripts: $CLAUDE_CONFIG_DIR/projects/<folder>/*.jsonl.
-    static var claude: URL {
-        let home = ProcessInfo.processInfo.environment["CLAUDE_CONFIG_DIR"] ?? NSHomeDirectory() + "/.claude"
-        return URL(fileURLWithPath: home + "/projects")
-    }
-
-    /// `folders`, when given, picks which top-level folders of `root` to read;
-    /// every folder is read otherwise.
-    static func lastActive(in root: URL, since: Date? = nil, folders: ((String) -> Bool)? = nil) -> [String: Date] {
-        let fm = FileManager.default
-        let roots = folders.map { keep in
-            ((try? fm.contentsOfDirectory(atPath: root.path)) ?? []).filter(keep).map { root.appendingPathComponent($0) }
-        } ?? [root]
-        var active: [String: Date] = [:]
-        for folder in roots {
-            guard let files = fm.enumerator(at: folder, includingPropertiesForKeys: [.contentModificationDateKey])
-            else { continue }
-            for case let url as URL in files where url.pathExtension == "jsonl" {
-                note(url, since: since, in: &active)
-            }
-        }
-        return active
-    }
-
-    private static func note(_ url: URL, since: Date?, in active: inout [String: Date]) {
-        guard let date = try? url.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate,
-              since.map({ date > $0 }) ?? true,
-              let file = try? FileHandle(forReadingFrom: url) else { return }
-        let head = String(decoding: (try? file.read(upToCount: 8192)) ?? Data(), as: UTF8.self)
-        try? file.close()
-        guard let match = head.firstMatch(of: /"cwd":"((?:[^"\\]|\\.)*)"/) else { return }
-        let cwd = String(match.1).replacingOccurrences(of: "\\/", with: "/")
-        active[cwd] = max(active[cwd] ?? date, date)
-    }
-
-    /// Whether a session in `root` worked at or inside `folder` since `since`.
-    static func worked(in folder: String, root: URL, since: Date, folders: ((String) -> Bool)? = nil) -> Bool {
-        lastActive(in: root, since: since, folders: folders).keys.contains { $0 == folder || $0.hasPrefix(folder + "/") }
-    }
-
-    /// Whether Claude Code worked at or inside `folder` since `since`. Claude
-    /// Code files each session under a folder named after the working folder
-    /// it started in, with separators turned into "-"; subagent and worktree
-    /// sessions go under their parent's folder. So only folders naming
-    /// `folder`, one inside it, or one around it are read (thousands of logs
-    /// otherwise, on every card). Both sides are folded the same way, so this
-    /// only narrows what is read; the "cwd" inside each log still decides.
-    static func claudeWorked(in folder: String, since: Date) -> Bool {
-        let key = claudeFolderKey(folder)
-        return worked(in: folder, root: claude, since: since) {
-            let name = claudeFolderKey($0)
-            return name.hasPrefix(key) || key.hasPrefix(name)
-        }
-    }
-
-    private static func claudeFolderKey(_ path: String) -> String {
-        String(String.UnicodeScalarView(path.lowercased().unicodeScalars.map {
-            CharacterSet.alphanumerics.contains($0) && $0.isASCII ? $0 : "-"
-        }))
-    }
-}
-
-nonisolated enum CleanupGuard {
-    static let home = NSHomeDirectory()
-
-    static var rebuildable: Set<String> { CleanupPathSafety.rebuildable }
-
-    static func blockReason(path: String) -> String? {
-        do { _ = try CleanupPathSafety.capture(path: path); return nil }
-        catch { return error.localizedDescription }
-    }
-
-    static func blockReason(command: String) -> String? {
-        CleanupCommand.parse(command) == nil ? "Command or arguments not allowed" : nil
-    }
-
-    /// The Codex app keeps each chat's files in ~/Documents/Codex/<date>/<chat>
-    /// (outputs, work). Returns that chat folder for a path at or inside one.
-    static func codexChat(_ path: String) -> String? {
-        CleanupPathSafety.codexChat(path)
-    }
-
-    /// Whether the project owning this build folder was used in the last two
-    /// days: its git index (touched by every status, commit or checkout), the
-    /// project folder or the folder itself changed recently, or Claude Code
-    /// worked in the project since. A Codex chat
-    /// counts as used when it started or Codex worked in it since (folder
-    /// dates are no help there: Finder's .DS_Store writes bump them).
-    static func recentlyUsed(_ path: String, within: TimeInterval = 2 * 86400) -> Bool {
-        let fm = FileManager.default
-        let cutoff = Date().addingTimeInterval(-within)
-        if let chat = codexChat(path) {
-            let day = ((chat as NSString).deletingLastPathComponent as NSString).lastPathComponent
-            if let started = try? Date(day + "T23:59:59Z", strategy: .iso8601), started > cutoff { return true }
-            return AgentSessions.worked(in: chat, root: AgentSessions.codex, since: cutoff)
-        }
-        let url = URL(fileURLWithPath: path)
-        guard rebuildable.contains(url.lastPathComponent) else { return false }
-        let project = url.deletingLastPathComponent()
-        var stamps = [path, project.path]
-        let git = project.appendingPathComponent(".git")
-        var isDir: ObjCBool = false
-        if fm.fileExists(atPath: git.path, isDirectory: &isDir) {
-            if isDir.boolValue {
-                stamps.append(git.appendingPathComponent("index").path)
-            } else if let text = try? String(contentsOf: git, encoding: .utf8),
-                      let line = text.split(separator: "\n").first(where: { $0.hasPrefix("gitdir:") }) {
-                // A worktree: its index lives in the main repository.
-                let dir = line.dropFirst(7).trimmingCharacters(in: .whitespaces)
-                stamps.append(URL(fileURLWithPath: dir, relativeTo: project).appendingPathComponent("index").path)
-            }
-        }
-        return stamps.contains { p in
-            ((try? fm.attributesOfItem(atPath: p))?[.modificationDate] as? Date).map { $0 > cutoff } ?? false
-        } || AgentSessions.claudeWorked(in: project.path, since: cutoff)
-    }
-
-    /// An app that must be quit before its files go, when one is running.
-    @MainActor
-    static func runningOwner(of paths: [String]) -> String? {
-        for app in NSWorkspace.shared.runningApplications where app.activationPolicy == .regular {
-            let id = app.bundleIdentifier ?? ""
-            let name = app.localizedName ?? ""
-            for path in paths {
-                let parts = path.split(separator: "/").map(String.init)
-                if !id.isEmpty, parts.contains(where: { $0 == id || $0.hasPrefix(id + ".") }) { return name }
-                if name.count > 2, parts.contains(name) { return name }
-            }
-        }
-        return nil
-    }
-}
-
 // MARK: - Run model
 
 /// One file or folder the user right-clicked and asked about. The run then
@@ -512,35 +367,12 @@ final class PlanItem: Identifiable {
             reason = String(localized: "Outside the item you asked about")
         }
         viaTrash = folderCache
-        var kept: [CleanupTarget] = []
-        var excluded = 0
-        var firstExclusion: String?
-        if reason == nil && (spec.action == "trash" || folderCache) {
-            if asked.isEmpty { reason = String(localized: "Nothing to remove") }
-            for path in asked {
-                do {
-                    let target = try CleanupPathSafety.capture(path: path, root: home, home: home)
-                    guard let node = tree.node(at: target.path), node != 0 else {
-                        throw CleanupOperations.failure(String(localized: "Path is not an item in this scan"))
-                    }
-                    if folderCache && !tree.isDir(node) {
-                        throw CleanupOperations.failure(String(localized: "The cache path is not a scanned directory"))
-                    }
-                    if CleanupGuard.codexChat(target.path) == nil,
-                       let app = CleanupGuard.runningOwner(of: [target.path]) {
-                        throw CleanupOperations.failure(String(localized: "Quit \(app) to clean this"))
-                    }
-                    if CleanupGuard.recentlyUsed(target.path) {
-                        throw CleanupOperations.failure(CleanupGuard.codexChat(target.path) != nil
-                            ? String(localized: "A Codex chat you used in the last 2 days") : String(localized: "In a project used in the last 2 days"))
-                    }
-                    kept.append(target)
-                } catch {
-                    excluded += 1
-                    firstExclusion = firstExclusion ?? error.localizedDescription
-                }
-            }
-            if kept.isEmpty { reason = reason ?? firstExclusion ?? String(localized: "Nothing to remove") }
+        // Every per-path guard and the pre-selection live in CleanupGuard.vet.
+        let vetting = reason == nil && (spec.action == "trash" || folderCache)
+            ? CleanupGuard.vet(asked: asked, tree: tree, home: home, folderCache: folderCache, specGroup: spec.group)
+            : nil
+        if let vetting {
+            reason = vetting.blocked
         } else if reason == nil && spec.action == "command" {
             // Paths only describe a tool command. They never become deletion
             // targets, but must still belong to the scan being reviewed.
@@ -550,6 +382,7 @@ final class PlanItem: Identifiable {
                 reason = String(localized: "Quit \(app) to clean this")
             }
         }
+        let kept = vetting?.kept ?? []
         let candidateNodes = Set(kept.compactMap { tree.node(at: $0.path) })
         let outer = candidateNodes.filter { node in
             !tree.ancestry(node).dropLast().contains(where: candidateNodes.contains)
@@ -560,12 +393,13 @@ final class PlanItem: Identifiable {
             }
         paths = spec.action == "command" && !folderCache ? asked : cleanupTargets.map(\.path)
         blocked = reason
-        selected = reason == nil && spec.group == "safe" && (spec.action == "trash" || folderCache)
+        selected = vetting?.preselect ?? false
         if spec.action == "command" && !folderCache && reason == nil {
             note = String(localized: "Runs the tool's cleanup, which may affect data outside the listed paths")
+        } else if let vetting, vetting.excluded > 0 && !kept.isEmpty {
+            note = String(localized: "Leaves \(vetting.excluded) path(s) unchanged: \(vetting.firstExclusion ?? String(localized: "not eligible"))")
         } else {
-            note = excluded > 0 && !kept.isEmpty
-                ? String(localized: "Leaves \(excluded) path(s) unchanged: \(firstExclusion ?? String(localized: "not eligible"))") : nil
+            note = nil
         }
         let nodes = Set(paths.compactMap { tree.node(at: $0) })
         self.nodes = Array(nodes.filter { node in !tree.ancestry(node).dropLast().contains(where: nodes.contains) })

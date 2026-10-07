@@ -28,6 +28,8 @@ nonisolated enum CleanupPathError: Error, LocalizedError, Equatable, Sendable {
     case protectedPath(String)
     case tooBroad(String)
     case gitPath(String)
+    /// A linked git worktree that was recognised but did not pass verification.
+    case gitWorktree(GitWorktreeError)
 
     var errorDescription: String? {
         switch self {
@@ -43,6 +45,7 @@ nonisolated enum CleanupPathError: Error, LocalizedError, Equatable, Sendable {
         case .protectedPath(let path): return String(localized: "Protected path: \(path)")
         case .tooBroad(let path): return String(localized: "Path is too broad to clean: \(path)")
         case .gitPath(let path): return String(localized: "Git metadata path is protected: \(path)")
+        case .gitWorktree(let error): return error.errorDescription
         }
     }
 
@@ -60,6 +63,7 @@ nonisolated enum CleanupPathError: Error, LocalizedError, Equatable, Sendable {
         case .protectedPath(let path): return "Protected path: \(path)"
         case .tooBroad(let path): return "Path is too broad to clean: \(path)"
         case .gitPath(let path): return "Git metadata path is protected: \(path)"
+        case .gitWorktree(let error): return error.englishDescription
         }
     }
 }
@@ -79,7 +83,7 @@ nonisolated struct CleanupTarget: Sendable, Equatable {
     let homeIdentity: CleanupIdentity
 
     func validate() throws {
-        try CleanupPathSafety.validate(self)
+        _ = try CleanupPathSafety.validate(self)
     }
 }
 
@@ -89,6 +93,7 @@ nonisolated enum CleanupPathSafety {
     private static let modeMask: UInt16 = 0o170000
     private static let modeDirectory: UInt16 = 0o040000
     private static let modeSymlink: UInt16 = 0o120000
+    private static let modeRegular: UInt16 = 0o100000
     private static let dataLessFlag: UInt64 = 0x4000_0000
 
     /// Rebuildable names are shared with the agent's recent-use policy.
@@ -142,9 +147,15 @@ nonisolated enum CleanupPathSafety {
             path: p, root: r, home: h, identity: targetObserved.identity,
             rootIdentity: rootObserved.identity, homeIdentity: homeObserved.identity
         )
-        try enforce(target, targetObserved: targetObserved, rootObserved: rootObserved,
-                    homeObserved: homeObserved)
+        _ = try enforce(target, targetObserved: targetObserved, rootObserved: rootObserved,
+                        homeObserved: homeObserved)
         return target
+    }
+
+    /// Revalidates `target` like `CleanupTarget.validate()` and returns the
+    /// worktree verification that allowed it, when it is a linked git worktree.
+    static func validatedWorktree(_ target: CleanupTarget) throws -> WorktreeInfo? {
+        try validate(target)
     }
 
     static func normalize(_ raw: String) throws -> String {
@@ -191,7 +202,7 @@ nonisolated enum CleanupPathSafety {
         )
     }
 
-    fileprivate static func validate(_ target: CleanupTarget) throws {
+    fileprivate static func validate(_ target: CleanupTarget) throws -> WorktreeInfo? {
         let rootObserved = try inspect(target.root, requireDirectory: true)
         guard rootObserved.identity == target.rootIdentity else {
             throw CleanupPathError.changed(target.root)
@@ -204,8 +215,8 @@ nonisolated enum CleanupPathSafety {
         guard targetObserved.identity == target.identity else {
             throw CleanupPathError.changed(target.path)
         }
-        try enforce(target, targetObserved: targetObserved, rootObserved: rootObserved,
-                    homeObserved: homeObserved)
+        return try enforce(target, targetObserved: targetObserved, rootObserved: rootObserved,
+                           homeObserved: homeObserved)
     }
 
     private struct Observed {
@@ -271,7 +282,7 @@ nonisolated enum CleanupPathSafety {
         targetObserved: Observed,
         rootObserved: Observed,
         homeObserved: Observed
-    ) throws {
+    ) throws -> WorktreeInfo? {
         // A scan root is a boundary, never an actionable target.  Identity
         // also catches the equivalent /System/Volumes/Data spelling.
         guard targetObserved.identity != rootObserved.identity else {
@@ -287,7 +298,7 @@ nonisolated enum CleanupPathSafety {
         _ = homeObserved // The identity check is part of the root policy below.
         try protectedPolicy(path: target.path, identity: targetObserved.identity,
                             home: target.home, homeIdentity: homeObserved.identity)
-        try rejectGitPaths(target.path)
+        return try rejectGitPaths(target.path)
     }
 
     private static func isWithinRoot(
@@ -383,7 +394,11 @@ nonisolated enum CleanupPathSafety {
         return nil
     }
 
-    private static func rejectGitPaths(_ path: String) throws {
+    /// Any `.git` component or marker blocks, except a target whose own `.git`
+    /// is a regular file and which `GitWorktree.verify` accepts as a clean,
+    /// unused linked worktree. That verification runs at capture and again at
+    /// every validation, so a worktree changed after planning is refused.
+    private static func rejectGitPaths(_ path: String) throws -> WorktreeInfo? {
         let components = (path as NSString).pathComponents
         var current = "/"
         for component in components.dropFirst() {
@@ -393,16 +408,26 @@ nonisolated enum CleanupPathSafety {
             }
         }
         let marker = (path as NSString).appendingPathComponent(".git")
-        try rejectGitMarker(marker)
+        return try rejectGitMarker(marker, worktree: path)
     }
 
-    private static func rejectGitMarker(_ marker: String) throws {
+    private static func rejectGitMarker(_ marker: String, worktree: String) throws -> WorktreeInfo? {
+        let info: stat
         do {
-            _ = try readStat(marker)
-            throw CleanupPathError.gitPath(marker)
+            info = try readStat(marker)
         } catch let error as CleanupPathError {
-            if case .missing = error { return }
+            if case .missing = error { return nil }
             throw error
+        }
+        guard UInt16(truncatingIfNeeded: info.st_mode) & modeMask == modeRegular else {
+            throw CleanupPathError.gitPath(marker)
+        }
+        do {
+            return try GitWorktree.verify(worktree)
+        } catch GitWorktreeError.notWorktree {
+            throw CleanupPathError.gitPath(marker)
+        } catch let error as GitWorktreeError {
+            throw CleanupPathError.gitWorktree(error)
         }
     }
 

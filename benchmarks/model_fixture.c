@@ -77,6 +77,19 @@ const uint32_t *bz_cleanup_nodes(BzScan *h) { return h->children; }
 const char *bz_cleanup_description(BzScan *h, uint64_t index) {
     (void)h; (void)index; return NULL;
 }
+// No candidates, so every index is out of range.
+const char *bz_cleanup_kind_id(BzScan *h, uint64_t index) {
+    (void)h; (void)index; return NULL;
+}
+const char *bz_cleanup_section_id(BzScan *h, uint64_t index) {
+    (void)h; (void)index; return NULL;
+}
+uint8_t bz_cleanup_group(BzScan *h, uint64_t index) {
+    (void)h; (void)index; return 255;
+}
+const char *bz_cleanup_verify(BzScan *h, uint64_t index) {
+    (void)h; (void)index; return NULL;
+}
 
 void bz_free(BzScan *h) {
     if (!h) return;

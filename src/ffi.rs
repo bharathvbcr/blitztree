@@ -22,16 +22,18 @@ struct Flat {
     tree: Tree,
     cleanup_nodes: Vec<u32>,
     cleanup_descriptions: Vec<CString>,
+    cleanup_kinds: Vec<cleanup::Kind>,
 }
 
-fn with_cleanup(tree: Tree) -> Flat {
-    let candidates = cleanup::find(&tree, cleanup::MIN_BYTES);
+fn with_cleanup(tree: Tree, anchors: &cleanup::Anchors) -> Flat {
+    let candidates = cleanup::find(&tree, cleanup::MIN_BYTES, anchors);
     Flat {
         cleanup_nodes: candidates.iter().map(|c| c.node).collect(),
         cleanup_descriptions: candidates
             .iter()
             .map(|c| CString::new(c.kind.description()).expect("static cleanup label has no NUL"))
             .collect(),
+        cleanup_kinds: candidates.iter().map(|c| c.kind).collect(),
         tree,
     }
 }
@@ -55,7 +57,7 @@ pub extern "C" fn bz_scan_start(path: *const c_char) -> *mut BzScan {
             let t0 = std::time::Instant::now();
             let tree = scan(&path, &progress);
             let t1 = std::time::Instant::now();
-            let flat = with_cleanup(tree);
+            let flat = with_cleanup(tree, &cleanup::Anchors::from_env());
             if std::env::var_os("BZ_TIMING").is_some() {
                 eprintln!(
                     "[bz] scan {:.3}s  cleanup {:.1}ms",
@@ -159,6 +161,51 @@ pub unsafe extern "C" fn bz_cleanup_description(h: *mut BzScan, index: u64) -> *
         .map_or(std::ptr::null(), |s| s.as_ptr())
 }
 
+/// # Safety
+/// `h` must be NULL or a live scan handle, with no concurrent mutation or free.
+unsafe fn cleanup_kind(h: *mut BzScan, index: u64) -> Option<cleanup::Kind> {
+    let h = unsafe { h.as_ref() }?;
+    h.flat.as_ref()?.cleanup_kinds.get(usize::try_from(index).ok()?).copied()
+}
+
+/// Stable rule id (the CLI's `category`) at a candidate-list index; static,
+/// NULL out of range.
+///
+/// # Safety
+/// `h` must be NULL or a live scan handle, with no concurrent mutation or free.
+#[no_mangle]
+pub unsafe extern "C" fn bz_cleanup_kind_id(h: *mut BzScan, index: u64) -> *const c_char {
+    unsafe { cleanup_kind(h, index) }.map_or(std::ptr::null(), |k| k.c_id().as_ptr())
+}
+
+/// Section id ("build", "packages", ...); static, NULL out of range.
+///
+/// # Safety
+/// `h` must be NULL or a live scan handle, with no concurrent mutation or free.
+#[no_mangle]
+pub unsafe extern "C" fn bz_cleanup_section_id(h: *mut BzScan, index: u64) -> *const c_char {
+    unsafe { cleanup_kind(h, index) }.map_or(std::ptr::null(), |k| k.section().c_id().as_ptr())
+}
+
+/// 0 safe, 1 review, 255 out of range.
+///
+/// # Safety
+/// `h` must be NULL or a live scan handle, with no concurrent mutation or free.
+#[no_mangle]
+pub unsafe extern "C" fn bz_cleanup_group(h: *mut BzScan, index: u64) -> u8 {
+    unsafe { cleanup_kind(h, index) }.map_or(u8::MAX, |k| k.group() as u8)
+}
+
+/// Verifier id ("cachedir_tag", "git_worktree", "recent_activity"), "" when
+/// the rule needs none; static, NULL out of range.
+///
+/// # Safety
+/// `h` must be NULL or a live scan handle, with no concurrent mutation or free.
+#[no_mangle]
+pub unsafe extern "C" fn bz_cleanup_verify(h: *mut BzScan, index: u64) -> *const c_char {
+    unsafe { cleanup_kind(h, index) }.map_or(std::ptr::null(), |k| k.c_verify().as_ptr())
+}
+
 #[no_mangle]
 pub extern "C" fn bz_errors(h: *mut BzScan) -> u64 {
     let h = unsafe { &*h };
@@ -245,16 +292,18 @@ mod tests {
         for bytes in [0, cleanup::MIN_BYTES] {
             let mut tree = Tree::with_root("/root");
             tree.push("node_modules", 0, bytes, bytes, true);
+            tree.push("package.json", 0, 0, 0, false);
             (tree.alloc[0], tree.logical[0]) = (bytes, bytes);
             tree.link_children();
-            assert_eq!(tree.parents, [NO_PARENT, 0]);
-            let expected = cleanup::find(&tree, cleanup::MIN_BYTES);
+            assert_eq!(tree.parents, [NO_PARENT, 0, 0]);
+            let anchors = cleanup::Anchors::default();
+            let expected = cleanup::find(&tree, cleanup::MIN_BYTES, &anchors);
             assert_eq!(expected.len(), (bytes > 0) as usize);
             let mut handle = BzScan {
                 progress: Arc::new(Progress::default()),
                 done: Arc::new(AtomicBool::new(true)),
                 result: Arc::new(std::sync::Mutex::new(None)),
-                flat: Some(Box::new(with_cleanup(tree))),
+                flat: Some(Box::new(with_cleanup(tree, &anchors))),
             };
             let h = &mut handle as *mut BzScan;
             assert_eq!(unsafe { bz_cleanup_count(h) } as usize, expected.len());
@@ -266,6 +315,73 @@ mod tests {
             }
             assert!(unsafe { bz_cleanup_description(h, expected.len() as u64) }.is_null());
         }
+    }
+
+    fn c(p: *const c_char) -> Option<&'static str> {
+        (!p.is_null()).then(|| unsafe { CStr::from_ptr(p) }.to_str().unwrap())
+    }
+
+    #[test]
+    fn bridge_exposes_kind_section_group_and_verifier() {
+        let mut tree = Tree::with_root("/w");
+        let wt = tree.push("wt", 0, 30, 30, true);
+        let tagged = tree.push("tagged", 0, 20, 20, true);
+        tree.push(".git", wt, 0, 0, false);
+        tree.push("package.json", wt, 0, 0, false);
+        tree.push("node_modules", wt, 10, 10, true);
+        tree.push("CACHEDIR.TAG", tagged, 0, 0, false);
+        tree.alloc[0] = 50;
+        tree.link_children();
+        let anchors = cleanup::Anchors::default();
+        let expected = cleanup::find(&tree, 1, &anchors);
+        let kinds: Vec<_> = expected.iter().map(|c| c.kind).collect();
+        assert_eq!(
+            kinds,
+            [cleanup::Kind::GitWorktree, cleanup::Kind::TaggedCache, cleanup::Kind::NodeModules]
+        );
+        let flat = Flat {
+            cleanup_nodes: expected.iter().map(|c| c.node).collect(),
+            cleanup_descriptions: Vec::new(),
+            cleanup_kinds: kinds.clone(),
+            tree,
+        };
+        let mut handle = BzScan {
+            progress: Arc::new(Progress::default()),
+            done: Arc::new(AtomicBool::new(true)),
+            result: Arc::new(std::sync::Mutex::new(None)),
+            flat: Some(Box::new(flat)),
+        };
+        let h = &mut handle as *mut BzScan;
+        unsafe {
+            for (i, kind) in kinds.iter().enumerate() {
+                let i = i as u64;
+                assert_eq!(c(bz_cleanup_kind_id(h, i)), Some(kind.id()));
+                assert_eq!(c(bz_cleanup_section_id(h, i)), Some(kind.section().id()));
+                assert_eq!(bz_cleanup_group(h, i), kind.group() as u8);
+                assert_eq!(c(bz_cleanup_verify(h, i)), Some(kind.verify().unwrap_or("")));
+            }
+            assert_eq!(c(bz_cleanup_kind_id(h, 0)), Some("git_worktree"));
+            assert_eq!(c(bz_cleanup_section_id(h, 0)), Some("worktrees"));
+            assert_eq!(bz_cleanup_group(h, 0), 1);
+            assert_eq!(c(bz_cleanup_verify(h, 0)), Some("git_worktree"));
+            assert_eq!(c(bz_cleanup_verify(h, 1)), Some("cachedir_tag"));
+            assert_eq!(c(bz_cleanup_verify(h, 2)), Some(""));
+            assert_eq!(bz_cleanup_group(h, 2), 0);
+            for out_of_range in [3, u64::MAX] {
+                assert!(bz_cleanup_kind_id(h, out_of_range).is_null());
+                assert!(bz_cleanup_section_id(h, out_of_range).is_null());
+                assert!(bz_cleanup_verify(h, out_of_range).is_null());
+                assert_eq!(bz_cleanup_group(h, out_of_range), 255);
+            }
+            let null = std::ptr::null_mut();
+            assert!(bz_cleanup_kind_id(null, 0).is_null());
+            assert_eq!(bz_cleanup_group(null, 0), 255);
+        }
+        // Before bz_take_tree there is no flat tree: everything is out of range.
+        let mut pending = BzScan { flat: None, ..handle };
+        let h = &mut pending as *mut BzScan;
+        assert!(unsafe { bz_cleanup_section_id(h, 0) }.is_null());
+        assert_eq!(unsafe { bz_cleanup_group(h, 0) }, 255);
     }
 
     #[test]
@@ -280,7 +396,7 @@ mod tests {
             progress: Arc::new(Progress::default()),
             done: Arc::new(AtomicBool::new(true)),
             result: Arc::new(std::sync::Mutex::new(None)),
-            flat: Some(Box::new(with_cleanup(tree))),
+            flat: Some(Box::new(with_cleanup(tree, &cleanup::Anchors::default()))),
         };
         let h = &mut handle as *mut BzScan;
 
