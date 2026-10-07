@@ -39,4 +39,8 @@ swiftc "${SOURCES[@]}" tests/ListIntegrationChecks.swift "${FLAGS[@]}" \
   -import-objc-header app/bz.h -L target/release -lblitztree \
   -framework AppKit -framework SwiftUI -o "$CLEANUP_TEST_TMP/list"
 "$CLEANUP_TEST_TMP/list"
+# Sign-in opens the authorize URL itself. No scan engine and no real browser.
+swiftc app/AgentLogin.swift tests/AgentLoginChecks.swift "${FLAGS[@]}" \
+  -framework AppKit -o "$CLEANUP_TEST_TMP/login"
+"$CLEANUP_TEST_TMP/login"
 
