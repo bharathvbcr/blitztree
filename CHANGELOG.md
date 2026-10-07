@@ -1,7 +1,15 @@
 # Changelog
 
-## Unreleased
+## 0.6.1 — 2026-10-07
 
+This release adds a Largest Files list, counts APFS clones once, puts every mounted volume in the Scan menu, and teaches Clean Up many more kinds of reclaimable space.
+
+- The directory list takes multiple selections (⌘- and ⇧-click), sorts by name, size or file count, and has a Files column with each folder's file count. Right-click, Copy Path and Move to Trash act on the whole selection, with one confirmation.
+- Moving items to the Trash takes them off the map right away instead of rescanning the disk. Sizes and file counts of the folders above drop to match; anything that couldn't be moved stays shown.
+- Clean Up recognizes much more: Swift, Gradle, Dart, CocoaPods, Zig, Elixir, Haskell and front-end build folders next to their project files; Cargo, Gradle and Maven caches; Electron app caches; Xcode archives and previews; Rust toolchains; Hugging Face, PyTorch and Ollama models; Claude Code and Codex session history; leftover git worktrees; and any folder marked with a `CACHEDIR.TAG`. Items are grouped into sections (build, packages, apps, developer tools, models, agents, worktrees) and marked safe or review.
+- Before anything is removed, Clean Up re-checks items that need it: a git worktree must be clean, unlocked, unused for 2 days and have nothing running inside it; a `CACHEDIR.TAG` must carry the real signature; agent history must be untouched for 2 days. A check that can't run blocks the item. A `node_modules` without a `package.json` beside it (such as a global npm folder of installed tools) is no longer offered.
+- The CLI's candidates carry `group`, `section`, `verify` and `contained_in`, and totals no longer count a candidate inside another one twice.
+- Signing in to Claude Code or Codex from the Clean Up menu opens the sign-in page in your browser. Before, the CLI waited for a browser that never opened, because it only opens one when run in a terminal. If sign-in fails, the error says why.
 - A Largest Files list above the directory list shows the biggest files anywhere in the scan, so a 20 GB file buried deep in the tree is one click away. Picking one reveals it on the map; right-click gives the same menu as the map. The Rust engine picks the files and the CLI's `largest_files` uses the same code, so the two always agree.
 - APFS clones count once. Copies made with `cp -c` or Chrome's code-signing clones in `/private/var/folders/…/X/com.google.Chrome.code_sign_clone` share one set of blocks but each reported the full size, so a 1 TB disk could show 1.7 TB used. Whole clones now count once, under their first path, like hard links. On the machine that reported it, the data volume went from 1.61 TB scanned to 816 GB (852 GB in use), and the Chrome folder from 767 GB to 0.76 GB.
 - A clone edited after copying gets its own identity on APFS and still counts in full, so a scan can still exceed what the disk holds. When it does, the status bar says by how much instead of saying nothing.
