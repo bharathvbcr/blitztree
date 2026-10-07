@@ -300,6 +300,91 @@ struct CleanupIntegrationChecks {
         precondition(!fm.fileExists(atPath: trashTarget), "Folder was moved away from source")
         precondition(movedDestination != nil && fm.fileExists(atPath: movedDestination!.path), "Folder arrived in destination")
 
+        // Whole-disk scan item check: /System/Volumes/Data prefix removal in menus & confirmation
+        let wholeDiskRoot = "/System/Volumes/Data" + home
+        if fm.fileExists(atPath: wholeDiskRoot) {
+            guard let wdHandle = bz_scan_start(wholeDiskRoot) else { fatalError("whole-disk fixture scan failed") }
+            var wdFiles: UInt64 = 0, wdDirs: UInt64 = 0, wdBytes: UInt64 = 0, wdDone: Int32 = 0
+            while wdDone == 0 {
+                bz_progress(wdHandle, &wdFiles, &wdDirs, &wdBytes, &wdDone)
+                if wdDone == 0 { try await Task.sleep(for: .milliseconds(5)) }
+            }
+            guard let wdTree = Tree(handle: wdHandle) else { bz_free(wdHandle); fatalError("whole-disk tree failed") }
+            let wdModel = ScanModel()
+            wdModel.tree = wdTree
+            wdModel.scanRoot = "/System/Volumes/Data"
+
+            let wdNode = wdTree.node(at: "/System/Volumes/Data" + asked)!
+            let wdPath = wdTree.path(wdNode)
+            let wdDisplayPath = wdTree.displayPath(wdNode)
+            precondition(wdPath.hasPrefix("/System/Volumes/Data"), "whole-disk path has /System/Volumes/Data prefix")
+            precondition(!wdDisplayPath.hasPrefix("/System/Volumes/Data"), "displayPath strips /System/Volumes/Data prefix")
+            precondition(wdDisplayPath == asked, "displayPath matches expected path")
+
+            // Verify both point to the same physical file (same inode)
+            let attr1 = try fm.attributesOfItem(atPath: wdPath)
+            let attr2 = try fm.attributesOfItem(atPath: wdDisplayPath)
+            precondition(attr1[.systemFileNumber] as? UInt == attr2[.systemFileNumber] as? UInt, "wdPath and wdDisplayPath point to the same inode")
+
+            let wdMenu = NSMenu()
+            NodeMenu.fill(wdMenu, node: wdNode, model: wdModel)
+            let wdCopyItem = wdMenu.items.first(where: { $0.title == "Copy Path" })!
+            _ = (wdCopyItem.target as AnyObject).perform(wdCopyItem.action, with: wdCopyItem)
+            let copied = NSPasteboard.general.string(forType: .string)
+            precondition(copied == wdDisplayPath, "Copy Path copies displayPath (\(wdDisplayPath)), not \(wdPath), got: \(copied ?? "nil")")
+
+            // Trash confirmation shows tree.displayPath(node)
+            let alertWithDisplay = NodeMenu.trashAlert(path: wdPath, displayPath: wdDisplayPath)
+            precondition(alertWithDisplay.informativeText == wdDisplayPath, "trashAlert with displayPath shows displayPath")
+            let alertFallback = NodeMenu.trashAlert(path: wdPath)
+            precondition(alertFallback.informativeText == wdDisplayPath, "trashAlert without displayPath removes /System/Volumes/Data prefix")
+
+            // Test file node under whole-disk scan: Open, Reveal, and Trash act on the same file
+            let wdFileNode = wdTree.node(at: "/System/Volumes/Data" + askedFile)!
+            let wdFilePath = wdTree.path(wdFileNode)
+            let wdFileDisplayPath = wdTree.displayPath(wdFileNode)
+            precondition(wdFilePath.hasPrefix("/System/Volumes/Data"), "file path has data prefix")
+            precondition(!wdFileDisplayPath.hasPrefix("/System/Volumes/Data") && wdFileDisplayPath == askedFile, "file displayPath stripped prefix")
+            let fileAttr1 = try fm.attributesOfItem(atPath: wdFilePath)
+            let fileAttr2 = try fm.attributesOfItem(atPath: wdFileDisplayPath)
+            precondition(fileAttr1[.systemFileNumber] as? UInt == fileAttr2[.systemFileNumber] as? UInt, "wdFilePath and wdFileDisplayPath point to the same inode")
+
+            let wdFileMenu = NSMenu()
+            NodeMenu.fill(wdFileMenu, node: wdFileNode, model: wdModel)
+
+            let fileCopyItem = wdFileMenu.items.first(where: { $0.title == "Copy Path" })!
+            _ = (fileCopyItem.target as AnyObject).perform(fileCopyItem.action, with: fileCopyItem)
+            precondition(NSPasteboard.general.string(forType: .string) == wdFileDisplayPath, "Copy Path on file copies file displayPath")
+
+            let openItem = wdFileMenu.items.first(where: { $0.title == "Open" })!
+            precondition(openItem.action != nil, "Open item has action selector")
+            let revealItem = wdFileMenu.items.first(where: { $0.title == "Reveal in Finder" })!
+            precondition(revealItem.action != nil, "Reveal in Finder has action selector")
+            let trashItem = wdFileMenu.items.first(where: { $0.title == "Move to Trash" })!
+            precondition(trashItem.action != nil, "Move to Trash has action selector")
+
+            // Disposable whole-disk trash target to verify trashItem removes the underlying file
+            let wdTrashFolder = try directory("wd-trash-target")
+            let wdTrashFilePath = "/System/Volumes/Data" + wdTrashFolder + "/trashable.bin"
+            let wdTrashDisplayPath = wdTrashFolder + "/trashable.bin"
+            try Data([4, 5, 6]).write(to: URL(fileURLWithPath: wdTrashDisplayPath))
+            precondition(fm.fileExists(atPath: wdTrashFilePath) && fm.fileExists(atPath: wdTrashDisplayPath))
+            let trashAttr1 = try fm.attributesOfItem(atPath: wdTrashFilePath)
+            let trashAttr2 = try fm.attributesOfItem(atPath: wdTrashDisplayPath)
+            precondition(trashAttr1[.systemFileNumber] as? UInt == trashAttr2[.systemFileNumber] as? UInt, "wdTrashFilePath and wdTrashDisplayPath point to the same inode")
+
+            var confirmedText: String?
+            NodeMenu.moveToTrash(path: wdTrashFilePath, displayPath: wdTrashDisplayPath, model: wdModel, confirm: { alert in
+                confirmedText = alert.informativeText
+                return .alertFirstButtonReturn
+            }, move: { url in
+                try fm.removeItem(at: url)
+            })
+            precondition(confirmedText == wdTrashDisplayPath, "Trash confirmation showed displayPath")
+            precondition(!fm.fileExists(atPath: wdTrashFilePath), "Trashing via wdPath removed file at wdPath")
+            precondition(!fm.fileExists(atPath: wdTrashDisplayPath), "Trashing via wdPath removed file at displayPath")
+        }
+
         // Treemap label hit testing with Scan.hit
         let testStrip = CGRect(x: 10, y: 10, width: 200, height: 16)
         let testRegion = CGRect(x: 10, y: 10, width: 200, height: 300)
