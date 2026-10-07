@@ -653,15 +653,16 @@ final class NodeMenu: NSObject {
         }
     }
 
-    /// Moves every target, then rescans once if any moved. Returns the ones
-    /// that didn't, with why.
+    /// Moves every target, then takes the ones that moved out of the map
+    /// (no rescan). Returns the ones that didn't, with why; they stay shown.
     static func trashItems(_ targets: [TrashTarget], model: ScanModel?,
                            move: (URL) throws -> Void = trashMove) -> [(target: TrashTarget, error: any Error)] {
         var failures: [(target: TrashTarget, error: any Error)] = []
+        var moved: [String] = []
         for target in targets {
-            do { try move(URL(fileURLWithPath: target.path)) } catch { failures.append((target, error)) }
+            do { try move(URL(fileURLWithPath: target.path)); moved.append(target.path) } catch { failures.append((target, error)) }
         }
-        if failures.count < targets.count { model?.startScan() }
+        if !moved.isEmpty { model?.forget(paths: moved) }
         return failures
     }
 

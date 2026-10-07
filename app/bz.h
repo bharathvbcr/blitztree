@@ -31,6 +31,13 @@ const char *bz_cleanup_description(BzScan *h, uint64_t index);
 
 void bz_free(BzScan *h);
 
+// A new handle, already holding its tree, for the scan without `count` nodes
+// and everything under them (ancestor sizes and file counts drop to match;
+// the root, repeats and out-of-range nodes are ignored). `h` is left
+// untouched and must still be freed: a tree is never edited once handed over.
+// NULL without a tree.
+BzScan *bz_remove(BzScan *h, const uint32_t *nodes, uint32_t count);
+
 // Largest files anywhere in the scan (directories excluded), selected in the
 // engine without copying the tree: the same function behind the CLI's
 // `largest_files`. Nodes are tree indices, largest first, valid until

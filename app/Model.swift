@@ -53,6 +53,20 @@ nonisolated final class Tree: @unchecked Sendable {
 
     deinit { bz_free(handle) }
 
+    /// A new tree without `nodes` and what is under them, sizes and file
+    /// counts of their ancestors reduced to match. This tree is not touched:
+    /// the UI keeps reading it until it swaps the new one in. Nil if the
+    /// engine could not build one.
+    func removing(_ nodes: [Int]) -> Tree? {
+        let ids = nodes.filter { $0 > 0 && $0 < count }.map { UInt32($0) }
+        guard let next = ids.withUnsafeBufferPointer({ bz_remove(handle, $0.baseAddress, UInt32($0.count)) }) else { return nil }
+        guard let tree = Tree(handle: next) else {
+            bz_free(next)
+            return nil
+        }
+        return tree
+    }
+
     func isDir(_ i: Int) -> Bool { flags[i] & 1 != 0 }
 
     func cleanupDescription(_ index: Int) -> String {
@@ -658,22 +672,87 @@ final class ScanModel {
         // Used and free change as files come and go; the menu is usable again.
         refreshVolumes()
         if let tree {
-            Task {
-                let found = await Task.detached(priority: .userInitiated) { Cleanup.find(in: tree) }.value
-                // A rescan may have replaced the tree while discovery ran.
-                // Node IDs only belong to the scan that produced them.
-                guard self.tree === tree else { return }
-                cleanup = found
-                openPanelAfterLaunchScan()
-            }
-            if !searchQuery.trimmingCharacters(in: .whitespaces).isEmpty {
-                performSearch()
-            }
-            refreshTypes()
+            refreshForNewTree(tree)
             NSLog("BZ scan done: %llu nodes, %llu unreadable dirs", UInt64(tree.count), tree.errors)
         }
         if let activity { ProcessInfo.processInfo.endActivity(activity) }
         activity = nil
+    }
+
+    /// Redoes what is keyed by node numbers (Clean Up candidates, search hits,
+    /// file types) for a tree just installed.
+    private func refreshForNewTree(_ tree: Tree) {
+        Task {
+            let found = await Task.detached(priority: .userInitiated) { Cleanup.find(in: tree) }.value
+            // A rescan may have replaced the tree while discovery ran.
+            // Node IDs only belong to the scan that produced them.
+            guard self.tree === tree else { return }
+            cleanup = found
+            openPanelAfterLaunchScan()
+        }
+        if !searchQuery.trimmingCharacters(in: .whitespaces).isEmpty {
+            performSearch()
+        }
+        refreshTypes()
+    }
+
+    // MARK: removing deleted items
+
+    /// Paths moved to the Trash (or deleted) that the tree still shows.
+    private var deletedPaths: [String] = []
+    private var removalTask: Task<Void, Never>?
+
+    /// Takes just-deleted paths out of the tree on screen, instead of a full
+    /// rescan (10–14 s on a whole disk). The engine builds a new tree without
+    /// them; sizes above them drop by their allocated bytes. Calls overlap
+    /// safely: paths that arrive while one is being built are applied to the
+    /// result, one after another. Awaiting `settled()` waits for all of them.
+    ///
+    /// The agent run still rescans when it finishes: besides the folders it
+    /// trashes it runs tool commands (cache cleanups) whose affected paths
+    /// are not known, so only a scan shows what they freed.
+    func forget(paths: [String]) {
+        deletedPaths += paths
+        guard removalTask == nil else { return }
+        removalTask = Task {
+            await drainDeletedPaths()
+            removalTask = nil
+        }
+    }
+
+    /// Returns once every path handed to `forget` is out of the tree.
+    func settled() async { await removalTask?.value }
+
+    private func drainDeletedPaths() async {
+        while !deletedPaths.isEmpty {
+            let paths = deletedPaths
+            deletedPaths = []
+            // A rescan under way or finished sees the disk as it is now.
+            guard let old = tree else { deletedPaths = []; return }
+            let nodes = paths.compactMap { old.node(at: $0) }.filter { $0 > 0 }
+            if nodes.isEmpty { continue }
+            let next = await Task.detached(priority: .userInitiated) { old.removing(nodes) }.value
+            guard tree === old else { continue }
+            guard let next else {
+                // No new tree: a stale map is worse than waiting for a scan.
+                startScan()
+                return
+            }
+            install(removalResult: next, replacing: old)
+        }
+    }
+
+    /// Swaps in the tree without the deleted items and keeps what the user
+    /// was looking at: the zoomed folder and the selection by path (nearest
+    /// surviving folder when theirs went), nothing hovered.
+    private func install(removalResult next: Tree, replacing old: Tree) {
+        let rootPath = old.ancestry(viewRoot).reversed().lazy.compactMap { next.node(at: old.path($0)) }.first
+        let kept = selection.flatMap { next.node(at: old.path($0)) }
+        tree = next
+        hovered = nil
+        selection = kept
+        viewRoot = rootPath ?? 0
+        refreshForNewTree(next)
     }
 
     /// Applies capacity only to the tree and scan generation that requested it.

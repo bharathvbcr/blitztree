@@ -61,11 +61,12 @@ final class CleanupTrashBatch {
     func clearFailures() { failures = [] }
 
     @discardableResult
-    func start(_ items: [CleanupItem], completion: @escaping ([String]) -> Void) -> Task<Void, Never>? {
+    func start(_ items: [CleanupItem], completion: @escaping (_ moved: [CleanupItem], _ failed: [String]) -> Void) -> Task<Void, Never>? {
         guard !running else { return nil }
         running = true
         return Task {
-            let failed = await Task.detached(priority: .userInitiated) {
+            let (moved, failed) = await Task.detached(priority: .userInitiated) {
+                var moved: [CleanupItem] = []
                 var failed: [String] = []
                 for item in items {
                     do {
@@ -73,15 +74,16 @@ final class CleanupTrashBatch {
                             throw CleanupOperations.failure("This folder could not be validated; rescan before cleaning")
                         }
                         _ = try CleanupOperations.trash(target)
+                        moved.append(item)
                     } catch {
                         failed.append("\(item.display): \(error.localizedDescription)")
                     }
                 }
-                return failed
+                return (moved, failed)
             }.value
             failures.append(contentsOf: failed)
             running = false
-            completion(failed)
+            completion(moved, failed)
         }
     }
 }
@@ -321,10 +323,11 @@ struct CleanupPanel: View {
     }
 
     private func trashPicked() {
-        model.cleanupTrash.start(pickedItems) { _ in
+        model.cleanupTrash.start(pickedItems) { moved, _ in
             picked = []
-            // The batch clears its busy state before this final rescan.
-            model.startScan()
+            // The batch clears its busy state first. What moved leaves the
+            // map without a rescan; what failed stays shown.
+            model.forget(paths: moved.map(\.path))
         }
     }
 

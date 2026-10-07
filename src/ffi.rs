@@ -207,6 +207,32 @@ pub extern "C" fn bz_largest_free(l: *mut BzLargest) {
     }
 }
 
+/// A new handle for the tree without `count` nodes (and what is under them),
+/// for after those files were deleted. `h` is left as it was: the UI swaps
+/// the new tree in and frees the old handle once nothing reads it. NULL
+/// without a tree.
+///
+/// # Safety
+/// `h` must be a live scan handle with a taken tree, and `nodes` must point
+/// to `count` readable `u32`s (or be NULL with a zero count).
+#[no_mangle]
+pub unsafe extern "C" fn bz_remove(h: *mut BzScan, nodes: *const u32, count: u32) -> *mut BzScan {
+    if h.is_null() || (nodes.is_null() && count > 0) {
+        return std::ptr::null_mut();
+    }
+    let h = unsafe { &*h };
+    let Some(flat) = h.flat.as_ref() else {
+        return std::ptr::null_mut();
+    };
+    let nodes = if count == 0 { &[][..] } else { unsafe { std::slice::from_raw_parts(nodes, count as usize) } };
+    Box::into_raw(Box::new(BzScan {
+        progress: h.progress.clone(),
+        done: Arc::new(AtomicBool::new(true)),
+        result: Arc::new(std::sync::Mutex::new(None)),
+        flat: Some(Box::new(with_cleanup(flat.tree.without(nodes)))),
+    }))
+}
+
 #[no_mangle]
 pub extern "C" fn bz_errors(h: *mut BzScan) -> u64 {
     let h = unsafe { &*h };
@@ -359,6 +385,50 @@ mod tests {
             }
             assert!(unsafe { bz_cleanup_description(h, expected.len() as u64) }.is_null());
         }
+    }
+
+    #[test]
+    fn bridge_removal_returns_a_new_handle_and_leaves_the_old_one_alone() {
+        let mut tree = Tree::with_root("/root");
+        let junk = tree.push("node_modules", 0, 0, 0, true);
+        tree.push("keep.bin", 0, 10, 10, false);
+        tree.push("a.js", junk, cleanup::MIN_BYTES, cleanup::MIN_BYTES, false);
+        crate::finish(&mut tree);
+        let total = tree.alloc[0];
+        let mut handle = BzScan {
+            progress: Arc::new(Progress::default()),
+            done: Arc::new(AtomicBool::new(true)),
+            result: Arc::new(std::sync::Mutex::new(None)),
+            flat: Some(Box::new(with_cleanup(tree))),
+        };
+        let h = &mut handle as *mut BzScan;
+        assert_eq!(unsafe { bz_cleanup_count(h) }, 1, "the folder is a Clean Up candidate");
+
+        let gone = [junk];
+        let new = unsafe { bz_remove(h, gone.as_ptr(), 1) };
+        assert!(!new.is_null());
+        assert_eq!(bz_take_tree(new), 2);
+        assert_eq!(unsafe { *bz_alloc(new) }, 10, "ancestor sizes dropped");
+        assert_eq!(unsafe { bz_cleanup_count(new) }, 0, "candidates are found again in the new tree");
+        // The handle the UI is still reading was not touched.
+        assert_eq!(bz_take_tree(h), 4);
+        assert_eq!(unsafe { *bz_alloc(h) }, total);
+        bz_free(new);
+
+        assert!(unsafe { bz_remove(std::ptr::null_mut(), gone.as_ptr(), 1) }.is_null());
+        assert!(unsafe { bz_remove(h, std::ptr::null(), 1) }.is_null());
+        let same = unsafe { bz_remove(h, std::ptr::null(), 0) };
+        assert_eq!(bz_take_tree(same), 4);
+        bz_free(same);
+        let unscanned = BzScan {
+            progress: Arc::new(Progress::default()),
+            done: Arc::new(AtomicBool::new(false)),
+            result: Arc::new(std::sync::Mutex::new(None)),
+            flat: None,
+        };
+        let u = Box::into_raw(Box::new(unscanned));
+        assert!(unsafe { bz_remove(u, gone.as_ptr(), 1) }.is_null(), "no tree yet");
+        bz_free(u);
     }
 
     #[test]

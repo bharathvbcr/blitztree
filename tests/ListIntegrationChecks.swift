@@ -228,12 +228,31 @@ struct ListIntegrationChecks {
         let trashModel = ScanModel()
         trashModel.tree = tree
         trashModel.scanRoot = root
+        let rootBefore = tree.alloc[0], filesBefore = tree.nFiles[0], countBefore = tree.count
+        let folder2Before = tree.alloc[node("folder2")]
+        trashModel.viewRoot = node("folder2")
+        trashModel.selection = node("folder2/one.bin")
         NodeMenu.moveToTrash(nodes: [node("Folder1"), inner, node("a.txt")], model: trashModel,
                              confirm: { _ in .alertFirstButtonReturn }, move: moveToBin, report: { reported = $0 })
         precondition(moved == [tree.path(node("Folder1")), tree.path(node("a.txt"))], "each target moved once: \(moved)")
         precondition(!fm.fileExists(atPath: root + "/Folder1") && !fm.fileExists(atPath: root + "/a.txt"))
         precondition(reported == nil, "nothing to report")
-        precondition(trashModel.tree == nil && trashModel.scanning, "one rescan after the batch")
+        await trashModel.settled()
+        // No rescan: a new tree without the moved items, the old one untouched.
+        let after = trashModel.tree!
+        precondition(!trashModel.scanning && after !== tree, "the tree is replaced, not rescanned")
+        precondition(after.node(at: root + "/Folder1") == nil && after.node(at: root + "/Folder1/inner/deep.bin") == nil
+                     && after.node(at: root + "/a.txt") == nil, "moved items are gone from the new tree")
+        precondition(after.node(at: root + "/B9.txt") != nil && after.node(at: root + "/folder2/one.bin") != nil, "the rest stays")
+        let freed = tree.alloc[node("Folder1")] + tree.alloc[node("a.txt")]
+        precondition(freed > 0 && after.alloc[0] == rootBefore - freed, "ancestors drop by the allocated bytes")
+        // Folder1 holds 4 files and 2 folders (itself and inner); plus a.txt.
+        precondition(after.nFiles[0] == filesBefore - 5 && after.count == countBefore - 7, "file and node counts drop")
+        precondition(tree.alloc[0] == rootBefore && tree.node(at: root + "/Folder1") != nil && tree.count == countBefore,
+                     "the tree handed out earlier is never edited in place")
+        precondition(trashModel.viewRoot == after.node(at: root + "/folder2")! && trashModel.selection == after.node(at: root + "/folder2/one.bin"),
+                     "zoom and selection follow their folders to the new numbering")
+        precondition(after.alloc[after.node(at: root + "/folder2")!] == folder2Before, "untouched folders keep their size")
         NodeMenu.moveToTrash(nodes: [0, node("b10.txt")], model: model, confirm: { _ in fatalError("the scan root never goes to the Trash") })
 
         // Failures are reported together, after moving what could be moved.
@@ -242,11 +261,18 @@ struct ListIntegrationChecks {
         let failingModel = ScanModel()
         failingModel.tree = tree
         failingModel.scanRoot = root
+        failingModel.viewRoot = node("folder2")
         NodeMenu.moveToTrash(nodes: [node("B9.txt"), node("b10.txt"), node("folder2")], model: failingModel,
                              confirm: { _ in .alertFirstButtonReturn },
                              move: { url in if url.lastPathComponent != "folder2" { throw Refused() }; try moveToBin(url) },
                              report: { reported = $0 })
-        precondition(moved == [tree.path(node("folder2"))] && failingModel.tree == nil, "what could move moved, then a rescan")
+        await failingModel.settled()
+        precondition(moved == [tree.path(node("folder2"))], "what could move moved")
+        let partial = failingModel.tree!
+        precondition(!failingModel.scanning && partial !== tree && partial.node(at: root + "/folder2") == nil
+                     && partial.node(at: root + "/B9.txt") != nil && partial.node(at: root + "/b10.txt") != nil,
+                     "only what moved leaves the map; what failed stays")
+        precondition(failingModel.viewRoot == 0, "a zoomed folder that went falls back to the nearest one left")
         precondition(reported?.messageText == "Couldn’t move 2 items to the Trash", reported?.messageText ?? "no report")
         precondition(reported!.informativeText.contains("\(tree.displayPath(node("B9.txt"))): refused"), reported!.informativeText)
         reported = nil

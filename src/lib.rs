@@ -1138,6 +1138,93 @@ fn link(t: &mut Tree, runs: &[(u32, u32, u32)]) {
     }
 }
 
+impl Tree {
+    /// A new tree without `nodes` and everything under them, for the UI to
+    /// swap in after files were deleted: this tree is read-only once handed
+    /// over, so a removal builds a copy instead of editing it. Each removed
+    /// subtree's bytes and files are taken off every ancestor, and the rest
+    /// is renumbered in the old order, which keeps parents before children
+    /// and each directory's children in one run. The root, indices out of
+    /// range and repeats are ignored; a node inside another chosen node
+    /// counts once, in the outer one's total.
+    ///
+    /// Hard links and clone families follow the scan's accounting: a stream's
+    /// bytes sit on one path, so removing the others subtracts nothing and
+    /// removing that one subtracts them all, even if another link survives
+    /// and still holds the data on disk. The scan does not keep which paths
+    /// share a stream, so the bytes are not handed to a survivor.
+    ///
+    /// `complete` and `errors` are kept as scanned: a skipped entry is still
+    /// skipped. Needs a finished tree (totals and child lists built).
+    pub fn without(&self, nodes: &[u32]) -> Tree {
+        let n = self.len();
+        let mut gone = vec![false; n];
+        for &c in nodes {
+            if c != 0 && (c as usize) < n {
+                gone[c as usize] = true;
+            }
+        }
+        // Parents come first, so one forward pass spreads "gone" down and
+        // finds the outermost chosen nodes.
+        let mut tops = Vec::new();
+        for i in 1..n {
+            let parent_gone = gone[self.parents[i] as usize];
+            if gone[i] {
+                if !parent_gone {
+                    tops.push(i);
+                }
+            } else if parent_gone {
+                gone[i] = true;
+            }
+        }
+
+        let (mut alloc, mut logical, mut n_files) = (self.alloc.clone(), self.logical.clone(), self.n_files.clone());
+        for &top in &tops {
+            let files = if self.is_dir(top) { self.n_files[top] } else { 1 };
+            let mut up = self.parents[top];
+            while up != NO_PARENT {
+                let a = up as usize;
+                alloc[a] = alloc[a].saturating_sub(self.alloc[top]);
+                logical[a] = logical[a].saturating_sub(self.logical[top]);
+                n_files[a] = n_files[a].saturating_sub(files);
+                up = self.parents[a];
+            }
+        }
+
+        fn kept<T: Copy>(v: &[T], gone: &[bool]) -> Vec<T> {
+            v.iter().zip(gone).filter(|(_, &g)| !g).map(|(&x, _)| x).collect()
+        }
+        let mut renumber = vec![NO_PARENT; n];
+        let mut next = 0u32;
+        for i in (0..n).filter(|&i| !gone[i]) {
+            renumber[i] = next;
+            next += 1;
+        }
+        let mut t = Tree {
+            parents: kept(&self.parents, &gone)
+                .into_iter()
+                .map(|p| if p == NO_PARENT { p } else { renumber[p as usize] })
+                .collect(),
+            alloc: kept(&alloc, &gone),
+            logical: kept(&logical, &gone),
+            n_files: kept(&n_files, &gone),
+            flags: kept(&self.flags, &gone),
+            complete: kept(&self.complete, &gone),
+            name_off: Vec::with_capacity(next as usize + 1),
+            errors: self.errors,
+            ..Default::default()
+        };
+        t.name_off.push(0);
+        for i in (0..n).filter(|&i| !gone[i]) {
+            t.name_blob.extend_from_slice(self.name_bytes(i));
+            t.name_off.push(t.name_blob.len() as u32);
+        }
+        let runs = runs(&t.parents);
+        link(&mut t, &runs);
+        t
+    }
+}
+
 /// Hand-built trees for tests.
 #[cfg(test)]
 impl Tree {
@@ -2005,6 +2092,160 @@ mod tests {
         let (total, matches) = t.search("*_target.bin", 10);
         assert_eq!(total, 1);
         assert_eq!(matches, vec![3]);
+    }
+
+    /// Every directory's totals equal its children's, child lists are sorted
+    /// and cover each non-root node once, and parents come first.
+    fn assert_consistent(t: &Tree) {
+        let n = t.len();
+        assert_eq!(t.child_off.len(), n + 1);
+        assert_eq!(t.name_off.len(), n + 1);
+        assert_eq!(t.children.len(), n.saturating_sub(1));
+        let mut seen = vec![0u32; n];
+        for i in 0..n {
+            assert!(i == 0 || (t.parents[i] as usize) < i, "parent before child at {i}");
+            let kids = t.kids(i);
+            assert!(kids.windows(2).all(|w| t.alloc[w[0] as usize] >= t.alloc[w[1] as usize]));
+            for &k in kids {
+                assert_eq!(t.parents[k as usize] as usize, i);
+                seen[k as usize] += 1;
+            }
+            if t.is_dir(i) {
+                let sum = |f: &dyn Fn(usize) -> u64| kids.iter().map(|&k| f(k as usize)).sum::<u64>();
+                assert_eq!(t.alloc[i], sum(&|k| t.alloc[k]), "alloc of {}", t.path(i).display());
+                assert_eq!(t.logical[i], sum(&|k| t.logical[k]), "logical of {}", t.path(i).display());
+                assert_eq!(
+                    t.n_files[i] as u64,
+                    sum(&|k| if t.is_dir(k) { t.n_files[k] as u64 } else { 1 }),
+                    "files of {}",
+                    t.path(i).display()
+                );
+            }
+        }
+        assert!(seen[1..].iter().all(|&c| c == 1));
+    }
+
+    /// root: a/{big 700, small 100}, b 64, c/d/{deep 30}
+    fn removal_fixture() -> Tree {
+        let mut t = Tree::with_root("/root");
+        let a = t.push("a", 0, 0, 0, true);
+        t.push("b", 0, 50, 64, false);
+        let c = t.push("c", 0, 0, 0, true);
+        t.push("big", a, 600, 700, false);
+        t.push("small", a, 90, 100, false);
+        let d = t.push("d", c, 0, 0, true);
+        t.push("deep", d, 20, 30, false);
+        finish(&mut t);
+        t
+    }
+
+    fn find(t: &Tree, path: &str) -> u32 {
+        (0..t.len()).find(|&i| t.path(i) == Path::new("/root").join(path)).unwrap() as u32
+    }
+
+    #[test]
+    fn removing_a_leaf_takes_its_bytes_off_every_ancestor() {
+        let t = removal_fixture();
+        assert_consistent(&t);
+        let r = t.without(&[find(&t, "c/d/deep")]);
+        assert_consistent(&r);
+        assert_eq!(r.len(), t.len() - 1);
+        assert!((0..r.len()).all(|i| r.name(i) != "deep"));
+        let (c, d) = (find(&r, "c") as usize, find(&r, "c/d") as usize);
+        assert_eq!((r.alloc[0], r.logical[0], r.n_files[0]), (t.alloc[0] - 30, t.logical[0] - 20, 3));
+        assert_eq!((r.alloc[c], r.alloc[d], r.n_files[d]), (0, 0, 0));
+        // The tree it was made from is untouched.
+        assert_eq!(t, removal_fixture());
+    }
+
+    #[test]
+    fn removing_a_folder_takes_its_whole_subtree_and_resorts_siblings() {
+        let t = removal_fixture();
+        // a (800) is the largest child of the root; without it b (64) leads.
+        assert_eq!(t.name(t.kids(0)[0] as usize), "a");
+        let r = t.without(&[find(&t, "a")]);
+        assert_consistent(&r);
+        assert_eq!(r.len(), t.len() - 3);
+        assert_eq!((r.alloc[0], r.logical[0], r.n_files[0]), (64 + 30, 50 + 20, 2));
+        assert_eq!(r.name(r.kids(0)[0] as usize), "b");
+        assert!((0..r.len()).all(|i| !["a", "big", "small"].contains(&r.name(i))));
+        // Names still line up with their nodes after the renumbering.
+        assert_eq!(r.path(find(&r, "c/d/deep") as usize), Path::new("/root/c/d/deep"));
+    }
+
+    #[test]
+    fn removal_ignores_the_root_repeats_strays_and_nodes_inside_a_removed_folder() {
+        let t = removal_fixture();
+        let a = find(&t, "a");
+        let r = t.without(&[0, a, a, find(&t, "a/big"), 999]);
+        assert_consistent(&r);
+        assert_eq!((r.len(), r.alloc[0]), (t.len() - 3, 94), "a's bytes leave once");
+        assert_eq!(t.without(&[0, 999]), t.without(&[]));
+        assert_eq!(t.without(&[a]).without(&[find(&t.without(&[a]), "b")]).alloc[0], 30);
+        // Everything removed leaves the empty root.
+        let all: Vec<u32> = t.kids(0).to_vec();
+        let r = t.without(&all);
+        assert_consistent(&r);
+        assert_eq!((r.len(), r.alloc[0], r.n_files[0], r.kids(0).len()), (1, 0, 0, 0));
+    }
+
+    /// Two names, one inode: the scan puts the bytes on the first path and
+    /// leaves 0 on the other. Removing either keeps every total consistent.
+    #[test]
+    fn removing_a_hard_linked_file_keeps_totals_consistent() {
+        let root = std::env::temp_dir().join(format!("bz-test-remove-link-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(root.join("sub")).unwrap();
+        std::fs::write(root.join("a-file"), vec![7u8; 1 << 20]).unwrap();
+        std::fs::hard_link(root.join("a-file"), root.join("sub/link")).unwrap();
+        std::fs::write(root.join("other"), vec![1u8; 4096]).unwrap();
+        let t = scan(&root, &Progress::default());
+        assert_consistent(&t);
+        let (owner, loser) = (node(&t, "a-file"), node(&t, "sub/link"));
+        assert!(t.alloc[owner] > 0 && t.alloc[loser] == 0, "bytes counted once, on the first path");
+        let total = t.alloc[0];
+
+        // The extra name costs nothing: the same result as rescanning without it.
+        let r = t.without(&[loser as u32]);
+        assert_consistent(&r);
+        assert_eq!((r.alloc[0], r.logical[0]), (total, t.logical[0]));
+        assert_eq!(r.n_files[0], t.n_files[0] - 1);
+        std::fs::remove_file(root.join("sub/link")).unwrap();
+        let rescanned = scan(&root, &Progress::default());
+        assert_eq!((r.alloc[0], r.n_files[0], r.len()), (rescanned.alloc[0], rescanned.n_files[0], rescanned.len()));
+
+        // The counted path goes: its bytes come off, once. (A surviving link
+        // is not re-credited; see `Tree::without`.)
+        let r = t.without(&[owner as u32]);
+        assert_consistent(&r);
+        assert_eq!(r.alloc[0], total - t.alloc[owner]);
+        assert_eq!(r.n_files[0], t.n_files[0] - 1);
+
+        // Both names, and the folder holding one of them.
+        let r = t.without(&[owner as u32, node(&t, "sub") as u32]);
+        assert_consistent(&r);
+        assert_eq!((r.alloc[0], r.n_files[0]), (total - t.alloc[owner], 1));
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn removal_matches_a_rescan_of_a_real_folder() {
+        let root = std::env::temp_dir().join(format!("bz-test-remove-scan-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(root.join("x/y")).unwrap();
+        std::fs::create_dir_all(root.join("empty")).unwrap();
+        std::fs::write(root.join("x/y/f1"), vec![1u8; 100_000]).unwrap();
+        std::fs::write(root.join("x/f2"), vec![2u8; 30_000]).unwrap();
+        std::fs::write(root.join("keep"), vec![3u8; 9_000]).unwrap();
+        let t = scan(&root, &Progress::default());
+        let r = t.without(&[node(&t, "x") as u32]);
+        std::fs::remove_dir_all(root.join("x")).unwrap();
+        let rescanned = scan(&root, &Progress::default());
+        let _ = std::fs::remove_dir_all(&root);
+        assert_consistent(&r);
+        assert_eq!(r.alloc, rescanned.alloc);
+        assert_eq!(r.n_files, rescanned.n_files);
+        assert_eq!(r.parents, rescanned.parents);
     }
 }
 
