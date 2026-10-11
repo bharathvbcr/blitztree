@@ -37,8 +37,9 @@ const char *bz_cleanup_kind_id(BzScan *h, uint64_t index);
 const char *bz_cleanup_section_id(BzScan *h, uint64_t index);
 // 0 safe, 1 review, 255 out of range.
 uint8_t bz_cleanup_group(BzScan *h, uint64_t index);
-// Check required before acting: "" none, else "cachedir_tag", "git_worktree"
-// or "recent_activity". Rust matches CACHEDIR.TAG and .git by name only.
+// Check required before acting: "" none, else "cachedir_tag", "git_worktree",
+// "recent_activity" or "agent_session". Rust matches CACHEDIR.TAG and .git by
+// name only.
 const char *bz_cleanup_verify(BzScan *h, uint64_t index);
 
 void bz_free(BzScan *h);

@@ -26,6 +26,23 @@ nonisolated enum CleanupVerify {
             return cacheTagReason(path)
         case "recent_activity":
             return recentActivityReason(path, cutoff: now.addingTimeInterval(-within), cap: entryCap)
+        case "agent_session":
+            // The path policy refuses a running session's folder at every
+            // capture; this repeats it so the verifier answers on its own.
+            if let reason = cacheTagReason(path) { return reason }
+            guard let temp = CleanupPathSafety.claudeTemp(path), temp.inScratchpad else {
+                return (String(localized: "Not in a Claude Code scratchpad: \(path)"),
+                        "Not in a Claude Code scratchpad: \(path)")
+            }
+            switch AgentSessions.claudeSessionState(temp) {
+            case .ended: return nil
+            case .running:
+                let error = CleanupPathError.sessionRunning(path)
+                return (error.errorDescription ?? error.englishDescription, error.englishDescription)
+            case .unknown:
+                let error = CleanupPathError.sessionUnverified(path)
+                return (error.errorDescription ?? error.englishDescription, error.englishDescription)
+            }
         case "git_worktree":
             do {
                 _ = try GitWorktree.verify(path, recentWithin: within, now: now)

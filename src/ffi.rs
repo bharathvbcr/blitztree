@@ -272,7 +272,8 @@ pub unsafe extern "C" fn bz_cleanup_group(h: *mut BzScan, index: u64) -> u8 {
     unsafe { cleanup_kind(h, index) }.map_or(u8::MAX, |k| k.group() as u8)
 }
 
-/// Verifier id ("cachedir_tag", "git_worktree", "recent_activity"), "" when
+/// Verifier id ("cachedir_tag", "git_worktree", "recent_activity",
+/// "agent_session"), "" when
 /// the rule needs none; static, NULL out of range.
 ///
 /// # Safety

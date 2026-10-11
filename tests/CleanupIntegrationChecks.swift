@@ -498,6 +498,35 @@ struct CleanupIntegrationChecks {
             "Inside %@, recognised by BlitzTree as %@",
             "BlitzTree won't remove this: %@",
 
+            /* Claude Code scratchpads */
+            "A Claude Code session that is still running uses this: %@",
+            "Couldn't check whether the Claude Code session using this has ended: %@",
+            "Not in a Claude Code scratchpad: %@",
+            "Only build output BlitzTree recognised can go from a Claude Code scratchpad",
+
+            /* MANVI as a planner */
+            "Runs with a local model or your own API key.",
+            "MANVI didn't start read-only, so BlitzTree stopped it.",
+            "Kept read-only: %@ was refused",
+            "Local model (Ollama, LM Studio, vLLM…)",
+            "MANVI ran out of steps before writing a plan.",
+            "MANVI's answer was cut off by its output limit.",
+            "MANVI stopped without an answer.",
+            "MANVI's answer didn't finish.",
+            "Choose a model for %@",
+            "No custom providers. The Clean Up panel uses Claude Code, Codex or MANVI when one is ready.",
+            "A cloud run sends folder paths and sizes from the scan, never file contents, to that provider. MANVI only plans: BlitzTree starts it read-only, where it can't write files or run commands, and does the cleanup itself.",
+            // "Local" is not listed: Spanish and French spell it the same.
+            "Using %@",
+            "%@ gave no plan; switching to %@",
+            "%@ — no key",
+            "Couldn't list Claude models: %@",
+            "no key",
+            "Uses the %@ your shell exports.",
+            "Uses the key in your Keychain item “%@”.",
+            "No key found. Export %@ in your shell profile, or save the key in your Keychain as “%@”.",
+            "Ready: %@",
+
             /* Directory list: Files column, several items to the Trash */
             "Files",
             "Move %lld items to Trash?",

@@ -86,7 +86,9 @@ These fields were added within schema version 1 (additive):
 - `verify`: `null`, or the check the panel performs before acting that this
   report did **not** perform: `cachedir_tag` (the tag's signature line),
   `git_worktree` (a clean, unlocked linked worktree, unused for 2 days, no
-  process inside) or `recent_activity` (nothing modified in the last 2 days).
+  process inside), `recent_activity` (nothing modified in the last 2 days) or
+  `agent_session` (the tag's signature line, and the Claude Code session that
+  owns the scratchpad is no longer running).
   The CLI matches markers by name and never reads file contents, so treat a
   non-null `verify` as an open question, not a result.
 - `contained_in`: `null`, or the path of the enclosing candidate. Only
@@ -133,7 +135,11 @@ Rules (`~` is `$HOME`; marker = an entry with that name beside the folder):
 - Coding agents (review unless noted): each `~/.claude/projects/<project>`,
   `~/.claude/file-history`, `~/.claude/debug` (safe); `~/.codex/sessions/<year>`,
   `~/.codex/archived_sessions`; each `~/.codex/worktrees/<child>` (a Git
-  worktree, or a leftover folder).
+  worktree, or a leftover folder); a `CACHEDIR.TAG` folder inside a Claude
+  Code session's temp scratchpad,
+  `/private/tmp/claude-<uid>/<project>/<session-id>/scratchpad/...` (safe,
+  `agent_scratch`, verified with `agent_session`). Any path inside a session's
+  temp folder is refused while that session runs, whatever rule matched it.
 - Git worktrees (review): a folder whose `.git` is a file, not a directory,
   when its parent is named `worktrees` or no ancestor in the scan has a `.git`
   entry (submodules always have one and are excluded).

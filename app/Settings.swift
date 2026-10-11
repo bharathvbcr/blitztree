@@ -14,6 +14,8 @@ struct ProvidersView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
+            ManviSettingsView()
+            Divider()
             HStack {
                 Text("Custom model providers")
                     .font(.headline)
@@ -26,7 +28,7 @@ struct ProvidersView: View {
                 .font(.callout)
                 .foregroundStyle(.secondary)
             if store.providers.isEmpty {
-                Text("No custom providers. The Clean Up panel uses Claude Code or Codex when one is installed and signed in.")
+                Text("No custom providers. The Clean Up panel uses Claude Code, Codex or MANVI when one is ready.")
                     .font(.callout)
                     .foregroundStyle(.secondary)
                     .padding(.vertical, 20)
@@ -51,6 +53,240 @@ struct ProvidersView: View {
         .frame(maxHeight: .infinity, alignment: .top)
         .sheet(item: $editing) { form in
             ProviderFormView(initial: form)
+        }
+    }
+}
+
+/// Where MANVI runs: a local model, a cloud provider of the user's choosing,
+/// or local first with the cloud taking over when the local model gives no
+/// plan. A cloud key comes from the login shell's export or a Keychain item;
+/// Claude models are listed live from Anthropic for the key in use.
+struct ManviSettingsView: View {
+    @State private var env: AgentEnvironment?
+    @State private var mode = "auto"
+    @State private var localModel = ""
+    @State private var cloud = "anthropic"
+    @State private var cloudModel = ""
+    @State private var models: [String] = []
+    @State private var scanning = false
+    @State private var ready: [Manvi.Route]?
+    /// Which cloud providers have a key, looked up off the main thread.
+    @State private var keyed: [String: Bool] = [:]
+    @State private var keychainItem = ""
+    @State private var workspace = ""
+    @State private var claudeModels: [Manvi.CloudModel] = []
+    @State private var fetching = false
+    @State private var modelError: String?
+    /// What was saved when Settings opened or last stored.
+    @State private var stored: Manvi.Choice?
+
+    private var manvi: InstalledAgent? { env?.agents.first { $0.kind == .manvi } }
+
+    private var choice: Manvi.Choice {
+        func trimmed(_ s: String) -> String? {
+            let t = s.trimmingCharacters(in: .whitespacesAndNewlines)
+            return t.isEmpty ? nil : t
+        }
+        return Manvi.Choice(mode: mode, localModel: trimmed(localModel), cloud: cloud, cloudModel: trimmed(cloudModel))
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("MANVI").font(.headline)
+            if let env {
+                if let manvi {
+                    form(manvi, env: env)
+                } else {
+                    Text("MANVI isn't installed. Install it from github.com/bharathvbcr/Manvi, then reopen Settings.")
+                        .font(.callout).foregroundStyle(.secondary)
+                }
+            } else {
+                ProgressView().controlSize(.small)
+            }
+        }
+        .task {
+            let found = await AgentLocator.find()
+            let (saved, keys) = await Task.detached {
+                (Manvi.Choice.load(shell: found.shell),
+                 Dictionary(uniqueKeysWithValues: Manvi.cloudProviders.map { ($0, Manvi.hasKey($0, shell: found.shell)) }))
+            }.value
+            stored = saved
+            mode = saved.mode
+            localModel = saved.localModel ?? ""
+            cloud = saved.cloud
+            cloudModel = saved.cloudModel ?? ""
+            keyed = keys
+            keychainItem = Manvi.keychainItem(saved.cloud)
+            workspace = Manvi.workspace(shell: found.shell) ?? ""
+            env = found
+            ready = found.manviRoutes
+            await scanModels()
+            await fetchClaudeModels()
+        }
+    }
+
+    @ViewBuilder private func form(_ manvi: InstalledAgent, env: AgentEnvironment) -> some View {
+        Picker("Run MANVI on", selection: $mode) {
+            Text("Cloud only").tag("cloud")
+            Text("Local model only").tag("local")
+            Text("Local first, cloud when the local model gives no plan").tag("auto")
+        }
+        .pickerStyle(.radioGroup)
+        .onChange(of: mode) { save() }
+        if mode != "local" { cloudSection(env) }
+        if mode != "cloud" {
+            HStack {
+                Picker("Local model", selection: $localModel) {
+                    Text("Choose a model").tag("")
+                    ForEach(models, id: \.self) { Text($0).tag($0) }
+                    if !localModel.isEmpty && !models.contains(localModel) { Text(localModel).tag(localModel) }
+                }
+                .frame(width: 380)
+                .onChange(of: localModel) { save() }
+                Button("Refresh") { Task { await scanModels() } }
+                    .disabled(scanning)
+            }
+            if models.isEmpty && !scanning {
+                Text("No local model server answered. Start Ollama or LM Studio, then refresh.")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+        }
+        if let ready {
+            Label(ready.isEmpty ? String(localized: "Not ready yet")
+                  : String(localized: "Ready: \(ready.map(\.label).joined(separator: ", then "))"),
+                  systemImage: ready.isEmpty ? "exclamationmark.circle" : "checkmark.circle")
+                .font(.caption)
+                .foregroundStyle(ready.isEmpty ? Color.orange : Color.secondary)
+        }
+        Text("A cloud run sends folder paths and sizes from the scan, never file contents, to that provider. MANVI only plans: BlitzTree starts it read-only, where it can't write files or run commands, and does the cleanup itself.")
+            .font(.caption).foregroundStyle(.secondary)
+            .fixedSize(horizontal: false, vertical: true)
+    }
+
+    @ViewBuilder private func cloudSection(_ env: AgentEnvironment) -> some View {
+        Picker("Cloud provider", selection: $cloud) {
+            ForEach(Manvi.cloudProviders, id: \.self) { provider in
+                Text(keyed[provider] == false
+                     ? String(localized: "\(Manvi.label(provider)) — no key")
+                     : Manvi.label(provider)).tag(provider)
+            }
+        }
+        .frame(width: 380)
+        .onChange(of: cloud) {
+            keychainItem = Manvi.keychainItem(cloud)
+            claudeModels = []
+            modelError = nil
+            save()
+            Task { await fetchClaudeModels() }
+        }
+        if cloud == "anthropic" {
+            HStack {
+                Picker("Claude model", selection: $cloudModel) {
+                    Text("MANVI's default").tag("")
+                    ForEach(claudeModels) { model in Text("\(model.name) (\(model.id))").tag(model.id) }
+                    if !cloudModel.isEmpty && !claudeModels.contains(where: { $0.id == cloudModel }) {
+                        Text(cloudModel).tag(cloudModel)
+                    }
+                }
+                .frame(width: 380)
+                .onChange(of: cloudModel) { save() }
+                Button("Refresh") { Task { await fetchClaudeModels() } }
+                    .disabled(fetching)
+            }
+            if let modelError {
+                Text(String(localized: "Couldn't list Claude models: \(modelError)"))
+                    .font(.caption).foregroundStyle(.orange)
+            }
+            TextField("Workspace ID", text: $workspace, prompt: Text("wrkspc_…"))
+                .frame(width: 380)
+                .onSubmit { saveKeySource() }
+            Text("Only for a key that isn't scoped to one workspace. Press Return to save.")
+                .font(.caption).foregroundStyle(.secondary)
+        } else {
+            TextField("Cloud model", text: $cloudModel, prompt: Text("MANVI's default"))
+                .frame(width: 380)
+                .onSubmit { save() }
+        }
+        TextField("Keychain item", text: $keychainItem, prompt: Text(Manvi.keychainItem(cloud, defaults: UserDefaults())))
+            .frame(width: 380)
+            .onSubmit { saveKeySource() }
+        let names = (Manvi.credentials[cloud] ?? []).joined(separator: " or ")
+        Text(Manvi.shellKey(cloud, shell: env.shell) != nil
+             ? String(localized: "Uses the \(names) your shell exports.")
+             : keyed[cloud] == true
+                ? String(localized: "Uses the key in your Keychain item “\(Manvi.keychainItem(cloud))”.")
+                : String(localized: "No key found. Export \(names) in your shell profile, or save the key in your Keychain as “\(Manvi.keychainItem(cloud))”."))
+            .font(.caption).foregroundStyle(keyed[cloud] == false ? Color.orange : Color.secondary)
+            .fixedSize(horizontal: false, vertical: true)
+    }
+
+    private func scanModels() async {
+        guard let env, let manvi, mode != "cloud" else { return }
+        scanning = true
+        models = await Manvi.localModels(path: manvi.path, envPath: env.path, shell: env.shell)
+        scanning = false
+    }
+
+    /// Anthropic's own list for the key in use; the Keychain is read here,
+    /// off the main thread, and the key goes only to Anthropic.
+    private func fetchClaudeModels() async {
+        guard let env, cloud == "anthropic", mode != "local" else { return }
+        fetching = true
+        defer { fetching = false }
+        let shell = env.shell
+        guard let key = await Task.detached(operation: { Manvi.key("anthropic", shell: shell) }).value else {
+            modelError = String(localized: "no key")
+            return
+        }
+        do {
+            claudeModels = try await Manvi.claudeModels(key: key, workspace: Manvi.workspace(shell: shell),
+                                                        baseURL: shell["ANTHROPIC_BASE_URL"])
+            modelError = nil
+        } catch {
+            modelError = error.localizedDescription
+        }
+    }
+
+    /// The Keychain item name and workspace, then everything that depends on them.
+    private func saveKeySource() {
+        guard let env else { return }
+        let item = keychainItem.trimmingCharacters(in: .whitespacesAndNewlines)
+        let itemKey = "bz.manviKeychain.\(cloud)"
+        if item.isEmpty || item == "\(cloud)-api-key" {
+            UserDefaults.standard.removeObject(forKey: itemKey)
+        } else {
+            UserDefaults.standard.set(item, forKey: itemKey)
+        }
+        let space = workspace.trimmingCharacters(in: .whitespacesAndNewlines)
+        if space.isEmpty { UserDefaults.standard.removeObject(forKey: Manvi.workspaceKey) }
+        else { UserDefaults.standard.set(space, forKey: Manvi.workspaceKey) }
+        let provider = cloud, shell = env.shell
+        Task {
+            keyed[provider] = await Task.detached { Manvi.hasKey(provider, shell: shell) }.value
+            announce()
+            await fetchClaudeModels()
+        }
+    }
+
+    /// Stores the choice, then re-checks readiness.
+    private func save() {
+        // Loading the saved values fires onChange too: nothing to store then.
+        guard let stored, choice != stored else { return }
+        choice.save()
+        self.stored = choice
+        announce()
+    }
+
+    /// Tells the window, and re-checks which routes are ready.
+    private func announce() {
+        guard let env, let manvi else { return }
+        NotificationCenter.default.post(name: Manvi.settingsChanged, object: nil)
+        Task {
+            let path = manvi.path, envPath = env.path, shell = env.shell
+            ready = await Task.detached {
+                Manvi.readyRoutes(path: path, envPath: envPath, shell: shell)
+            }.value
+            if mode != "cloud", models.isEmpty { await scanModels() }
         }
     }
 }
@@ -270,14 +506,15 @@ struct GeneralSettingsView: View {
                            ProviderStore.shared.providers.contains(where: { "provider:\($0.id)" == picked }) {
                             return picked
                         }
-                        if let picked, picked == "claude" || picked == "codex" { return picked }
+                        if let picked, AgentKind(rawValue: picked) != nil { return picked }
                         if let first = ProviderStore.shared.providers.first { return "provider:\(first.id)" }
                         return "claude"
                     },
                     set: { (value: String) in UserDefaults.standard.set(value, forKey: "bz.engine") }
                 )) {
-                    Text("Claude Code").tag("claude")
-                    Text("Codex").tag("codex")
+                    ForEach(AgentKind.allCases, id: \.self) { kind in
+                        Text(kind.name).tag(kind.rawValue)
+                    }
                     ForEach(ProviderStore.shared.providers) { provider in
                         Text("\(provider.displayName) (custom)").tag("provider:\(provider.id)")
                     }

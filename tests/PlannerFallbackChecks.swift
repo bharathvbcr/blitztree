@@ -32,6 +32,24 @@ struct PlannerFallbackChecks {
         defaults.set("codex", forKey: "bz.agent")
         precondition(model.preferredAgent?.kind == .codex, "the last-used agent wins over Claude Code")
 
+        // MANVI is a planner like the others once ready, and only when picked
+        // or when it is the only one ready.
+        model.agentEnv = AgentEnvironment(
+            agents: [InstalledAgent(kind: .manvi, path: "/bin/manvi", signedIn: true),
+                     InstalledAgent(kind: .claude, path: "/bin/claude", signedIn: true)],
+            loaded: true)
+        defaults.removeObject(forKey: "bz.agent")
+        defaults.set("manvi", forKey: "bz.engine")
+        precondition(model.preferredAgent?.kind == .manvi && model.plannerName == "MANVI", "MANVI when picked")
+        defaults.removeObject(forKey: "bz.engine")
+        precondition(model.preferredAgent?.kind == .claude, "Claude Code stays the default")
+        model.agentEnv = AgentEnvironment(
+            agents: [InstalledAgent(kind: .manvi, path: "/bin/manvi", signedIn: false)], loaded: true)
+        defaults.set("manvi", forKey: "bz.engine")
+        precondition(model.preferredAgent == nil, "a MANVI without a model is not a planner")
+        model.setUp(.manvi)
+        precondition(model.agentSetup == nil, "BlitzTree never installs MANVI")
+
         model.agentEnv = AgentEnvironment(loaded: true)
         defaults.set("provider:deleted-provider", forKey: "bz.engine")
         precondition(model.plannerName == nil, "with no ready agent there is still no planner")

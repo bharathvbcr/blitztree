@@ -30,6 +30,11 @@ nonisolated enum CleanupPathError: Error, LocalizedError, Equatable, Sendable {
     case gitPath(String)
     /// A linked git worktree that was recognised but did not pass verification.
     case gitWorktree(GitWorktreeError)
+    /// Inside the temp folder of a Claude Code session that is still running.
+    case sessionRunning(String)
+    /// Inside a Claude Code session's temp folder, and whether that session
+    /// still runs could not be read.
+    case sessionUnverified(String)
 
     var errorDescription: String? {
         switch self {
@@ -46,6 +51,8 @@ nonisolated enum CleanupPathError: Error, LocalizedError, Equatable, Sendable {
         case .tooBroad(let path): return String(localized: "Path is too broad to clean: \(path)")
         case .gitPath(let path): return String(localized: "Git metadata path is protected: \(path)")
         case .gitWorktree(let error): return error.errorDescription
+        case .sessionRunning(let path): return String(localized: "A Claude Code session that is still running uses this: \(path)")
+        case .sessionUnverified(let path): return String(localized: "Couldn't check whether the Claude Code session using this has ended: \(path)")
         }
     }
 
@@ -64,8 +71,27 @@ nonisolated enum CleanupPathError: Error, LocalizedError, Equatable, Sendable {
         case .tooBroad(let path): return "Path is too broad to clean: \(path)"
         case .gitPath(let path): return "Git metadata path is protected: \(path)"
         case .gitWorktree(let error): return error.englishDescription
+        case .sessionRunning(let path): return "A Claude Code session that is still running uses this: \(path)"
+        case .sessionUnverified(let path): return "Couldn't check whether the Claude Code session using this has ended: \(path)"
         }
     }
+}
+
+/// A path inside a Claude Code session's temp folder,
+/// `/private/tmp/claude-<uid>/<project>/<session id>/...`. The same shape the
+/// Rust rule `agent_scratch` recognises (`in_claude_scratchpad`).
+nonisolated struct ClaudeTemp: Sendable, Equatable {
+    /// `/private/tmp/claude-<uid>`, in the spelling the path used.
+    let root: String
+    let sessionID: String
+    /// `<root>/<project>/<session id>`.
+    let sessionFolder: String
+    /// How many components the path has below `<session>/scratchpad`; nil
+    /// when it is not inside the scratchpad.
+    let scratchDepth: Int?
+
+    /// A path strictly inside the scratchpad, where planners may clean.
+    var inScratchpad: Bool { (scratchDepth ?? 0) >= 1 }
 }
 
 /// A captured path plus the roots and identity against which it can be
@@ -298,7 +324,53 @@ nonisolated enum CleanupPathSafety {
         _ = homeObserved // The identity check is part of the root policy below.
         try protectedPolicy(path: target.path, identity: targetObserved.identity,
                             home: target.home, homeIdentity: homeObserved.identity)
+        try claudeTempPolicy(target.path)
         return try rejectGitPaths(target.path)
+    }
+
+    /// Parses a Claude Code temp path for the current user. Component names
+    /// compare case-insensitively: APFS would accept `/private/TMP/...` for
+    /// the same folder, and a different spelling must not skip the session
+    /// check. `/tmp` itself is a symlink, which `inspect` already refuses.
+    static func claudeTemp(_ path: String, uid: uid_t = getuid()) -> ClaudeTemp? {
+        guard let normalized = try? normalize(path) else { return nil }
+        var parts = Array((normalized as NSString).pathComponents.dropFirst())
+        var prefix = "/"
+        let data = Array((dataRoot as NSString).pathComponents.dropFirst())
+        if parts.count > data.count,
+           zip(parts, data).allSatisfy({ $0.caseInsensitiveCompare($1) == .orderedSame }) {
+            prefix = appendComponents(["/"] + parts.prefix(data.count))
+            parts.removeFirst(data.count)
+        }
+        func same(_ a: String, _ b: String) -> Bool { a.caseInsensitiveCompare(b) == .orderedSame }
+        guard parts.count >= 5, same(parts[0], "private"), same(parts[1], "tmp"),
+              same(parts[2], "claude-\(uid)"), !parts[3].isEmpty,
+              UUID(uuidString: parts[4]) != nil else { return nil }
+        let root = appendPath(prefix, Array(parts.prefix(3)))
+        let session = appendPath(root, [parts[3], parts[4]])
+        let depth = parts.count >= 6 && same(parts[5], "scratchpad") ? parts.count - 6 : nil
+        return ClaudeTemp(root: root, sessionID: parts[4].lowercased(), sessionFolder: session, scratchDepth: depth)
+    }
+
+    /// The root a planner's path is captured under. Plans stay inside the
+    /// home, with one exception: build output in a Claude Code session's temp
+    /// scratchpad is captured under that user's `claude-<uid>` temp folder,
+    /// where `claudeTempPolicy` refuses it while its session still runs.
+    static func plannerRoot(for path: String, home: String) -> String {
+        claudeTemp(path).flatMap { $0.inScratchpad ? $0.root : nil } ?? home
+    }
+
+    /// Inside a Claude Code session's temp folder only the scratchpad's
+    /// contents may go, and only once that session has stopped running.
+    /// Every cleanup path passes here, whatever rule or planner named it.
+    private static func claudeTempPolicy(_ path: String) throws {
+        guard let temp = claudeTemp(path) else { return }
+        guard temp.inScratchpad else { throw CleanupPathError.tooBroad(path) }
+        switch AgentSessions.claudeSessionState(temp) {
+        case .ended: return
+        case .running: throw CleanupPathError.sessionRunning(path)
+        case .unknown: throw CleanupPathError.sessionUnverified(path)
+        }
     }
 
     private static func isWithinRoot(

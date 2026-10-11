@@ -3,7 +3,7 @@ import Foundation
 import Observation
 import SwiftUI
 
-// "Clean up with Claude Code / Codex": the agent runs headless in the
+// "Clean up with Claude Code / Codex / MANVI": the agent runs headless in the
 // background, read-only, and only writes a plan from the scan BlitzTree
 // already has. Its steps and plan cards stream into the side panel as they
 // happen. BlitzTree then does the cleanup itself, behind its own guards:
@@ -12,9 +12,28 @@ import SwiftUI
 // MARK: - Agents on this Mac
 
 nonisolated enum AgentKind: String, CaseIterable, Sendable {
-    case claude, codex
+    case claude, codex, manvi
 
-    var name: String { self == .claude ? "Claude Code" : "Codex" }
+    var name: String {
+        switch self {
+        case .claude: "Claude Code"
+        case .codex: "Codex"
+        case .manvi: "MANVI"
+        }
+    }
+
+    /// BlitzTree can install it and sign it in with one click. MANVI is set
+    /// up by the user (a model in Settings), never downloaded by BlitzTree.
+    var installable: Bool { self != .manvi }
+
+    /// The one-line pitch of the setup offer.
+    var setupNote: String {
+        switch self {
+        case .claude: String(localized: "Needs a Claude Pro plan.")
+        case .codex: String(localized: "Free with a ChatGPT account.")
+        case .manvi: String(localized: "Runs with a local model or your own API key.")
+        }
+    }
 }
 
 nonisolated struct InstalledAgent: Identifiable, Hashable, Sendable {
@@ -33,6 +52,12 @@ nonisolated struct AgentEnvironment: Sendable {
     var path: String = "/usr/bin:/bin:/usr/sbin:/sbin"
     /// Set once the lookup has finished (an empty list then means none).
     var loaded = false
+    /// MANVI's credentials and model choices as the login shell exports them
+    /// (`Manvi.shellVariables` only). Passed to MANVI, never logged.
+    var shell: [String: String] = [:]
+    /// The ways MANVI can run right now, in the order a run tries them
+    /// (Settings' choice: local, then the cloud, in automatic mode).
+    var manviRoutes: [Manvi.Route] = []
 
     var ready: [InstalledAgent] { agents.filter(\.signedIn) }
 }
@@ -55,10 +80,17 @@ nonisolated enum AgentLocator {
             return env
         }
         let shell = ProcessInfo.processInfo.environment["SHELL"] ?? "/bin/zsh"
-        let text = run(shell, ["-lic", "echo \"BZPATH=$PATH\"; command -v claude; command -v codex"]).out
+        let lookups = AgentKind.allCases.map { "command -v \($0.rawValue)" }.joined(separator: "; ")
+        let text = run(shell, ["-lic", "echo \"BZPATH=$PATH\"; \(lookups); \(Manvi.shellProbe)"]).out
         var fromShell: [AgentKind: String] = [:]
         for line in text.split(separator: "\n").map(String.init) {
             if line.hasPrefix("BZPATH=") { env.path = String(line.dropFirst(7)) }
+            if line.hasPrefix("BZENV_"), let eq = line.firstIndex(of: "=") {
+                let name = String(line[line.index(line.startIndex, offsetBy: 6)..<eq])
+                let value = String(line[line.index(after: eq)...])
+                if Manvi.shellVariables.contains(name), !value.isEmpty { env.shell[name] = value }
+                continue
+            }
             guard line.hasPrefix("/") else { continue }
             for kind in AgentKind.allCases where line.hasSuffix("/\(kind.rawValue)") {
                 fromShell[kind] = fromShell[kind] ?? line
@@ -74,6 +106,9 @@ nonisolated enum AgentLocator {
                       "/opt/homebrew/bin/claude", "/usr/local/bin/claude"],
             .codex: ["\(home)/.nvm/current/bin/codex", "\(home)/.local/bin/codex", "/opt/homebrew/bin/codex",
                      "/usr/local/bin/codex", "\(home)/.bun/bin/codex"],
+            // MANVI's release install and `go install`.
+            .manvi: ["\(home)/.local/bin/manvi", "\(home)/go/bin/manvi", "/opt/homebrew/bin/manvi",
+                     "/usr/local/bin/manvi"],
         ]
         let found: [(AgentKind, String)] = AgentKind.allCases.compactMap { kind in
             let candidates = [fromShell[kind]].compactMap { $0 } + (fallbacks[kind] ?? [])
@@ -81,44 +116,69 @@ nonisolated enum AgentLocator {
             else { return nil }
             return (kind, path)
         }
-        // Both checks at once; each takes a fraction of a second.
+        // All checks at once; each takes a fraction of a second. MANVI is
+        // ready when at least one of its routes is.
         var signedIn = [Bool](repeating: false, count: found.count)
+        var routes: [Manvi.Route] = []
         let lock = NSLock()
+        let probe = env
         DispatchQueue.concurrentPerform(iterations: found.count) { i in
-            let ok = isSignedIn(found[i].0, path: found[i].1, envPath: env.path)
-            lock.lock(); signedIn[i] = ok; lock.unlock()
+            let (kind, path) = found[i]
+            let ready = kind == .manvi
+                ? Manvi.readyRoutes(path: path, envPath: probe.path, shell: probe.shell) : []
+            let ok = kind == .manvi ? !ready.isEmpty : isSignedIn(kind, path: path, envPath: probe.path)
+            lock.lock(); signedIn[i] = ok; if kind == .manvi { routes = ready }; lock.unlock()
         }
+        env.manviRoutes = routes
         env.agents = found.enumerated().map { i, pair in
             InstalledAgent(kind: pair.0, path: pair.1, signedIn: signedIn[i])
         }
         return env
     }
 
-    static func isSignedIn(_ kind: AgentKind, path: String, envPath: String) -> Bool {
+    /// Signed in, or for MANVI: a route it can run now (`Manvi.readyRoutes`).
+    static func isSignedIn(_ kind: AgentKind, path: String, envPath: String,
+                           shell: [String: String] = [:]) -> Bool {
         switch kind {
         case .claude:
             let r = run(path, ["auth", "status"], envPath: envPath)
             return r.out.contains("\"loggedIn\": true") || r.out.contains("\"loggedIn\":true")
         case .codex:
             return run(path, ["login", "status"], envPath: envPath).status == 0
+        case .manvi:
+            return !Manvi.readyRoutes(path: path, envPath: envPath, shell: shell).isEmpty
         }
     }
 
+    /// `environment` replaces the whole environment; `envPath` only PATH.
     static func run(_ exe: String, _ args: [String], envPath: String? = nil,
+                    environment: [String: String]? = nil, directory: URL? = nil, input: Data? = nil,
                     timeout: TimeInterval = 5) -> (out: String, status: Int32) {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: exe)
         process.arguments = args
-        if let envPath {
+        if let environment {
+            process.environment = environment
+        } else if let envPath {
             var environment = ProcessInfo.processInfo.environment
             environment["PATH"] = envPath
             process.environment = environment
         }
+        if let directory { process.currentDirectoryURL = directory }
         let out = Pipe()
         process.standardOutput = out
         process.standardError = FileHandle.nullDevice
-        process.standardInput = FileHandle.nullDevice
+        let stdin = input.map { _ in Pipe() }
+        process.standardInput = stdin ?? FileHandle.nullDevice
         guard (try? process.run()) != nil else { return ("", -1) }
+        if let stdin, let input {
+            // Closing stdin is what tells a stdio server to finish.
+            let writer = stdin.fileHandleForWriting
+            DispatchQueue.global(qos: .userInitiated).async {
+                try? writer.write(contentsOf: input)
+                try? writer.close()
+            }
+        }
         // Read while it runs: output past the pipe's 64 KB would stall it.
         let text = OutputText()
         let read = DispatchGroup()
@@ -161,12 +221,17 @@ final class AgentSetup {
     init(kind: AgentKind, installed: InstalledAgent?, envPath: String,
          done: @escaping (AgentEnvironment) -> Void) {
         self.kind = kind
+        guard let script = Self.installScript(kind) else {
+            // ScanModel.setUp sends MANVI to Settings instead; never reached.
+            step = .failed(String(localized: "Choose a model for MANVI in Settings → Model Providers."))
+            return
+        }
         step = installed == nil ? .installing : .signingIn
         Task {
             var path = installed?.path
             if path == nil {
                 let target = NSHomeDirectory() + "/.local/bin/" + kind.rawValue
-                if let error = await shell(Self.installScript(kind)) {
+                if let error = await shell(script) {
                     if !cancelled { step = .failed("Couldn't install \(kind.name): \(error)") }
                     return
                 }
@@ -207,8 +272,11 @@ final class AgentSetup {
         process?.terminate()
     }
 
-    private static func installScript(_ kind: AgentKind) -> String {
+    /// Nil for an agent BlitzTree does not install (`installable`).
+    private static func installScript(_ kind: AgentKind) -> String? {
         switch kind {
+        case .manvi:
+            return nil
         case .claude:
             // Anthropic's own installer: everything under ~/.local, no sudo.
             return "curl -fsSL https://claude.ai/install.sh | bash"
@@ -297,8 +365,10 @@ nonisolated struct AgentFocus: Sendable, Equatable {
                     : String(localized: "Inside \(item.display), recognised by BlitzTree as \(item.kind)"))
         } else {
             do {
-                _ = try CleanupPathSafety.capture(path: tree.path(node), root: home, home: home)
-                let recent = CleanupGuard.recentlyUsed(path)
+                let root = CleanupPathSafety.plannerRoot(for: tree.path(node), home: home)
+                _ = try CleanupPathSafety.capture(path: tree.path(node), root: root, home: home)
+                // A scratchpad's session check ran in the capture above.
+                let recent = root == home && CleanupGuard.recentlyUsed(path)
                 local = recent ? "In a project used in the last 2 days" : nil
                 localDisplay = recent ? String(localized: "In a project used in the last 2 days") : nil
             } catch let error as CleanupPathError {
@@ -472,21 +542,38 @@ final class AgentRun {
     private(set) var planSeconds: Double?
     private(set) var current: UUID?
 
+    /// MANVI only: the routes this run tries, in order. When one ends without
+    /// a single plan card (local server down, model too slow, no answer),
+    /// the next takes over with the same prompt.
+    let routes: [Manvi.Route]
+    private var routeIndex = 0
+    /// The route the MANVI process running now uses.
+    var route: Manvi.Route? { routes.indices.contains(routeIndex) ? routes[routeIndex] : nil }
+
     private var process: Process?
     private let scanRoot: String
     private let tree: Tree
     private let onFinish: () -> Void
     private var preparationTask: Task<Void, Never>?
+    private let env: AgentEnvironment
+    /// The prompt, kept for a switch to the next route.
+    private var input = ""
+    /// Bumped by every launch and by cancel; a process's events and its end
+    /// only count while it is still the current launch.
+    private var launch = 0
+    private var cancelled = false
 
     init(agent: InstalledAgent?, env: AgentEnvironment, tree: Tree, scanRoot: String,
          known: [CleanupItem], provider: LLMProvider? = nil, focus: AgentFocus? = nil,
-         onFinish: @escaping () -> Void) {
+         routes: [Manvi.Route] = [], onFinish: @escaping () -> Void) {
         self.agent = agent
         self.provider = provider
         self.focus = focus
         self.scanRoot = scanRoot
         self.tree = tree
         self.onFinish = onFinish
+        self.env = env
+        self.routes = agent?.kind == .manvi ? routes : []
         let running = NSWorkspace.shared.runningApplications
             .filter { $0.activationPolicy == .regular }
             .compactMap { app in app.localizedName.map { "\($0) (\(app.bundleIdentifier ?? "?"))" } }
@@ -500,8 +587,9 @@ final class AgentRun {
             // must not launch an agent after cancellation.
             guard !Task.isCancelled, let self else { return }
             preparationTask = nil
+            self.input = input
             step(asking)
-            start(input: input, env: env)
+            start()
         }
     }
 
@@ -541,6 +629,8 @@ final class AgentRun {
     }
 
     func cancel() {
+        cancelled = true
+        launch += 1
         preparationTask?.cancel()
         preparationTask = nil
         process?.terminate()
@@ -555,9 +645,19 @@ final class AgentRun {
 
     // MARK: Agent process
 
-    private func start(input: String, env: AgentEnvironment) {
+    private func start() {
         if let provider { startProvider(input: input, provider: provider); return }
-        guard let agent else { return }
+        guard let agent, !cancelled else { return }
+        if agent.kind == .manvi {
+            guard let route else {
+                phase = .failed(String(localized: "Choose a model for MANVI in Settings → Model Providers."))
+                return
+            }
+            // Which side answers, local or cloud, is part of what the user sees.
+            step(String(localized: "Using \(route.label)"))
+        }
+        launch += 1
+        let generation = launch
         let folder = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
             .appendingPathComponent("BlitzTree", isDirectory: true)
         try? FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
@@ -584,6 +684,16 @@ final class AgentRun {
             // The app server, not `codex exec`: only it streams the answer as
             // it is written, so cards can appear one by one.
             process.arguments = ["app-server"]
+        case .manvi:
+            // `manvi serve` never calls a model; `run --json` streams the
+            // turn as NDJSON events. Strict posture, empty folder, pinned
+            // environment: see Manvi.environment.
+            guard let route else { return }
+            process.arguments = Manvi.runArguments(fallbackAfter: routeIndex + 1 < routes.count)
+            process.currentDirectoryURL = Manvi.prepared().work
+            process.environment = Manvi.environment(base: ProcessInfo.processInfo.environment,
+                                                    path: env.path, shell: env.shell, route: route)
+            Manvi.pruneSessions()
         }
 
         let stdin = Pipe(), stdout = Pipe(), stderr = Pipe()
@@ -596,7 +706,12 @@ final class AgentRun {
         let reader = AgentStreamReader(kind: agent.kind, prompt: input, folder: folder.path,
                                        write: { data in try? writer.write(contentsOf: data) },
                                        done: { [weak process] in process?.terminate() }) { [weak self] event in
-            DispatchQueue.main.async { MainActor.assumeIsolated { self?.handle(event) } }
+            DispatchQueue.main.async {
+                MainActor.assumeIsolated {
+                    guard let self, self.launch == generation else { return }
+                    self.handle(event)
+                }
+            }
         }
         // The run ends once the process has exited and all its output is read.
         let ended = DispatchGroup()
@@ -619,7 +734,10 @@ final class AgentRun {
         ended.notify(queue: .main) { [weak self] in
             let status = process.terminationStatus
             let tail = errTail.last
-            MainActor.assumeIsolated { self?.processEnded(status: status, stderr: tail) }
+            MainActor.assumeIsolated {
+                guard let self, self.launch == generation else { return }
+                self.processEnded(status: status, stderr: tail)
+            }
         }
         do {
             try process.run()
@@ -628,8 +746,8 @@ final class AgentRun {
             return
         }
         self.process = process
-        if agent.kind == .claude {
-            let data = Data(input.utf8)
+        if agent.kind != .codex {
+            let data = Data((agent.kind == .manvi ? input + Manvi.promptSuffix : input).utf8)
             DispatchQueue.global(qos: .userInitiated).async {
                 try? writer.write(contentsOf: data)
                 try? writer.close()
@@ -710,11 +828,20 @@ final class AgentRun {
 
     private func processEnded(status: Int32, stderr: String) {
         process = nil
-        guard phase == .thinking else { return }
+        guard phase == .thinking, !cancelled else { return }
         if !items.isEmpty {
             finishPlanning()
+        } else if routeIndex + 1 < routes.count {
+            // No card from this route: the next one gets the same prompt.
+            let failed = routes[routeIndex]
+            NSLog("[bz] MANVI on \(failed.label) gave no plan (exit \(status)): \(stderr)")
+            routeIndex += 1
+            step(String(localized: "\(failed.label) gave no plan; switching to \(routes[routeIndex].label)"))
+            start()
         } else if status != 0 {
-            phase = .failed(stderr.isEmpty ? "\(displayName) stopped (exit \(status))." : stderr)
+            // MANVI's exit codes 2-5 each name why the turn ended.
+            let known = agent?.kind == .manvi ? Manvi.exitMessage(status) : nil
+            phase = .failed(known ?? (stderr.isEmpty ? "\(displayName) stopped (exit \(status))." : stderr))
         } else {
             phase = .failed("\(displayName) didn't return a plan.")
         }
@@ -903,7 +1030,12 @@ nonisolated final class ErrTail: @unchecked Sendable {
     var last: String {
         lock.lock(); defer { lock.unlock() }
         return text.split(separator: "\n").map(String.init)
-            .last(where: { !$0.contains("rmcp::") && !$0.trimmingCharacters(in: .whitespaces).isEmpty }) ?? ""
+            .last(where: { line in
+                // Codex's MCP client noise, and MANVI's "session <id> saved"
+                // notes, which it prints on every run, failed or not.
+                !line.contains("rmcp::") && !line.hasPrefix("manvi: session ")
+                    && !line.trimmingCharacters(in: .whitespaces).isEmpty
+            }) ?? ""
     }
 }
 
@@ -932,6 +1064,11 @@ nonisolated final class AgentStreamReader: @unchecked Sendable {
     private var searchedBytes = 0
     private var parser = PartialPlanParser()
     private var inPlan = false
+    /// MANVI: the answer text since its last tool call. It has no
+    /// final-answer event; the text after the last tool call is the answer.
+    private var answer = ""
+    /// MANVI: set once `session.start` confirmed the strict posture.
+    private var readOnly = false
 
     init(kind: AgentKind, prompt: String, folder: String, write: @escaping @Sendable (Data) -> Void,
          done: @escaping @Sendable () -> Void, emit: @escaping @Sendable (Event) -> Void) {
@@ -965,7 +1102,11 @@ nonisolated final class AgentStreamReader: @unchecked Sendable {
             lineStart = pending.index(after: nl)
             searchStart = lineStart
             guard let obj = try? JSONSerialization.jsonObject(with: line) as? [String: Any] else { continue }
-            kind == .claude ? claude(obj) : codex(obj)
+            switch kind {
+            case .claude: claude(obj)
+            case .codex: codex(obj)
+            case .manvi: manvi(obj)
+            }
         }
         // Consume a batch once, after its line slices are gone. Removing the
         // prefix per record copied the remaining Data for every line.
@@ -1075,6 +1216,74 @@ nonisolated final class AgentStreamReader: @unchecked Sendable {
             }
         default:
             break
+        }
+    }
+
+    /// `manvi run --json`: one `ui.Event` per line, told apart by `kind`.
+    private func manvi(_ e: [String: Any]) {
+        let kind = e["kind"] as? String
+        // Nothing counts before MANVI says it runs read-only: its write and
+        // shell tools are refused only in the strict posture.
+        guard readOnly || kind == "session.start" else { return }
+        switch kind {
+        case "session.start":
+            guard e["posture"] as? String == "strict" else {
+                emit(.failed(String(localized: "MANVI didn't start read-only, so BlitzTree stopped it.")))
+                done()
+                return
+            }
+            readOnly = true
+        case "assistant.reasoning":
+            if !inPlan { emit(.activity(String(localized: "Thinking"))) }
+        case "assistant.text":
+            guard let delta = e["text"] as? String else { return }
+            answer += delta
+            if !inPlan, delta.contains("{") || parser.hasInput {
+                inPlan = true
+                emit(.activity(String(localized: "Writing the plan")))
+            }
+            for item in parser.append(delta) { emit(.item(item)) }
+        case "tool.start":
+            // Text before a tool call was not the answer; start over.
+            if parser.hasInput { emit(.restart) }
+            parser = PartialPlanParser()
+            answer = ""
+            inPlan = false
+            emit(.activity(Self.describe(manviTool: e["tool"] as? String ?? "", arguments: e["arguments"])))
+        case "policy.decision":
+            // The strict posture at work: a write or command was refused.
+            if let tool = e["tool"] as? String, (e["text"] as? String)?.contains("\"allowed\":false") == true {
+                emit(.activity(String(localized: "Kept read-only: \(Self.manviToolName(tool)) was refused")))
+            }
+        case "turn.end":
+            if let plan = PlanJSON.decode(text: answer) {
+                emit(.plan(summary: plan.0, items: plan.1))
+            }
+        default:
+            break
+        }
+    }
+
+    /// "devcouncil_read_file" → "read_file".
+    static func manviToolName(_ tool: String) -> String {
+        tool.hasPrefix("devcouncil_") ? String(tool.dropFirst("devcouncil_".count)) : tool
+    }
+
+    /// MANVI's read tools, in the same plain words as the CLI agents' steps.
+    static func describe(manviTool tool: String, arguments: Any?) -> String {
+        let args = (arguments as? [String: Any])
+            ?? (arguments as? String).flatMap { try? JSONSerialization.jsonObject(with: Data($0.utf8)) as? [String: Any] }
+            ?? [:]
+        let name = ((args["path"] as? String) ?? "").split(separator: "/").last.map(String.init) ?? ""
+        switch manviToolName(tool) {
+        case "read_file":
+            return name.isEmpty ? String(localized: "Looking around") : String(localized: "Reading \(name)")
+        case "list_dir":
+            return name.isEmpty ? String(localized: "Looking around") : String(localized: "Looking in \(name)")
+        case "grep", "find_files":
+            return String(localized: "Looking around")
+        default:
+            return String(localized: "Checking \(manviToolName(tool))")
         }
     }
 
@@ -1192,6 +1401,17 @@ nonisolated enum AgentPrompt {
             - items, largest first, at most 12. Each item:
             """
         }
+        // Outside the home, plans may only name a Claude Code scratchpad's
+        // recognised build output; say so only when the scan has some.
+        let scratchRoots = Set(rebuildable.compactMap { item in
+            CleanupPathSafety.claudeTemp(item.path).flatMap { $0.inScratchpad ? $0.root : nil }
+        })
+        let scratchNote = scratchRoots.isEmpty ? "" : """
+         Build output in Claude Code scratchpads \
+        (\(scratchRoots.sorted().joined(separator: ", "))/<project>/<session>/scratchpad/...) that \
+        BlitzTree recognised below is fine too: action "trash", group "safe", one item per project \
+        folder; BlitzTree keeps the ones whose session is still running.
+        """
         md += "\n" + """
           - title: 2-5 plain words ("uv package cache", "Old Playwright browsers").
           - detail: why it is safe, under 90 characters, plain English.
@@ -1212,7 +1432,7 @@ nonisolated enum AgentPrompt {
         Messages, iCloud Drive (~/Library/Mobile Documents), keychains, ~/.ssh, dotfile configs, source \
         code, git repositories themselves, or files of the running apps below. Build output inside \
         projects (node_modules, target, .next, dist, DerivedData) is fine, and so are the Codex chat \
-        folders and Xcode simulators listed at the end.
+        folders and Xcode simulators listed at the end.\(scratchNote)
 
         ## Apps running now
         \(running.joined(separator: ", "))

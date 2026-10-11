@@ -94,6 +94,7 @@ const ROOTS: &[(&str, Option<&str>, Option<&str>)] = &[
     ("/x/.bun", None, None),
     ("/x/.bun/install", None, None),
     ("/r/.claude/worktrees", None, None),
+    ("/private/tmp/claude-501/-p/0f6d064c-a0ba-4772-8808-62158119c071/scratchpad", None, None),
 ];
 
 fn random_paths(rng: &mut Rng, home_rel: Option<&str>) -> (Vec<String>, Vec<String>) {

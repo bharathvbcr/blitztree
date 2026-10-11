@@ -92,7 +92,10 @@ nonisolated enum CleanupGuard {
     /// in this scan (a directory when `folderCache`), not belong to a running
     /// app and not be in recent use. Refused paths are counted, not kept; the
     /// card is blocked only when none are left. It starts ticked only when
-    /// something is kept and the model put it in the "safe" group.
+    /// something is kept and the model put it in the "safe" group. A path in
+    /// a Claude Code scratchpad must also be, or be inside, a folder the scan
+    /// itself recognised as cleanable (the session check stands in for the
+    /// recent-use one: a scratchpad is new by nature).
     @MainActor
     static func vet(asked: [String], tree: Tree, home: String, folderCache: Bool, specGroup: String) -> Vetting {
         var kept: [CleanupTarget] = []
@@ -100,20 +103,26 @@ nonisolated enum CleanupGuard {
         var firstExclusion: String?
         var reason: String?
         if asked.isEmpty { reason = String(localized: "Nothing to remove") }
+        let candidates = Set((0..<tree.cleanupCount).map { Int(tree.cleanupNodes[$0]) })
         for path in asked {
             do {
-                let target = try CleanupPathSafety.capture(path: path, root: home, home: home)
+                let root = CleanupPathSafety.plannerRoot(for: path, home: home)
+                let target = try CleanupPathSafety.capture(path: path, root: root, home: home)
                 guard let node = tree.node(at: target.path), node != 0 else {
                     throw CleanupOperations.failure(String(localized: "Path is not an item in this scan"))
                 }
                 if folderCache && !tree.isDir(node) {
                     throw CleanupOperations.failure(String(localized: "The cache path is not a scanned directory"))
                 }
+                let scratch = root != home
+                if scratch, !tree.ancestry(node).contains(where: candidates.contains) {
+                    throw CleanupOperations.failure(String(localized: "Only build output BlitzTree recognised can go from a Claude Code scratchpad"))
+                }
                 if codexChat(target.path) == nil,
                    let app = runningOwner(of: [target.path]) {
                     throw CleanupOperations.failure(String(localized: "Quit \(app) to clean this"))
                 }
-                if recentlyUsed(target.path) {
+                if !scratch, recentlyUsed(target.path) {
                     throw CleanupOperations.failure(codexChat(target.path) != nil
                         ? String(localized: "A Codex chat you used in the last 2 days") : String(localized: "In a project used in the last 2 days"))
                 }

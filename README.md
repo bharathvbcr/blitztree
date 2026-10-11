@@ -22,6 +22,7 @@ Signed with a Developer ID and notarized by Apple, so it opens like any other ap
 - Zoom into folders, or use the right-click menu across the outline list, treemap, and rings to reveal in Finder, copy path (⌥⌘C), move to Trash (⌘⌫, with confirmation), or choose "Ask Claude Code If It's Safe to Clean" (or your planner) to plan for that item alone
 - Clean Up panel: finds folders that are safe to delete (caches, `node_modules`, Rust `target`, Xcode DerivedData and more) so you can trash them in one go
 - AI cleanup: click "Clean up with Claude Code" (or Codex) and your own agent plans what can go, live in the panel, while the treemap lights up those folders. BlitzTree does the cleanup itself, in two steps you approve: move to Trash, then delete for good. No agent installed? One click sets up Claude Code (or Codex, free with a ChatGPT account)
+- Or plan with [MANVI](https://github.com/bharathvbcr/Manvi) on the cloud (your Anthropic, Gemini or xAI key, from your shell or Keychain, with Claude models listed live) or a local model (Ollama, LM Studio, vLLM…), or local first with the cloud as fallback: Settings → Model Providers. BlitzTree starts it read-only, in its strict posture
 - Or clean up with any model: Settings → Model Providers connects any OpenAI- or Anthropic-compatible endpoint — a relay, a self-hosted server (Ollama, LM Studio) or a gateway — by its base URL, protocol and key
 - English, Türkçe, Deutsch, Français, Español, 简体中文 and 日本語, picked in Settings; the agent prompt stays English while the UI follows you
 - Live progress while scanning, and an optional free-space block
@@ -50,7 +51,7 @@ Sizes are allocated bytes, as `du` counts them, except that shared data counts o
 
 The agent runs headless and read-only: it only writes a plan from the scan BlitzTree already has. BlitzTree then acts on it behind its own checks, whatever the plan says:
 
-- Only paths inside your home folder, never Documents, Desktop, Photos, iCloud Drive, Mail, keychains or `~/.ssh` (build output such as `node_modules` inside them is allowed, and so are the Codex app's chat folders in `~/Documents/Codex`), never a git repository or a whole folder like `~/Library/Caches`
+- Only paths inside your home folder, never Documents, Desktop, Photos, iCloud Drive, Mail, keychains or `~/.ssh` (build output such as `node_modules` inside them is allowed, and so are the Codex app's chat folders in `~/Documents/Codex`), never a git repository or a whole folder like `~/Library/Caches`. The one place outside the home: build output BlitzTree recognised inside a Claude Code session's temp scratchpad (`/private/tmp/claude-<uid>/…/scratchpad/…`), once that session has stopped
 - Only each tool's own cache cleanup commands (`uv cache clean`, `brew cleanup`, `npm cache clean` and similar, plus `xcrun simctl` for Xcode simulator runtimes and device data), with no shell syntax
 - Asking about a single item limits suggestions to that item: plan cards and commands outside the asked item are blocked
 - Codex chats and projects you used in the last 2 days (including ones Claude Code worked in) are left alone

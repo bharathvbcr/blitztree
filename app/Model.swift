@@ -405,14 +405,16 @@ final class ScanModel {
         withAnimation(.snappy) { agentRun = run }
     }
 
-    func startAgent(_ agent: InstalledAgent, focus: AgentFocus? = nil) {
+    /// `routes`: MANVI only — one route when the menu picked local or cloud
+    /// for this run; nil for Settings' choice (local, then cloud, in auto).
+    func startAgent(_ agent: InstalledAgent, focus: AgentFocus? = nil, routes: [Manvi.Route]? = nil) {
         guard let tree, canStartRun else { return }
         UserDefaults.standard.set(agent.kind.rawValue, forKey: "bz.engine")
         UserDefaults.standard.set(agent.kind.rawValue, forKey: "bz.agent")
         pendingFocus = nil
         agentRun?.cancel()
         let run = AgentRun(agent: agent, env: agentEnv, tree: tree, scanRoot: scanRoot, known: cleanup,
-                           focus: focus) { [weak self] in
+                           focus: focus, routes: routes ?? agentEnv.manviRoutes) { [weak self] in
             guard let self, !self.scanning else { return }
             self.startScan()
         }
@@ -441,13 +443,16 @@ final class ScanModel {
         let focus = refocus(run.focus)
         if run.focus != nil && focus == nil { return }
         if let provider = run.provider { startProvider(provider, focus: focus) }
-        else if let agent = run.agent { startAgent(agent, focus: focus) }
+        else if let agent = run.agent { startAgent(agent, focus: focus, routes: run.routes.isEmpty ? nil : run.routes) }
     }
 
     /// Bumped to ask the window to open the Clean Up panel.
     var panelRequests = 0
 
+    /// Installs and signs in Claude Code or Codex. MANVI is not installed by
+    /// BlitzTree: the panel links to Settings for its model instead.
     func setUp(_ kind: AgentKind) {
+        guard kind.installable else { return }
         agentSetup?.cancel()
         let installed = agentEnv.agents.first { $0.kind == kind }
         agentSetup = AgentSetup(kind: kind, installed: installed, envPath: agentEnv.path) { [weak self] env in

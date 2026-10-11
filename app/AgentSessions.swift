@@ -65,6 +65,59 @@ nonisolated enum AgentSessions {
         }
     }
 
+    enum SessionState: Equatable { case running, ended, unknown }
+
+    /// Claude Code's registry of running sessions: one `<pid>.json` per
+    /// process in $CLAUDE_CONFIG_DIR/sessions, naming its `sessionId`.
+    static var claudeRegistry: URL {
+        let home = ProcessInfo.processInfo.environment["CLAUDE_CONFIG_DIR"] ?? NSHomeDirectory() + "/.claude"
+        return URL(fileURLWithPath: home + "/sessions")
+    }
+
+    /// How recently a session's temp folder may have been written to and
+    /// still count as ended: a headless or crashed-but-alive run that never
+    /// registered itself is still writing.
+    static let quietPeriod: TimeInterval = 15 * 60
+
+    /// Whether the Claude Code session owning `temp` still runs: a registry
+    /// entry for its id whose process is alive, or a write inside its session
+    /// or scratchpad folder within `quietPeriod`. Fails closed: a registry
+    /// that cannot be listed, or an entry that cannot be read, is `.unknown`.
+    static func claudeSessionState(_ temp: ClaudeTemp, registry: URL = claudeRegistry,
+                                   now: Date = Date()) -> SessionState {
+        let fm = FileManager.default
+        guard let entries = try? fm.contentsOfDirectory(atPath: registry.path) else { return .unknown }
+        for name in entries where name.hasSuffix(".json") {
+            guard let data = fm.contents(atPath: registry.appendingPathComponent(name).path),
+                  let entry = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+                return .unknown
+            }
+            guard (entry["sessionId"] as? String)?.lowercased() == temp.sessionID else { continue }
+            let pid = (entry["pid"] as? Int).flatMap { pid_t(exactly: $0) }
+                ?? pid_t(name.split(separator: ".").first ?? "")
+            guard let pid, pid > 0 else { return .unknown }
+            // EPERM: the process exists but belongs to someone else.
+            if kill(pid, 0) == 0 || errno == EPERM { return .running }
+        }
+        let cutoff = now.addingTimeInterval(-quietPeriod)
+        let scratch = (temp.sessionFolder as NSString).appendingPathComponent("scratchpad")
+        // The entries only, never the two folders holding them: cleaning one
+        // folder out of a scratchpad changes the scratchpad's own date, and
+        // the next folder of that ended session must not read as in use. A
+        // new file still shows by its own date; a running session that
+        // registered is caught above.
+        var stamps: [String] = []
+        for folder in [temp.sessionFolder, scratch] {
+            stamps += ((try? fm.contentsOfDirectory(atPath: folder)) ?? [])
+                .filter { !(folder == temp.sessionFolder && $0 == "scratchpad") }
+                .map { (folder as NSString).appendingPathComponent($0) }
+        }
+        let recent = stamps.contains { path in
+            ((try? fm.attributesOfItem(atPath: path))?[.modificationDate] as? Date).map { $0 > cutoff } ?? false
+        }
+        return recent ? .running : .ended
+    }
+
     private static func claudeFolderKey(_ path: String) -> String {
         String(String.UnicodeScalarView(path.lowercased().unicodeScalars.map {
             CharacterSet.alphanumerics.contains($0) && $0.isASCII ? $0 : "-"

@@ -81,6 +81,7 @@ impl Section {
 const CACHEDIR_TAG: &str = "cachedir_tag\0";
 const GIT_WORKTREE: &str = "git_worktree\0";
 const RECENT_ACTIVITY: &str = "recent_activity\0";
+const AGENT_SESSION: &str = "agent_session\0";
 
 macro_rules! kinds {
     ($($kind:ident => $id:literal, $group:ident, $section:ident, $verify:expr, $description:literal;)*) => {
@@ -154,6 +155,8 @@ kinds! {
     AgentLogs => "agent_logs", Safe, Agents, None, "Claude Code debug logs";
     CodexSessions => "codex_sessions", Review, Agents, Some(RECENT_ACTIVITY), "Codex session history";
     AgentWorktreeLeftover => "agent_worktree_leftover", Review, Agents, Some(RECENT_ACTIVITY), "Leftover Codex worktree folder (not a Git worktree)";
+    // A CACHEDIR.TAG folder in a Claude Code session's temp scratchpad.
+    AgentScratch => "agent_scratch", Safe, Agents, Some(AGENT_SESSION), "Build output in a Claude Code scratchpad";
     // Emitted and descended (I3): its own build output is listed separately.
     GitWorktree => "git_worktree", Review, Worktrees, Some(GIT_WORKTREE), "Linked Git worktree";
 }
@@ -174,8 +177,10 @@ impl Kind {
     }
 
     /// The check Swift must pass before acting: "cachedir_tag" (the CLI and
-    /// this module match the tag by name only), "git_worktree" or
-    /// "recent_activity". `None` when the rule needs no extra check.
+    /// this module match the tag by name only), "git_worktree",
+    /// "recent_activity" or "agent_session" (the tag, and the Claude Code
+    /// session owning the scratchpad is not running). `None` when the rule
+    /// needs no extra check.
     pub fn verify(self) -> Option<&'static str> {
         self.verify_nul().map(trim_nul)
     }
@@ -606,10 +611,39 @@ fn plain_rule(t: &Tree, i: usize, in_repo: bool, anchors: &Anchors) -> Outcome {
         // `worktrees` (e.g. <repo>/.claude/worktrees/x) may too.
         Emit(Kind::GitWorktree)
     } else if m.cachedir_tag {
-        Emit(Kind::TaggedCache)
+        Emit(if in_claude_scratchpad(t, i) { Kind::AgentScratch } else { Kind::TaggedCache })
     } else {
         Outcome::Pass { git: m.git }
     }
+}
+
+/// Whether `i` lies inside a Claude Code session's temp scratchpad:
+/// `/private/tmp/claude-<uid>/<project>/<session uuid>/scratchpad/...`, also
+/// spelled under /System/Volumes/Data. Name shape only; Swift parses the same
+/// shape (CleanupPathSafety.claudeScratch) and checks the session is over.
+fn in_claude_scratchpad(t: &Tree, i: usize) -> bool {
+    let names: Vec<&str> = upward(t, i).collect();
+    (1..names.len()).any(|k| {
+        let above = &names[k..];
+        let rest = |n: usize| above.get(n).copied();
+        above[0] == "scratchpad"
+            && rest(1).is_some_and(is_uuid)
+            && rest(2).is_some_and(|p| !p.is_empty())
+            && rest(3).and_then(|c| c.strip_prefix("claude-")).is_some_and(|uid| {
+                !uid.is_empty() && uid.bytes().all(|b| b.is_ascii_digit())
+            })
+            && rest(4) == Some("tmp")
+            && rest(5) == Some("private")
+            && (above.len() == 6 || above[6..] == ["Data", "Volumes", "System"])
+    })
+}
+
+/// A lowercase or uppercase 8-4-4-4-12 hex id.
+fn is_uuid(name: &str) -> bool {
+    name.len() == 36
+        && name.bytes().enumerate().all(|(k, b)| {
+            if matches!(k, 8 | 13 | 18 | 23) { b == b'-' } else { b.is_ascii_hexdigit() }
+        })
 }
 
 /// The scan root's own container, from its absolute path.
@@ -647,7 +681,7 @@ pub fn find(t: &Tree, min_bytes: u64, anchors: &Anchors) -> Vec<Candidate> {
             }
             let outcome = match container_rule(t, c, ctx).unwrap_or_else(|| plain_rule(t, c, in_repo, anchors)) {
                 Outcome::Emit(kind) if never.binary_search(&c).is_ok() => {
-                    if matches!(kind, Kind::GitWorktree | Kind::TaggedCache) {
+                    if matches!(kind, Kind::GitWorktree | Kind::TaggedCache | Kind::AgentScratch) {
                         // A user folder that merely carries a marker: look inside.
                         Outcome::Pass { git: markers(t, c).git }
                     } else {
@@ -885,6 +919,47 @@ mod tests {
     fn cachedir_tag_marks_a_tagged_cache() {
         let t = build("/w", &["tool/state/CACHEDIR.TAG", "tool/state/blob"]);
         assert_eq!(found(&t, None), expect(&[("tool/state", "tagged_cache")]));
+    }
+
+    #[test]
+    fn tagged_caches_in_a_claude_scratchpad_are_agent_scratch() {
+        const SESSION: &str = "ce907f81-c909-44a2-bcf7-70370fa492b7";
+        let tagged = |base: &str| [format!("{base}/CACHEDIR.TAG"), format!("{base}/blob")];
+        let scratch = format!("private/tmp/claude-501/-Users-u-p/{SESSION}/scratchpad");
+        let paths: Vec<String> = [
+            tagged(&format!("{scratch}/devmap-target")),
+            tagged(&format!("{scratch}/p2/target")),
+            // Not a scratchpad: the session's own folder and its tasks.
+            tagged(&format!("private/tmp/claude-501/-Users-u-p/{SESSION}/tasks/t")),
+            // Not a session id, not a claude-<uid> folder, not under /private/tmp.
+            tagged("private/tmp/claude-501/-Users-u-p/not-a-session/scratchpad/t"),
+            tagged(&format!("private/tmp/claude-x/-Users-u-p/{SESSION}/scratchpad/t")),
+            tagged(&format!("private/var/claude-501/-Users-u-p/{SESSION}/scratchpad/t")),
+        ]
+        .concat();
+        let paths: Vec<&str> = paths.iter().map(String::as_str).collect();
+        let base = format!("private/tmp/claude-501/-Users-u-p/{SESSION}");
+        let plain = [
+            format!("{base}/tasks/t"),
+            "private/tmp/claude-501/-Users-u-p/not-a-session/scratchpad/t".into(),
+            format!("private/tmp/claude-x/-Users-u-p/{SESSION}/scratchpad/t"),
+            format!("private/var/claude-501/-Users-u-p/{SESSION}/scratchpad/t"),
+        ];
+        let mut want = vec![
+            (format!("{scratch}/devmap-target"), "agent_scratch"),
+            (format!("{scratch}/p2/target"), "agent_scratch"),
+        ];
+        want.extend(plain.into_iter().map(|p| (p, "tagged_cache")));
+        want.sort();
+        assert_eq!(found(&build("/", &paths), None), want);
+
+        // The whole-disk spelling, and a scan rooted at the scratchpad itself.
+        let data: Vec<String> = paths.iter().map(|p| format!("System/Volumes/Data/{p}")).collect();
+        let data: Vec<&str> = data.iter().map(String::as_str).collect();
+        let kinds: Vec<_> = found(&build("/", &data), None).into_iter().map(|(_, k)| k).collect();
+        assert_eq!(kinds.iter().filter(|k| **k == "agent_scratch").count(), 2);
+        let rooted = build(&format!("/{scratch}"), &["devmap-target/CACHEDIR.TAG", "devmap-target/blob"]);
+        assert_eq!(found(&rooted, None), expect(&[("devmap-target", "agent_scratch")]));
     }
 
     #[test]
@@ -1145,11 +1220,14 @@ mod tests {
             assert_eq!(kind.c_id().to_str().unwrap(), kind.id());
             assert!(!kind.id().is_empty() && !kind.description().is_empty());
             assert_eq!(kind.descends(), kind == Kind::GitWorktree);
-            assert!(matches!(kind.verify(), None | Some("cachedir_tag" | "git_worktree" | "recent_activity")));
+            assert!(matches!(
+                kind.verify(),
+                None | Some("cachedir_tag" | "git_worktree" | "recent_activity" | "agent_session")
+            ));
             assert_eq!(kind.c_verify().to_str().unwrap(), kind.verify().unwrap_or(""));
             assert!(Section::ALL.contains(&kind.section()));
         }
-        assert_eq!(Kind::ALL.len(), 34);
+        assert_eq!(Kind::ALL.len(), 35);
         for (kind, id) in [
             (Kind::NodeModules, "node_modules"), (Kind::PythonEnvironment, "python_environment"),
             (Kind::RustBuild, "rust_build"), (Kind::NextBuild, "next_build"),

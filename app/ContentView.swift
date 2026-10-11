@@ -99,6 +99,10 @@ struct ContentView: View {
         // An agent run or the setup offer always shows in the panel.
         .onChange(of: model.agentRun == nil) { if model.agentRun != nil { showCleanup = true } }
         .onChange(of: model.panelRequests) { showCleanup = true }
+        // A MANVI model picked in Settings decides whether MANVI is ready.
+        .onReceive(NotificationCenter.default.publisher(for: Manvi.settingsChanged)) { _ in
+            Task { model.agentEnv = await AgentLocator.find() }
+        }
         .hidingWindowTitle()
         .onAppear {
             if CommandLine.arguments.count > 1 {

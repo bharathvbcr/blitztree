@@ -126,7 +126,6 @@
 "Custom model providers" = "カスタムモデルプロバイダ";
 "Add provider" = "プロバイダを追加";
 "Connect a relay, a self-hosted server, or any other OpenAI- or Anthropic-compatible endpoint by its base URL, protocol, and models." = "中継サーバー、自己ホストのサーバー、その他のOpenAIまたはAnthropic互換エンドポイントを、ベースURL・プロトコル・モデルで接続します。";
-"No custom providers. The Clean Up panel uses Claude Code or Codex when one is installed and signed in." = "カスタムプロバイダはありません。クリーンアップパネルは、インストール済みでサインイン済みの場合はClaude CodeまたはCodexを使用します。";
 "Edit" = "編集";
 "Delete" = "削除";
 "Custom model API" = "カスタムモデルAPI";
@@ -151,7 +150,6 @@
 
 /* Providers captions, General planner summary */
 "Connect a relay, a self-hosted server, or any other OpenAI- or Anthropic-compatible endpoint by its base URL, protocol, and models." = "リレー、セルフホストのサーバー、その他の OpenAI または Anthropic 互換エンドポイントに、ベース URL、プロトコル、モデルで接続します。";
-"No custom providers. The Clean Up panel uses Claude Code or Codex when one is installed and signed in." = "カスタムプロバイダはありません。クリーンアップパネルは、インストール済みでサインイン済みの Claude Code または Codex を使用します。";
 "Clean Up planner" = "クリーンアップのプランナー";
 "the custom provider you set in Model Providers" = "モデルプロバイダで設定したカスタムプロバイダ";
 "missing provider, back to the installed agent" = "プロバイダが見つからないため、インストール済みのエージェントに戻ります";
@@ -256,3 +254,48 @@
 "Documents" = "書類";
 "Databases" = "データベース";
 "Logs & caches" = "ログとキャッシュ";
+
+/* MANVI as a Clean Up planner; Claude Code scratchpads */
+"A Claude Code session that is still running uses this: %@" = "実行中の Claude Code セッションが使用しています: %@";
+"Couldn't check whether the Claude Code session using this has ended: %@" = "これを使用している Claude Code セッションが終了したか確認できませんでした: %@";
+"Not in a Claude Code scratchpad: %@" = "Claude Code のスクラッチパッド内ではありません: %@";
+"Only build output BlitzTree recognised can go from a Claude Code scratchpad" = "Claude Code のスクラッチパッドから削除できるのは、BlitzTree が認識したビルド出力だけです";
+"Runs with a local model or your own API key." = "ローカルモデルまたはご自身の API キーで動作します。";
+"Choose a model for MANVI in Settings → Model Providers." = "「設定 → Model Providers」で MANVI のモデルを選んでください。";
+"MANVI didn't start read-only, so BlitzTree stopped it." = "MANVI が読み取り専用で起動しなかったため、BlitzTree が停止しました。";
+"Kept read-only: %@ was refused" = "読み取り専用を維持: %@ は拒否されました";
+"Local model (Ollama, LM Studio, vLLM…)" = "ローカルモデル（Ollama、LM Studio、vLLM…）";
+"MANVI ran out of steps before writing a plan." = "MANVI はプランを書く前にステップを使い切りました。";
+"MANVI's answer was cut off by its output limit." = "MANVI の回答は出力上限で途切れました。";
+"MANVI stopped without an answer." = "MANVI は回答せずに停止しました。";
+"MANVI's answer didn't finish." = "MANVI の回答が完了しませんでした。";
+"Choose a model for %@" = "%@のモデルを選択";
+"No custom providers. The Clean Up panel uses Claude Code, Codex or MANVI when one is ready." = "カスタムプロバイダはありません。クリーンアップパネルは Claude Code、Codex、MANVI のいずれかが準備できていればそれを使います。";
+"MANVI isn't installed. Install it from github.com/bharathvbcr/Manvi, then reopen Settings." = "MANVI がインストールされていません。github.com/bharathvbcr/Manvi からインストールし、設定を開き直してください。";
+"Choose a model" = "モデルを選択";
+"Refresh" = "更新";
+"No local model server answered. Start Ollama or LM Studio, then refresh." = "ローカルのモデルサーバが応答しませんでした。Ollama または LM Studio を起動してから更新してください。";
+"MANVI's default" = "MANVI の既定";
+"Not ready yet" = "まだ準備できていません";
+"Local" = "ローカル";
+"Using %@" = "%@を使用中";
+"%@ gave no plan; switching to %@" = "%@ から計画が得られなかったため、%@ に切り替えます";
+"Run MANVI on" = "MANVI の実行先";
+"Cloud only" = "クラウドのみ";
+"Local model only" = "ローカルモデルのみ";
+"Local first, cloud when the local model gives no plan" = "まずローカル、計画が得られなければクラウド";
+"Local model" = "ローカルモデル";
+"Cloud provider" = "クラウドプロバイダ";
+"%@ — no key" = "%@ — キーなし";
+"Claude model" = "Claude モデル";
+"Couldn't list Claude models: %@" = "Claude モデルを一覧できませんでした: %@";
+"no key" = "キーがありません";
+"Workspace ID" = "ワークスペース ID";
+"Only for a key that isn't scoped to one workspace. Press Return to save." = "1 つのワークスペースに限定されていないキーの場合のみ。Return キーで保存します。";
+"Cloud model" = "クラウドモデル";
+"Keychain item" = "キーチェーン項目";
+"Uses the %@ your shell exports." = "シェルがエクスポートしている %@ を使います。";
+"Uses the key in your Keychain item “%@”." = "キーチェーン項目「%@」のキーを使います。";
+"No key found. Export %@ in your shell profile, or save the key in your Keychain as “%@”." = "キーが見つかりません。シェルのプロファイルで %@ をエクスポートするか、キーチェーンに「%@」として保存してください。";
+"Ready: %@" = "準備完了: %@";
+"A cloud run sends folder paths and sizes from the scan, never file contents, to that provider. MANVI only plans: BlitzTree starts it read-only, where it can't write files or run commands, and does the cleanup itself." = "クラウドでの実行では、スキャンしたフォルダのパスとサイズをそのプロバイダに送信します。ファイルの内容は送信しません。MANVI は計画するだけです。BlitzTree は MANVI を読み取り専用で起動するため、ファイルの書き込みやコマンドの実行はできず、クリーンアップは BlitzTree 自身が行います。";

@@ -126,7 +126,6 @@
 "Custom model providers" = "自定义模型提供商";
 "Add provider" = "添加提供商";
 "Connect a relay, a self-hosted server, or any other OpenAI- or Anthropic-compatible endpoint by its base URL, protocol, and models." = "通过基础 URL、协议和模型，连接中继、自托管服务器或任何其他兼容 OpenAI 或 Anthropic 的端点。";
-"No custom providers. The Clean Up panel uses Claude Code or Codex when one is installed and signed in." = "尚无自定义提供商。清理面板在已安装并登录时会使用 Claude Code 或 Codex。";
 "Edit" = "编辑";
 "Delete" = "删除";
 "Custom model API" = "自定义模型 API";
@@ -151,7 +150,6 @@
 
 /* Providers captions, General planner summary */
 "Connect a relay, a self-hosted server, or any other OpenAI- or Anthropic-compatible endpoint by its base URL, protocol, and models." = "通过基础 URL、协议和模型连接中继、自托管服务器或任何其他兼容 OpenAI 或 Anthropic 的端点。";
-"No custom providers. The Clean Up panel uses Claude Code or Codex when one is installed and signed in." = "暂无自定义提供商。清理面板在安装并登录后会使用 Claude Code 或 Codex。";
 "Clean Up planner" = "清理规划器";
 "the custom provider you set in Model Providers" = "您在模型提供商中设置的自定义提供商";
 "missing provider, back to the installed agent" = "提供商缺失，回到已安装的代理";
@@ -256,3 +254,48 @@
 "Documents" = "文稿";
 "Databases" = "数据库";
 "Logs & caches" = "日志和缓存";
+
+/* MANVI as a Clean Up planner; Claude Code scratchpads */
+"A Claude Code session that is still running uses this: %@" = "仍在运行的 Claude Code 会话正在使用此项：%@";
+"Couldn't check whether the Claude Code session using this has ended: %@" = "无法确认使用此项的 Claude Code 会话是否已结束：%@";
+"Not in a Claude Code scratchpad: %@" = "不在 Claude Code 草稿目录中：%@";
+"Only build output BlitzTree recognised can go from a Claude Code scratchpad" = "Claude Code 草稿目录中只能移除 BlitzTree 识别出的构建产物";
+"Runs with a local model or your own API key." = "使用本地模型或你自己的 API 密钥运行。";
+"Choose a model for MANVI in Settings → Model Providers." = "请在“设置 → Model Providers”中为 MANVI 选择模型。";
+"MANVI didn't start read-only, so BlitzTree stopped it." = "MANVI 未以只读方式启动，BlitzTree 已将其停止。";
+"Kept read-only: %@ was refused" = "保持只读：%@ 已被拒绝";
+"Local model (Ollama, LM Studio, vLLM…)" = "本地模型（Ollama、LM Studio、vLLM…）";
+"MANVI ran out of steps before writing a plan." = "MANVI 在写出计划前用完了步数。";
+"MANVI's answer was cut off by its output limit." = "MANVI 的回答因输出上限被截断。";
+"MANVI stopped without an answer." = "MANVI 未给出回答就停止了。";
+"MANVI's answer didn't finish." = "MANVI 的回答没有完成。";
+"Choose a model for %@" = "为 %@ 选择模型";
+"No custom providers. The Clean Up panel uses Claude Code, Codex or MANVI when one is ready." = "没有自定义提供商。清理面板会在 Claude Code、Codex 或 MANVI 就绪时使用它们。";
+"MANVI isn't installed. Install it from github.com/bharathvbcr/Manvi, then reopen Settings." = "未安装 MANVI。请从 github.com/bharathvbcr/Manvi 安装，然后重新打开设置。";
+"Choose a model" = "选择模型";
+"Refresh" = "刷新";
+"No local model server answered. Start Ollama or LM Studio, then refresh." = "没有本地模型服务器响应。请启动 Ollama 或 LM Studio，然后刷新。";
+"MANVI's default" = "MANVI 默认值";
+"Not ready yet" = "尚未就绪";
+"Local" = "本地";
+"Using %@" = "正在使用 %@";
+"%@ gave no plan; switching to %@" = "%@ 未给出计划，正在切换到 %@";
+"Run MANVI on" = "MANVI 运行方式";
+"Cloud only" = "仅云端";
+"Local model only" = "仅本地模型";
+"Local first, cloud when the local model gives no plan" = "先用本地模型，本地未给出计划时改用云端";
+"Local model" = "本地模型";
+"Cloud provider" = "云端提供商";
+"%@ — no key" = "%@ — 无密钥";
+"Claude model" = "Claude 模型";
+"Couldn't list Claude models: %@" = "无法列出 Claude 模型：%@";
+"no key" = "无密钥";
+"Workspace ID" = "工作区 ID";
+"Only for a key that isn't scoped to one workspace. Press Return to save." = "仅用于未限定到某个工作区的密钥。按 Return 保存。";
+"Cloud model" = "云端模型";
+"Keychain item" = "钥匙串项目";
+"Uses the %@ your shell exports." = "使用你的 shell 导出的 %@。";
+"Uses the key in your Keychain item “%@”." = "使用你的钥匙串项目“%@”中的密钥。";
+"No key found. Export %@ in your shell profile, or save the key in your Keychain as “%@”." = "未找到密钥。请在 shell 配置文件中导出 %@，或将密钥以“%@”存入钥匙串。";
+"Ready: %@" = "已就绪：%@";
+"A cloud run sends folder paths and sizes from the scan, never file contents, to that provider. MANVI only plans: BlitzTree starts it read-only, where it can't write files or run commands, and does the cleanup itself." = "云端运行会把扫描得到的文件夹路径和大小发送给该提供商，绝不发送文件内容。MANVI 只负责规划：BlitzTree 以只读方式启动它，使其无法写入文件或运行命令，清理由 BlitzTree 自己完成。";

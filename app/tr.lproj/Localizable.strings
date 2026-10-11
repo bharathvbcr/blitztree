@@ -126,7 +126,6 @@
 "Custom model providers" = "Özel model sağlayıcıları";
 "Add provider" = "Sağlayıcı Ekle";
 "Connect a relay, a self-hosted server, or any other OpenAI- or Anthropic-compatible endpoint by its base URL, protocol, and models." = "Bir aktarıcıyı, kendi barındırdığınız sunucunuzu ya da başka herhangi bir OpenAI veya Anthropic uyumlu uç noktayı temel URL'si, protokolü ve modelleriyle bağlayın.";
-"No custom providers. The Clean Up panel uses Claude Code or Codex when one is installed and signed in." = "Özel sağlayıcı yok. Temizleme paneli, kurulu ve giriş yapılmış olduğunda Claude Code veya Codex'i kullanır.";
 "Edit" = "Düzenle";
 "Delete" = "Sil";
 "Custom model API" = "Özel model API'si";
@@ -151,7 +150,6 @@
 
 /* Providers captions, General planner summary */
 "Connect a relay, a self-hosted server, or any other OpenAI- or Anthropic-compatible endpoint by its base URL, protocol, and models." = "Aktarıcı, kendi sunucunuz veya OpenAI- ya da Anthropic-uyumlu herhangi bir uç noktaya temel URL, protokol ve modelleriyle bağlanın.";
-"No custom providers. The Clean Up panel uses Claude Code or Codex when one is installed and signed in." = "Özel sağlayıcı yok. Temizleme paneli, kurulu ve oturumu açmış bir Claude Code veya Codex olduğunda onu kullanır.";
 "Clean Up planner" = "Temizleme planlayıcısı";
 "the custom provider you set in Model Providers" = "Model Sağlayıcılar'da ayarladığınız özel sağlayıcı";
 "missing provider, back to the installed agent" = "sağlayıcı eksik, kurulu ajan geri döndü";
@@ -256,3 +254,48 @@
 "Documents" = "Belgeler";
 "Databases" = "Veritabanları";
 "Logs & caches" = "Günlükler ve önbellekler";
+
+/* MANVI as a Clean Up planner; Claude Code scratchpads */
+"A Claude Code session that is still running uses this: %@" = "Hâlâ çalışan bir Claude Code oturumu bunu kullanıyor: %@";
+"Couldn't check whether the Claude Code session using this has ended: %@" = "Bunu kullanan Claude Code oturumunun bitip bitmediği denetlenemedi: %@";
+"Not in a Claude Code scratchpad: %@" = "Bir Claude Code karalama klasöründe değil: %@";
+"Only build output BlitzTree recognised can go from a Claude Code scratchpad" = "Bir Claude Code karalama klasöründen yalnızca BlitzTree'nin tanıdığı derleme çıktısı silinebilir";
+"Runs with a local model or your own API key." = "Yerel bir modelle veya kendi API anahtarınızla çalışır.";
+"Choose a model for MANVI in Settings → Model Providers." = "MANVI için Ayarlar → Model Providers bölümünden bir model seçin.";
+"MANVI didn't start read-only, so BlitzTree stopped it." = "MANVI salt okunur başlamadığı için BlitzTree onu durdurdu.";
+"Kept read-only: %@ was refused" = "Salt okunur tutuldu: %@ reddedildi";
+"Local model (Ollama, LM Studio, vLLM…)" = "Yerel model (Ollama, LM Studio, vLLM…)";
+"MANVI ran out of steps before writing a plan." = "MANVI bir plan yazmadan adımları tükendi.";
+"MANVI's answer was cut off by its output limit." = "MANVI'nin yanıtı çıktı sınırı nedeniyle kesildi.";
+"MANVI stopped without an answer." = "MANVI yanıt vermeden durdu.";
+"MANVI's answer didn't finish." = "MANVI'nin yanıtı tamamlanmadı.";
+"Choose a model for %@" = "%@ için model seç";
+"No custom providers. The Clean Up panel uses Claude Code, Codex or MANVI when one is ready." = "Özel sağlayıcı yok. Temizle paneli hazır olduğunda Claude Code, Codex veya MANVI'yi kullanır.";
+"MANVI isn't installed. Install it from github.com/bharathvbcr/Manvi, then reopen Settings." = "MANVI yüklü değil. github.com/bharathvbcr/Manvi adresinden yükleyin, ardından Ayarlar'ı yeniden açın.";
+"Choose a model" = "Model seç";
+"Refresh" = "Yenile";
+"No local model server answered. Start Ollama or LM Studio, then refresh." = "Hiçbir yerel model sunucusu yanıt vermedi. Ollama veya LM Studio'yu başlatın, sonra yenileyin.";
+"MANVI's default" = "MANVI varsayılanı";
+"Not ready yet" = "Henüz hazır değil";
+"Local" = "Yerel";
+"Using %@" = "%@ kullanılıyor";
+"%@ gave no plan; switching to %@" = "%@ plan vermedi; %@ kullanılıyor";
+"Run MANVI on" = "MANVI'yi çalıştır:";
+"Cloud only" = "Yalnızca bulut";
+"Local model only" = "Yalnızca yerel model";
+"Local first, cloud when the local model gives no plan" = "Önce yerel, yerel model plan vermezse bulut";
+"Local model" = "Yerel model";
+"Cloud provider" = "Bulut sağlayıcısı";
+"%@ — no key" = "%@ — anahtar yok";
+"Claude model" = "Claude modeli";
+"Couldn't list Claude models: %@" = "Claude modelleri listelenemedi: %@";
+"no key" = "anahtar yok";
+"Workspace ID" = "Çalışma alanı kimliği";
+"Only for a key that isn't scoped to one workspace. Press Return to save." = "Yalnızca tek bir çalışma alanıyla sınırlı olmayan anahtarlar için. Kaydetmek için Return'e basın.";
+"Cloud model" = "Bulut modeli";
+"Keychain item" = "Anahtar Zinciri öğesi";
+"Uses the %@ your shell exports." = "Kabuğunuzun dışa aktardığı %@ kullanılır.";
+"Uses the key in your Keychain item “%@”." = "Anahtar Zinciri'ndeki “%@” öğesindeki anahtar kullanılır.";
+"No key found. Export %@ in your shell profile, or save the key in your Keychain as “%@”." = "Anahtar bulunamadı. Kabuk profilinizde %@ dışa aktarın ya da anahtarı Anahtar Zinciri'ne “%@” adıyla kaydedin.";
+"Ready: %@" = "Hazır: %@";
+"A cloud run sends folder paths and sizes from the scan, never file contents, to that provider. MANVI only plans: BlitzTree starts it read-only, where it can't write files or run commands, and does the cleanup itself." = "Bulut çalıştırması taramadaki klasör yollarını ve boyutlarını, asla dosya içeriğini değil, o sağlayıcıya gönderir. MANVI yalnızca planlar: BlitzTree onu dosya yazamayacağı ve komut çalıştıramayacağı salt okunur modda başlatır ve temizliği kendisi yapar.";

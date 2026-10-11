@@ -126,7 +126,6 @@
 "Custom model providers" = "Fournisseurs de modèles personnalisés";
 "Add provider" = "Ajouter un fournisseur";
 "Connect a relay, a self-hosted server, or any other OpenAI- or Anthropic-compatible endpoint by its base URL, protocol, and models." = "Connectez un relais, un serveur auto-hébergé ou tout autre endpoint compatible OpenAI ou Anthropic par son URL de base, son protocole et ses modèles.";
-"No custom providers. The Clean Up panel uses Claude Code or Codex when one is installed and signed in." = "Aucun fournisseur personnalisé. Le panneau Nettoyer utilise Claude Code ou Codex quand l'un est installé et connecté.";
 "Edit" = "Modifier";
 "Delete" = "Supprimer";
 "Custom model API" = "API de modèle personnalisée";
@@ -151,7 +150,6 @@
 
 /* Providers captions, General planner summary */
 "Connect a relay, a self-hosted server, or any other OpenAI- or Anthropic-compatible endpoint by its base URL, protocol, and models." = "Connectez un relais, un serveur auto-hébergé ou tout autre point de terminaison compatible OpenAI ou Anthropic par son URL de base, son protocole et ses modèles.";
-"No custom providers. The Clean Up panel uses Claude Code or Codex when one is installed and signed in." = "Aucun fournisseur personnalisé. Le panneau Nettoyage utilise Claude Code ou Codex lorsque l'un est installé et connecté.";
 "Clean Up planner" = "Planificateur de nettoyage";
 "the custom provider you set in Model Providers" = "le fournisseur personnalisé défini dans Fournisseurs de modèles";
 "missing provider, back to the installed agent" = "fournisseur manquant, retour à l'agent installé";
@@ -256,3 +254,48 @@
 "Documents" = "Documents";
 "Databases" = "Bases de données";
 "Logs & caches" = "Journaux et caches";
+
+/* MANVI as a Clean Up planner; Claude Code scratchpads */
+"A Claude Code session that is still running uses this: %@" = "Une session Claude Code encore en cours l’utilise : %@";
+"Couldn't check whether the Claude Code session using this has ended: %@" = "Impossible de vérifier si la session Claude Code qui l’utilise est terminée : %@";
+"Not in a Claude Code scratchpad: %@" = "Pas dans un scratchpad Claude Code : %@";
+"Only build output BlitzTree recognised can go from a Claude Code scratchpad" = "Seuls les résultats de build reconnus par BlitzTree peuvent quitter un scratchpad Claude Code";
+"Runs with a local model or your own API key." = "Fonctionne avec un modèle local ou votre propre clé d’API.";
+"Choose a model for MANVI in Settings → Model Providers." = "Choisissez un modèle pour MANVI dans Réglages → Model Providers.";
+"MANVI didn't start read-only, so BlitzTree stopped it." = "MANVI n’a pas démarré en lecture seule, BlitzTree l’a donc arrêté.";
+"Kept read-only: %@ was refused" = "Lecture seule maintenue : %@ a été refusé";
+"Local model (Ollama, LM Studio, vLLM…)" = "Modèle local (Ollama, LM Studio, vLLM…)";
+"MANVI ran out of steps before writing a plan." = "MANVI a épuisé ses étapes avant d’écrire un plan.";
+"MANVI's answer was cut off by its output limit." = "La réponse de MANVI a été tronquée par sa limite de sortie.";
+"MANVI stopped without an answer." = "MANVI s’est arrêté sans réponse.";
+"MANVI's answer didn't finish." = "La réponse de MANVI ne s’est pas terminée.";
+"Choose a model for %@" = "Choisir un modèle pour %@";
+"No custom providers. The Clean Up panel uses Claude Code, Codex or MANVI when one is ready." = "Aucun fournisseur personnalisé. Le panneau Nettoyage utilise Claude Code, Codex ou MANVI dès que l’un est prêt.";
+"MANVI isn't installed. Install it from github.com/bharathvbcr/Manvi, then reopen Settings." = "MANVI n’est pas installé. Installez-le depuis github.com/bharathvbcr/Manvi, puis rouvrez les Réglages.";
+"Choose a model" = "Choisir un modèle";
+"Refresh" = "Actualiser";
+"No local model server answered. Start Ollama or LM Studio, then refresh." = "Aucun serveur de modèles local n’a répondu. Lancez Ollama ou LM Studio, puis actualisez.";
+"MANVI's default" = "Valeur par défaut de MANVI";
+"Not ready yet" = "Pas encore prêt";
+"Local" = "Local";
+"Using %@" = "Utilise %@";
+"%@ gave no plan; switching to %@" = "%@ n’a donné aucun plan ; passage à %@";
+"Run MANVI on" = "Exécuter MANVI avec";
+"Cloud only" = "Cloud uniquement";
+"Local model only" = "Modèle local uniquement";
+"Local first, cloud when the local model gives no plan" = "Local d’abord, cloud si le modèle local ne donne aucun plan";
+"Local model" = "Modèle local";
+"Cloud provider" = "Fournisseur cloud";
+"%@ — no key" = "%@ — aucune clé";
+"Claude model" = "Modèle Claude";
+"Couldn't list Claude models: %@" = "Impossible de lister les modèles Claude : %@";
+"no key" = "aucune clé";
+"Workspace ID" = "ID de l’espace de travail";
+"Only for a key that isn't scoped to one workspace. Press Return to save." = "Uniquement pour une clé non limitée à un espace de travail. Appuyez sur Retour pour enregistrer.";
+"Cloud model" = "Modèle cloud";
+"Keychain item" = "Élément du trousseau";
+"Uses the %@ your shell exports." = "Utilise la variable %@ exportée par votre shell.";
+"Uses the key in your Keychain item “%@”." = "Utilise la clé de votre élément de trousseau « %@ ».";
+"No key found. Export %@ in your shell profile, or save the key in your Keychain as “%@”." = "Aucune clé trouvée. Exportez %@ dans le profil de votre shell, ou enregistrez la clé dans votre trousseau sous « %@ ».";
+"Ready: %@" = "Prêt : %@";
+"A cloud run sends folder paths and sizes from the scan, never file contents, to that provider. MANVI only plans: BlitzTree starts it read-only, where it can't write files or run commands, and does the cleanup itself." = "Une exécution dans le cloud envoie à ce fournisseur les chemins et tailles des dossiers analysés, jamais le contenu des fichiers. MANVI ne fait que planifier : BlitzTree le lance en lecture seule, sans pouvoir écrire de fichiers ni exécuter de commandes, et fait le nettoyage lui-même.";

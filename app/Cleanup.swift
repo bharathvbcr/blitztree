@@ -238,8 +238,9 @@ struct CleanupPanel: View {
         }
     }
 
-    /// One click starts Claude Code or Codex in the background; the menu picks
-    /// which, or sets up and signs in the one that isn't ready yet.
+    /// One click starts the planner in the background; the menu picks which
+    /// agent, sets up and signs in Claude Code or Codex, or sends MANVI to
+    /// Settings for a model.
     @ViewBuilder private var agentButton: some View {
         if let setup = model.agentSetup {
             SetupProgress(setup: setup) {
@@ -262,12 +263,24 @@ struct CleanupPanel: View {
                 Menu {
                     ForEach(model.agentEnv.ready) { other in
                         Button("Clean up with \(other.kind.name)") { model.startAgent(other) }
+                        // MANVI with both sides ready: force one for this run.
+                        if other.kind == .manvi, model.agentEnv.manviRoutes.count > 1 {
+                            ForEach(model.agentEnv.manviRoutes, id: \.self) { route in
+                                Button("Clean up with \(other.kind.name) · \(route.label)") {
+                                    model.startAgent(other, routes: [route])
+                                }
+                            }
+                        }
                     }
                     let notReady = AgentKind.allCases.filter { kind in !model.agentEnv.ready.contains { $0.kind == kind } }
                     if !notReady.isEmpty {
                         Divider()
                         ForEach(notReady, id: \.self) { kind in
-                            if model.agentEnv.agents.contains(where: { $0.kind == kind }) {
+                            let installed = model.agentEnv.agents.contains(where: { $0.kind == kind })
+                            if !kind.installable {
+                                // MANVI: offered once installed; its model is set in Settings.
+                                if installed { SettingsLink { Text("Choose a model for \(kind.name)") } }
+                            } else if installed {
                                 Button("Sign in to \(kind.name)") { model.setUp(kind) }
                             } else {
                                 Button("Set up \(kind.name)") { model.setUp(kind) }
@@ -314,17 +327,20 @@ struct CleanupPanel: View {
 
     /// Nothing ready: one click installs an agent and signs it in. Offer the
     /// one already installed first (Claude Code when both are); else Claude
-    /// Code, with Codex one click away.
+    /// Code, with Codex one click away. An installed MANVI only needs a model,
+    /// which Settings sets.
     private var setupOffer: some View {
-        let installed = model.agentEnv.agents.first { $0.kind == .claude } ?? model.agentEnv.agents.first
+        let installable = model.agentEnv.agents.filter(\.kind.installable)
+        let installed = installable.first { $0.kind == .claude } ?? installable.first
         let kind = installed?.kind ?? .claude
-        let other: AgentKind = kind == .claude ? .codex : .claude
+        let other = AgentKind.allCases.first { $0.installable && $0 != kind } ?? .codex
+        let manvi = model.agentEnv.agents.first { !$0.kind.installable }
         return VStack(alignment: .leading, spacing: 8) {
             VStack(alignment: .leading, spacing: 2) {
                 Label("Let AI clean up for you", systemImage: "sparkles")
                     .font(.headline)
                 Text(installed == nil
-                     ? "\(kind.name) reads this scan and plans what can go. \(kind == .codex ? String(localized: "Free with a ChatGPT account.") : String(localized: "Needs a Claude Pro plan."))"
+                     ? "\(kind.name) reads this scan and plans what can go. \(kind.setupNote)"
                      : "Sign in to \(kind.name) and it plans what can go from this scan.")
                     .font(.callout)
                     .foregroundStyle(.secondary)
@@ -343,6 +359,13 @@ struct CleanupPanel: View {
                 .font(.caption)
                 .foregroundStyle(.secondary)
                 .frame(maxWidth: .infinity)
+            if let manvi {
+                SettingsLink { Text("Choose a model for \(manvi.kind.name)").font(.caption) }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity)
+                    .help(manvi.kind.setupNote)
+            }
             HStack(spacing: 4) {
                 Text("Or").font(.caption).foregroundStyle(.tertiary)
                 SettingsLink { Text("Add a model provider").font(.caption) }

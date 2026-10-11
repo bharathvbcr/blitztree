@@ -15,6 +15,11 @@ swiftc "${GUARD[@]}" tests/CleanupSafetyChecks.swift "${FLAGS[@]}" -o "$CLEANUP_
 swiftc "${GUARD[@]}" app/CleanupVerify.swift app/CleanupOperations.swift tests/WorktreeChecks.swift \
   "${FLAGS[@]}" -Xcc -include -Xcc removefile.h -o "$CLEANUP_TEST_TMP/worktrees"
 "$CLEANUP_TEST_TMP/worktrees"
+# Claude Code scratchpads: path shape, the live-session registry, and the
+# policy that refuses a running session's build output at every capture.
+swiftc "${GUARD[@]}" app/CleanupVerify.swift tests/ScratchpadChecks.swift \
+  "${FLAGS[@]}" -o "$CLEANUP_TEST_TMP/scratchpad"
+"$CLEANUP_TEST_TMP/scratchpad"
 cargo build --locked --release --lib
 SOURCES=(app/*.swift)
 SOURCES=(${SOURCES:#app/Main.swift})
@@ -37,6 +42,12 @@ swiftc "${SOURCES[@]}" tests/PlannerFallbackChecks.swift "${FLAGS[@]}" \
   -import-objc-header app/bz.h -L target/release -lblitztree \
   -framework AppKit -framework SwiftUI -o "$CLEANUP_TEST_TMP/planner"
 "$CLEANUP_TEST_TMP/planner"
+# MANVI as a planner: its event stream, the strict-posture gate and the
+# environment BlitzTree pins. No MANVI binary or model is needed.
+swiftc "${SOURCES[@]}" tests/ManviChecks.swift "${FLAGS[@]}" \
+  -import-objc-header app/bz.h -L target/release -lblitztree \
+  -framework AppKit -framework SwiftUI -o "$CLEANUP_TEST_TMP/manvi"
+"$CLEANUP_TEST_TMP/manvi"
 swiftc "${SOURCES[@]}" tests/TypesIntegrationChecks.swift "${FLAGS[@]}" \
   -import-objc-header app/bz.h -L target/release -lblitztree \
   -framework AppKit -framework SwiftUI -o "$CLEANUP_TEST_TMP/types"
