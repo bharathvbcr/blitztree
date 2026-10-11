@@ -1,0 +1,13 @@
+{
+  "mcpServers": {
+    "devmap": {
+      "args": [
+        "--root",
+        "/Users/bharath/Code/devtools/Blitztree",
+        "mcp"
+      ],
+      "command": "devmap",
+      "type": "stdio"
+    }
+  }
+}
