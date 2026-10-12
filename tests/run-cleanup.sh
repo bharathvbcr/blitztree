@@ -65,4 +65,10 @@ swiftc "${SOURCES[@]}" tests/ScanFailureChecks.swift "${FLAGS[@]}" \
 swiftc app/AgentLogin.swift tests/AgentLoginChecks.swift "${FLAGS[@]}" \
   -framework AppKit -o "$CLEANUP_TEST_TMP/login"
 "$CLEANUP_TEST_TMP/login"
+# Stopping a scan, the earlier tree coming back, and the coverage the engine
+# reports reaching the app (marks, summary text, strings in every language).
+swiftc "${SOURCES[@]}" tests/ScanCancelChecks.swift "${FLAGS[@]}" \
+  -import-objc-header app/bz.h -L target/release -lblitztree \
+  -framework AppKit -framework SwiftUI -o "$CLEANUP_TEST_TMP/scancancel"
+"$CLEANUP_TEST_TMP/scancancel"
 

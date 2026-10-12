@@ -2,6 +2,7 @@
 #ifndef BZ_H
 #define BZ_H
 
+#include <stdbool.h>
 #include <stdint.h>
 #include <removefile.h>
 
@@ -12,12 +13,35 @@ typedef struct BzScan BzScan;
 // (not necessarily UTF-8); a symlink in them is followed, and the root node
 // keeps the name it was given.
 BzScan *bz_scan_start(const char *path);
-// `done` is set once the scan has finished, with or without a tree (a NULL
-// handle also reports done). Any output pointer may be NULL.
+// `done` is set once the scan has ended, with or without a tree: finished,
+// cancelled or failed (a NULL handle also reports done). Any output pointer
+// may be NULL.
 void bz_progress(BzScan *h, uint64_t *files, uint64_t *dirs, uint64_t *bytes, int *done);
+
+// How a scan stands, from bz_scan_status.
+enum {
+    BZ_SCAN_RUNNING = 0,   // the scan thread is still working
+    BZ_SCAN_DONE = 1,      // a tree was built; bz_take_tree returns its nodes
+    BZ_SCAN_CANCELLED = 2, // bz_cancel cut the walk short; there is no tree
+    BZ_SCAN_FAILED = 3,    // an internal error (logged to stderr); no tree
+};
+// One of the BZ_SCAN_* values. Anything but BZ_SCAN_RUNNING matches done=1
+// in bz_progress. A NULL handle is BZ_SCAN_FAILED. Read it after done to tell
+// a stopped scan from a failed one: both have no tree.
+int bz_scan_status(BzScan *h);
+// Ask a running scan to stop. It reads no further folder and ends promptly
+// (the folders being read at that moment finish) with BZ_SCAN_CANCELLED and
+// no tree: a partial tree is never handed over as the scan. Poll bz_progress
+// for done as usual, then free the handle. Does nothing for a NULL handle, for
+// a scan that already ended (whole or cancelled: the result stays as it was)
+// and when repeated. A stop that arrives after the last folder was read
+// leaves a whole tree, BZ_SCAN_DONE. Callable from any thread, but not
+// concurrently with bz_free of the same handle.
+void bz_cancel(BzScan *h);
+
 // Node count of the finished tree. 0 means there is none: a scan that failed
-// (an internal error, logged to stderr), a NULL handle, or one not done yet.
-// A handle with 0 nodes is only for bz_free.
+// (an internal error, logged to stderr), was cancelled, a NULL handle, or one
+// not done yet. A handle with 0 nodes is only for bz_free.
 uint64_t bz_take_tree(BzScan *h);
 
 const uint32_t *bz_parents(BzScan *h);
@@ -25,11 +49,36 @@ const uint64_t *bz_alloc(BzScan *h);
 const uint64_t *bz_logical(BzScan *h);
 const uint32_t *bz_nfiles(BzScan *h);
 const uint8_t *bz_flags(BzScan *h); // bit0 = is_dir; bit1 = own listing incomplete (engine-internal)
+// One bool per node (length N): false when anything in the node's subtree
+// was not fully read (an unreadable folder or entry, a cloud-only or mounted
+// folder skipped, a name that is not UTF-8 dropped, a size limit). Its sizes
+// are then a lower bound. True means everything below was read. A folder
+// whose own listing was partial has flags bit1 set as well; one that is only
+// false through a child does not. NULL before bz_take_tree.
+const bool *bz_complete(BzScan *h);
 const uint32_t *bz_child_off(BzScan *h); // length N+1
 const uint32_t *bz_children(BzScan *h);
 const uint32_t *bz_name_off(BzScan *h); // length N+1
 const uint8_t *bz_name_blob(BzScan *h);
 uint64_t bz_errors(BzScan *h);
+
+// What a finished scan could not read: the same account the CLI prints as
+// `coverage` in its JSON (the engine builds both from one function).
+typedef struct {
+    uint64_t errors;                 // failed reads of every kind (bz_errors)
+    uint64_t entry_errors;           // entries unreadable or malformed
+    uint64_t invalid_names;          // entries dropped for a non-UTF-8 name; they and what is below them are missing
+    uint64_t skipped_cloud_directories; // cloud-only folders left unread (reading would download them)
+    uint64_t skipped_mount_points;   // mount points left unread (a scan measures one volume)
+    uint64_t shared_allocated_bytes; // bytes not counted again: hard links, whole APFS clones
+    uint64_t clone_ids_unavailable_directories; // folders whose volume reported no clone ids
+    bool complete;                   // every folder was read in full (bz_complete of the root)
+} BzCoverage;
+// Fill `out` and return true. Returns false and leaves `out` untouched for a
+// NULL handle, a NULL `out`, or a handle without a tree (before
+// bz_take_tree, or a cancelled or failed scan). A tree from bz_remove keeps
+// the scan's counters; `complete` and `errors` follow the smaller tree.
+bool bz_coverage(BzScan *h, BzCoverage *out);
 
 // Shared Clean Up results, sorted by size. Buffers/labels live until bz_free.
 // Only read cleanup_nodes[0..cleanup_count]; an empty list has count zero.
