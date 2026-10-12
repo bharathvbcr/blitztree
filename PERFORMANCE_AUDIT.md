@@ -378,5 +378,7 @@ filesystem, and workload combination. Accepted changes have measured benefits
 or focused responsiveness/correctness checks; unproven tuning was removed.
 
 Existing engine limitations remain outside this performance work: invalid UTF-8
-entry names and per-entry metadata errors are skipped; freeing a scan handle
-does not cancel its worker scan. The current UI does not expose scan cancellation.
+entry names and per-entry metadata errors are skipped (counted in the scan's
+coverage, and their folder is marked partly read); freeing a scan handle does
+not cancel its worker scan, `bz_cancel` does. A cancelled scan ends with no
+tree, so the UI's Stop button brings back the tree that was on screen.

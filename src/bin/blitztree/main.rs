@@ -1,7 +1,7 @@
 //! A local JSON interface. No network, subprocesses, agent launch or deletion.
 mod report;
 
-use blitztree::{cleanup, local_path, scan_resolved, Progress};
+use blitztree::{cleanup, local_path, scan_resolved, Coverage, Progress};
 use serde_json::{json, Value};
 use std::io::{self, Write};
 use std::os::macos::fs::MetadataExt;
@@ -129,8 +129,8 @@ fn run() -> Result<Value, (i32, String)> {
     } else {
         report::inventory(&tree, &options)
     };
-    let cloud = progress.skipped_cloud_dirs.load(Ordering::Relaxed);
-    let mounts = progress.skipped_mount_points.load(Ordering::Relaxed);
+    // The same account the app reads through `bz_coverage`.
+    let coverage = Coverage::of(&progress, &tree);
     Ok(json!({
         "schema_version": 1, "tool": "blitztree", "version": env!("CARGO_PKG_VERSION"),
         "command": command, "read_only": true, "root": root,
@@ -139,12 +139,13 @@ fn run() -> Result<Value, (i32, String)> {
         "options": {"min_bytes": options.min_bytes, "limit": options.limit},
         "summary": {"allocated_bytes": tree.alloc[0], "logical_bytes": tree.logical[0],
             "file_count": progress.files.load(Ordering::Relaxed), "directory_count": progress.dirs.load(Ordering::Relaxed)},
-        "coverage": {"complete": tree.complete[0], "errors": tree.errors,
-            "entry_errors": progress.entry_errors.load(Ordering::Relaxed),
-            "invalid_names": progress.invalid_names.load(Ordering::Relaxed),
-            "skipped_cloud_directories": cloud, "skipped_mount_points": mounts,
-            "shared_allocated_bytes": progress.shared_bytes.load(Ordering::Relaxed),
-            "clone_ids_unavailable_directories": progress.clone_ids_unavailable_dirs.load(Ordering::Relaxed),
+        "coverage": {"complete": coverage.complete, "errors": coverage.errors,
+            "entry_errors": coverage.entry_errors,
+            "invalid_names": coverage.invalid_names,
+            "skipped_cloud_directories": coverage.skipped_cloud_directories,
+            "skipped_mount_points": coverage.skipped_mount_points,
+            "shared_allocated_bytes": coverage.shared_allocated_bytes,
+            "clone_ids_unavailable_directories": coverage.clone_ids_unavailable_directories,
             "policy": "Metadata only. One volume; directory symlinks and cloud-only directories are not traversed. Hard links and whole APFS clones count once, under their first path; shared_allocated_bytes is what they would have added again. Clones edited after copying still count in full. Filesystem changes during a scan can affect results."},
         "report": report,
     }))

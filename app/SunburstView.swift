@@ -135,7 +135,7 @@ final class SunburstNSView: NSView {
 
     /// Edges of the centre disc and every ring. Fewer, fatter rings in a
     /// small window so the outer ones stay readable.
-    nonisolated private static func ringRadii(outer: CGFloat) -> [CGFloat] {
+    nonisolated static func ringRadii(outer: CGFloat) -> [CGFloat] {
         let outer = max(outer, 40)
         let rings = max(4, min(8, Int(outer / 42)))
         let hole = outer * Style.hole
@@ -166,7 +166,7 @@ final class SunburstNSView: NSView {
 
     /// Lays out every arc big enough to see. Children too thin to draw are
     /// gathered into one grey "smaller items" arc at the end of their folder.
-    nonisolated private static func layout(tree: Tree, root: Int, radii: [CGFloat], freeBytes: UInt64) -> [SBSegment] {
+    nonisolated static func layout(tree: Tree, root: Int, radii: [CGFloat], freeBytes: UInt64) -> [SBSegment] {
         var out: [SBSegment] = []
         let rings = radii.count - 1
         // Thinnest arc per ring: about 2 pt along its inner edge.
@@ -596,6 +596,7 @@ final class SunburstNSView: NSView {
         model?.hovered = node
         if let node, let tree = model?.tree {
             toolTip = "\(tree.displayPath(node))\n\(Fmt.size(tree.alloc[node]))"
+                + (tree.coverageNote(node).map { "\n" + $0 } ?? "")
         } else {
             toolTip = nil
         }

@@ -26,6 +26,24 @@
 "Pick a target and scan" = "Bir hedef seçin ve tarayın";
 "The scan failed" = "Tarama başarısız oldu";
 "BlitzTree could not scan %@" = "BlitzTree %@ konumunu tarayamadı";
+"Stopping…" = "Durduruluyor…";
+"Stop scanning (Esc or ⌘.)" = "Taramayı durdur (Esc veya ⌘.)";
+"Scan stopped" = "Tarama durduruldu";
+"BlitzTree stopped scanning %@ before it finished." = "BlitzTree %@ taramasını bitmeden durdurdu.";
+"Not fully read: some items in this folder could not be read or were skipped" = "Tamamen okunmadı: bu klasördeki bazı öğeler okunamadı veya atlandı";
+"Contains folders that were not fully read, so its size is a lower bound" = "Tamamen okunmayan klasörler içeriyor; bu yüzden boyutu bir alt sınırdır";
+"Every folder was read in full." = "Tüm klasörler tamamen okundu.";
+"Some folders were only partly read, so their sizes are lower bounds." = "Bazı klasörler yalnızca kısmen okundu; bu yüzden boyutları alt sınırdır.";
+"%@ folders could not be read (permissions, or changed during the scan)" = "%@ klasör okunamadı (izinler veya tarama sırasında değişiklik)";
+"%@ entries could not be read or were malformed" = "%@ girdi okunamadı veya hatalıydı";
+"%@ items with names that are not valid UTF-8 were left out, with everything inside them" = "Adı geçerli UTF-8 olmayan %@ öğe, içindekilerle birlikte dışarıda bırakıldı";
+"%@ cloud-only folders were not opened, so nothing was downloaded" = "Yalnızca bulutta olan %@ klasör açılmadı, bu yüzden hiçbir şey indirilmedi";
+"%@ other volumes mounted inside were not scanned" = "İçine bağlanmış diğer %@ birim taranmadı";
+"%@ in hard-linked or cloned files is counted once" = "Sabit bağlantılı veya klonlanmış dosyalardaki %@ bir kez sayıldı";
+"%@ folders are on a volume that does not report clones; cloned files there count in full" = "%@ klasör klonları bildirmeyen bir birimde; oradaki klonlanmış dosyalar tam sayılır";
+"Coverage" = "Kapsam";
+"What the scan could and could not read" = "Taramanın okuyabildikleri ve okuyamadıkları";
+"Folders marked with a warning sign in the list were only partly read." = "Listede uyarı işaretiyle gösterilen klasörler yalnızca kısmen okundu.";
 "%@ files · %@ folders · %@s" = "%@ dosya · %@ klasör · %@s";
 "%@ files · %@" = "%@ dosya · %@";
 "%@ system folders unreadable%@" = "%@ sistem klasörü okunamadı%@";
@@ -127,7 +145,6 @@
 /* Settings */
 "Custom model providers" = "Özel model sağlayıcıları";
 "Add provider" = "Sağlayıcı Ekle";
-"Connect a relay, a self-hosted server, or any other OpenAI- or Anthropic-compatible endpoint by its base URL, protocol, and models." = "Bir aktarıcıyı, kendi barındırdığınız sunucunuzu ya da başka herhangi bir OpenAI veya Anthropic uyumlu uç noktayı temel URL'si, protokolü ve modelleriyle bağlayın.";
 "Edit" = "Düzenle";
 "Delete" = "Sil";
 "Custom model API" = "Özel model API'si";
@@ -159,14 +176,13 @@
 
 /* Setup offer: custom providers */
 "Or use any model — a self-hosted server, a relay, a gateway." = "Ya da herhangi bir model kullanın — kendi sunucunuz, bir aktarıcı, bir ağ geçidi.";
-"Set up a model provider" = "";
 
 "Add a model provider" = "Model sağlayıcı ekle";
 "Or" = "veya";
 "Which AI proposes what can go from the scan. Nothing is removed without your say." = "Taramadan neler gidebileceğini hangi yapay zekanın önereceği. Siz demeden hiçbir şey silinmez.";
 
 "Save changes" = "Değişiklikleri kaydet";
-"HTTP %@: %@" = "HTTP %@: %@";
+"HTTP %lld: %@" = "HTTP %lld: %@";
 /* Step lines */
 "Reading your scan" = "Taramanız okunuyor";
 "Asking %@ what can go" = "%@ adlı modele nelerin gidebileceği soruluyor";
@@ -312,35 +328,44 @@
 "Couldn't save the API key to the Keychain: %@ (%@)." = "API anahtarı Anahtar Zinciri'ne kaydedilemedi: %@ (%@).";
 "The server redirected the request to “%@”, which is a different address, so it was stopped before your API key and folder paths were sent there. Use the final address as the base URL." = "Sunucu isteği başka bir adres olan “%@” adresine yönlendirdi; API anahtarınız ve klasör yolları oraya gönderilmeden istek durduruldu. Temel URL olarak nihai adresi kullanın.";
 
-/* Worktree, rule-check and boundary messages */
-"Not a linked git worktree: %@" = "Bağlı bir Git worktree değil: %@";
-"The repository of this git worktree can't be reached (is its drive connected?): %@" = "Bu Git worktree'nin deposuna erişilemiyor (sürücü bağlı mı?): %@";
-"Git worktree is locked: %@" = "Git worktree kilitli: %@";
-"Git worktree has submodules: %@" = "Git worktree alt modüller içeriyor: %@";
-"Git is not available to check this worktree: %@" = "Bu worktree'yi denetlemek için Git kullanılamıyor: %@";
-"Git could not check %@: %@" = "Git %1$@ yolunu denetleyemedi: %2$@";
-"Checking this git worktree took too long: %@" = "Bu Git worktree'nin denetlenmesi çok uzun sürdü: %@";
-"Git worktree has uncommitted or untracked changes: %@" = "Git worktree'de işlenmemiş veya izlenmeyen değişiklikler var: %@";
-"Git worktree has files hidden from git status: %@" = "Git worktree'de git status'un göstermediği dosyalar var: %@";
-"Git worktree has commits on no branch or tag: %@" = "Git worktree'de hiçbir dalda veya etikette olmayan işlemeler var: %@";
-"Git worktree used in the last 2 days: %@" = "Son 2 gün içinde kullanılan Git worktree: %@";
-"A running process is working in this git worktree: %@" = "Çalışan bir işlem bu Git worktree içinde çalışıyor: %@";
-"Could not check for processes using this git worktree: %@" = "Bu Git worktree'yi kullanan işlemler denetlenemedi: %@";
-"Git worktree has ignored files that a build would not recreate (such as .env): %@" = "Git worktree'de bir derlemenin yeniden oluşturmayacağı yok sayılan dosyalar var (.env gibi): %@";
-"Could not read the coding agents' session logs to check whether this git worktree is in use: %@" = "Bu Git worktree'nin kullanımda olup olmadığını denetlemek için kodlama ajanlarının oturum günlükleri okunamadı: %@";
-"Left git worktree metadata in place because it changed: %@" = "Değiştikleri için Git worktree meta verileri yerinde bırakıldı: %@";
-"Left git worktree metadata in place because the worktree exists again: %@" = "Worktree yeniden var olduğu için Git worktree meta verileri yerinde bırakıldı: %@";
-"Left git worktree metadata in place because it is locked: %@" = "Kilitli oldukları için Git worktree meta verileri yerinde bırakıldı: %@";
-"Could not remove git worktree metadata: %@" = "Git worktree meta verileri kaldırılamadı: %@";
-"Unknown check %@ for %@" = "%2$@ için bilinmeyen denetim %1$@";
-"No valid cache directory tag in %@" = "%@ içinde geçerli bir önbellek dizini etiketi yok";
-"Could not check every file in %@" = "%@ içindeki tüm dosyalar denetlenemedi";
-"Too many files to check in %@" = "%@ içinde denetlenecek çok fazla dosya var";
-"Another volume is mounted inside %@" = "%@ içine başka bir birim bağlanmış";
-"Changed in the last 2 days: %@" = "Son 2 gün içinde değiştirildi: %@";
-"The check does not belong to this folder: %@" = "Bu denetim bu klasöre ait değil: %@";
-"Not a folder the scan recognised as removable" = "Taramanın kaldırılabilir olarak tanıdığı bir klasör değil";
-"Couldn't read the coding agents' session logs to check recent use" = "Son kullanımı denetlemek için kodlama ajanlarının oturum günlükleri okunamadı";
-"Clean Up would not remove these. Move to Trash works like Finder and does not apply its checks:" = "Temizle bunları kaldırmazdı. Çöp Kutusu'na Taşı, Finder gibi çalışır ve bu denetimleri uygulamaz:";
+/* Wave 1 guard reasons, installer and menu strings */
+"A running process is working in this git worktree: %@" = "Bu git çalışma ağacında çalışan bir işlem var: %@";
+"Another volume is mounted inside %@" = "%@ içine başka bir birim bağlı";
+"Changed in the last 2 days: %@" = "Son 2 gün içinde değişti: %@";
+"Check for Updates…" = "Güncellemeleri Denetle…";
+"Checking this git worktree took too long: %@" = "Bu git çalışma ağacını denetlemek çok uzun sürdü: %@";
+"Clean Up would not remove these. Move to Trash works like Finder and does not apply its checks:" = "Temizle bunları kaldırmaz. Çöp Kutusu'na Taşı, Finder gibi çalışır ve Temizle'nin denetimlerini uygulamaz:";
+"Clean up with %@ · %@" = "%@ · %@ ile temizle";
 "Cleanup incomplete" = "Temizleme tamamlanmadı";
+"Could not check every file in %@" = "%@ içindeki tüm dosyalar denetlenemedi";
+"Could not check for processes using this git worktree: %@" = "Bu git çalışma ağacını kullanan işlemler denetlenemedi: %@";
+"Could not read the coding agents' session logs to check whether this git worktree is in use: %@" = "Bu git çalışma ağacının kullanımda olup olmadığını denetlemek için kodlama ajanlarının oturum günlükleri okunamadı: %@";
+"Could not remove git worktree metadata: %@" = "Git çalışma ağacı meta verileri kaldırılamadı: %@";
+"Couldn't read the coding agents' session logs to check recent use" = "Son kullanımı denetlemek için kodlama ajanlarının oturum günlükleri okunamadı";
+"Filter by name (*, ? wildcards, ⌘F)" = "Ada göre süz (* ve ? joker karakterleri, ⌘F)";
+"General" = "Genel";
+"Git could not check %@: %@" = "Git, %@ öğesini denetleyemedi: %@";
+"Git is not available to check this worktree: %@" = "Git, bu çalışma ağacını denetlemek için kullanılamıyor: %@";
+"Git worktree has commits on no branch or tag: %@" = "Git çalışma ağacında hiçbir dalda veya etikette olmayan işlemeler (commit) var: %@";
+"Git worktree has files hidden from git status: %@" = "Git çalışma ağacında git status çıktısında görünmeyen dosyalar var: %@";
+"Git worktree has ignored files that a build would not recreate (such as .env): %@" = "Git çalışma ağacında bir derlemenin yeniden oluşturmayacağı yok sayılan dosyalar var (.env gibi): %@";
+"Git worktree has submodules: %@" = "Git çalışma ağacında alt modüller var: %@";
+"Git worktree has uncommitted or untracked changes: %@" = "Git çalışma ağacında işlenmemiş veya izlenmeyen değişiklikler var: %@";
+"Git worktree is locked: %@" = "Git çalışma ağacı kilitli: %@";
+"Git worktree used in the last 2 days: %@" = "Git çalışma ağacı son 2 gün içinde kullanıldı: %@";
+"Left git worktree metadata in place because it changed: %@" = "Git çalışma ağacı meta verileri değiştiği için olduğu gibi bırakıldı: %@";
+"Left git worktree metadata in place because it is locked: %@" = "Git çalışma ağacı meta verileri kilitli olduğu için olduğu gibi bırakıldı: %@";
+"Left git worktree metadata in place because the worktree exists again: %@" = "Git çalışma ağacı meta verileri, çalışma ağacı yeniden var olduğu için olduğu gibi bırakıldı: %@";
+"List" = "Liste";
+"Model Providers" = "Model Sağlayıcıları";
+"No valid cache directory tag in %@" = "%@ içinde geçerli bir önbellek dizini etiketi yok";
+"Not a folder the scan recognised as removable" = "Taramanın kaldırılabilir olarak tanıdığı bir klasör değil";
+"Not a linked git worktree: %@" = "Bağlı bir git çalışma ağacı değil: %@";
+"The check does not belong to this folder: %@" = "Bu denetim bu klasöre ait değil: %@";
+"Too many files to check in %@" = "%@ içinde denetlenecek çok fazla dosya var";
+"Unknown check %@ for %@" = "%2$@ için bilinmeyen denetim: %1$@";
+"%@ (custom)" = "%@ (özel)";
+
+/* Worktree, rule-check and boundary messages */
+"The repository of this git worktree can't be reached (is its drive connected?): %@" = "Bu Git worktree'nin deposuna erişilemiyor (sürücü bağlı mı?): %@";
 "Dismiss" = "Kapat";

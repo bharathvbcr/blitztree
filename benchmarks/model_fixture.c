@@ -15,6 +15,7 @@ struct BzScan {
     uint64_t *logical;
     uint32_t *nfiles;
     uint8_t *flags;
+    bool *complete;
     uint32_t *child_off;
     uint32_t *children;
     uint32_t *name_off;
@@ -41,6 +42,8 @@ BzScan *bz_scan_start(const char *path) {
     h->nfiles = zeroed(1, sizeof(*h->nfiles));
     h->flags = zeroed(1, sizeof(*h->flags));
     h->flags[0] = 1;
+    h->complete = zeroed(1, sizeof(*h->complete));
+    h->complete[0] = true;
     h->child_off = zeroed(2, sizeof(*h->child_off));
     h->children = zeroed(1, sizeof(*h->children));
 
@@ -72,6 +75,13 @@ const uint32_t *bz_children(BzScan *h) { return h->children; }
 const uint32_t *bz_name_off(BzScan *h) { return h->name_off; }
 const uint8_t *bz_name_blob(BzScan *h) { return h->name_blob; }
 uint64_t bz_errors(BzScan *h) { (void)h; return 0; }
+const bool *bz_complete(BzScan *h) { return h->complete; }
+bool bz_coverage(BzScan *h, BzCoverage *out) {
+    (void)h; memset(out, 0, sizeof(*out)); out->complete = true; return true;
+}
+// The adapter finishes before the first poll and has nothing to stop.
+int bz_scan_status(BzScan *h) { (void)h; return BZ_SCAN_DONE; }
+void bz_cancel(BzScan *h) { (void)h; }
 uint64_t bz_cleanup_count(BzScan *h) { (void)h; return 0; }
 const uint32_t *bz_cleanup_nodes(BzScan *h) { return h->children; }
 const char *bz_cleanup_description(BzScan *h, uint64_t index) {
@@ -120,6 +130,7 @@ void bz_free(BzScan *h) {
     free(h->logical);
     free(h->nfiles);
     free(h->flags);
+    free(h->complete);
     free(h->child_off);
     free(h->children);
     free(h->name_off);

@@ -589,60 +589,8 @@ struct CleanupIntegrationChecks {
             }
         }
 
-        // 2b. Whatever the guards, verifiers and worktree checks can say to the person is in every
-        // table: the keys are read from the String(localized:) literals of the files that say it, so
-        // a reason added tomorrow without a translation fails here, not in front of a user.
-        let guardSources = ["app/CleanupGuard.swift", "app/CleanupSafety.swift", "app/CleanupVerify.swift",
-                            "app/GitWorktree.swift", "app/CleanupOperations.swift", "app/TreemapView.swift"]
-        func shape(_ key: String) -> String {
-            key.replacingOccurrences(of: #"%(\d+\$)?(@|lld|ld|d)"#, with: "%@", options: .regularExpression)
-        }
-        var sourceKeys: [(file: String, key: String)] = []
-        for file in guardSources {
-            let text = try String(contentsOfFile: file, encoding: .utf8)
-            for match in text.matches(of: /String\(localized: "((?:[^"\\]|\\.)*)"/) {
-                var key = "", rest = Substring(match.output.1)
-                while let character = rest.first {
-                    if rest.hasPrefix("\\(") {
-                        // A balanced interpolation becomes one format specifier.
-                        var depth = 0, consumed = 0
-                        for scalar in rest {
-                            consumed += 1
-                            if scalar == "(" { depth += 1 } else if scalar == ")" { depth -= 1; if depth == 0 { break } }
-                        }
-                        key += "%@"
-                        rest = rest.dropFirst(consumed)
-                    } else if rest.hasPrefix("\\u{"), let close = rest.firstIndex(of: "}"),
-                              let code = UInt32(rest[rest.index(rest.startIndex, offsetBy: 3)..<close], radix: 16),
-                              let scalar = Unicode.Scalar(code) {
-                        key.unicodeScalars.append(scalar)
-                        rest = rest[rest.index(after: close)...]
-                    } else if character == "\\", rest.count > 1 {
-                        key.append(rest[rest.index(after: rest.startIndex)])
-                        rest = rest.dropFirst(2)
-                    } else {
-                        key.append(character)
-                        rest = rest.dropFirst()
-                    }
-                }
-                sourceKeys.append((file, key))
-            }
-        }
-        precondition(sourceKeys.count > 60, "the guard sources were read: \(sourceKeys.count) messages")
-        for lang in languages {
-            guard let table = NSDictionary(contentsOfFile: "app/\(lang).lproj/Localizable.strings") as? [String: String] else {
-                fatalError("cannot read the \(lang) table")
-            }
-            let byShape = Dictionary(table.map { (shape($0.key), $0.value) }, uniquingKeysWith: { first, _ in first })
-            for (file, key) in sourceKeys {
-                guard let value = byShape[shape(key)], !value.isEmpty else {
-                    fatalError("'\(key)' (\(file)) has no entry in the \(lang) table")
-                }
-                if lang != "en" {
-                    precondition(value != key, "'\(key)' (\(file)) is untranslated in \(lang)")
-                }
-            }
-        }
+        // The guard, verifier and worktree messages are held to the tables by tests/check-l10n.sh
+        // (compiler-emitted keys against all seven tables), which run-cleanup.sh runs.
 
         // 3. Acceptance Criterion 1: Verify specific localized translations in non-English bundles
         let deBundle = Bundle(path: "app/de.lproj")!

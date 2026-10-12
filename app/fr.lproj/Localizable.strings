@@ -26,6 +26,24 @@
 "Pick a target and scan" = "Choisissez une cible et scannez";
 "The scan failed" = "Le scan a échoué";
 "BlitzTree could not scan %@" = "BlitzTree n'a pas pu scanner %@";
+"Stopping…" = "Arrêt…";
+"Stop scanning (Esc or ⌘.)" = "Arrêter le scan (Échap ou ⌘.)";
+"Scan stopped" = "Scan arrêté";
+"BlitzTree stopped scanning %@ before it finished." = "BlitzTree a arrêté le scan de %@ avant la fin.";
+"Not fully read: some items in this folder could not be read or were skipped" = "Lecture incomplète : certains éléments de ce dossier n'ont pas pu être lus ou ont été ignorés";
+"Contains folders that were not fully read, so its size is a lower bound" = "Contient des dossiers lus de façon incomplète ; sa taille est donc un minimum";
+"Every folder was read in full." = "Tous les dossiers ont été lus en entier.";
+"Some folders were only partly read, so their sizes are lower bounds." = "Certains dossiers n'ont été lus qu'en partie ; leurs tailles sont donc des minimums.";
+"%@ folders could not be read (permissions, or changed during the scan)" = "%@ dossiers n'ont pas pu être lus (autorisations ou modifications pendant le scan)";
+"%@ entries could not be read or were malformed" = "%@ entrées n'ont pas pu être lues ou étaient mal formées";
+"%@ items with names that are not valid UTF-8 were left out, with everything inside them" = "%@ éléments dont le nom n'est pas de l'UTF-8 valide ont été ignorés, avec tout leur contenu";
+"%@ cloud-only folders were not opened, so nothing was downloaded" = "%@ dossiers uniquement dans le cloud n'ont pas été ouverts : rien n'a été téléchargé";
+"%@ other volumes mounted inside were not scanned" = "%@ autres volumes montés à l'intérieur n'ont pas été scannés";
+"%@ in hard-linked or cloned files is counted once" = "%@ de fichiers liés en dur ou clonés ne sont comptés qu'une fois";
+"%@ folders are on a volume that does not report clones; cloned files there count in full" = "%@ dossiers se trouvent sur un volume qui ne signale pas les clones ; les fichiers clonés y sont comptés en entier";
+"Coverage" = "Couverture";
+"What the scan could and could not read" = "Ce que le scan a pu lire ou non";
+"Folders marked with a warning sign in the list were only partly read." = "Les dossiers marqués d'un signe d'avertissement dans la liste n'ont été lus qu'en partie.";
 "%@ files · %@ folders · %@s" = "%@ fichiers · %@ dossiers · %@s";
 "%@ files · %@" = "%@ fichiers · %@";
 "%@ system folders unreadable%@" = "%@ dossiers système illisibles%@";
@@ -127,7 +145,6 @@
 /* Settings */
 "Custom model providers" = "Fournisseurs de modèles personnalisés";
 "Add provider" = "Ajouter un fournisseur";
-"Connect a relay, a self-hosted server, or any other OpenAI- or Anthropic-compatible endpoint by its base URL, protocol, and models." = "Connectez un relais, un serveur auto-hébergé ou tout autre endpoint compatible OpenAI ou Anthropic par son URL de base, son protocole et ses modèles.";
 "Edit" = "Modifier";
 "Delete" = "Supprimer";
 "Custom model API" = "API de modèle personnalisée";
@@ -159,14 +176,13 @@
 
 /* Setup offer: custom providers */
 "Or use any model — a self-hosted server, a relay, a gateway." = "Ou utilisez n'importe quel modèle — un serveur auto-hébergé, un relais, une passerelle.";
-"Set up a model provider" = "";
 
 "Add a model provider" = "Ajouter un fournisseur de modèles";
 "Or" = "ou";
 "Which AI proposes what can go from the scan. Nothing is removed without your say." = "L'IA qui propose ce peut partir du scan. Rien n'est supprimé sans votre accord.";
 
 "Save changes" = "Enregistrer les modifications";
-"HTTP %@: %@" = "HTTP %@: %@";
+"HTTP %lld: %@" = "HTTP %lld: %@";
 /* Step lines */
 "Reading your scan" = "Lecture de votre scan";
 "Asking %@ what can go" = "Demande à %@ ce qui peut partir";
@@ -312,35 +328,44 @@
 "Couldn't save the API key to the Keychain: %@ (%@)." = "Impossible d'enregistrer la clé d'API dans le Trousseau : %@ (%@).";
 "The server redirected the request to “%@”, which is a different address, so it was stopped before your API key and folder paths were sent there. Use the final address as the base URL." = "Le serveur a redirigé la requête vers « %@ », une autre adresse : elle a été arrêtée avant d'y envoyer votre clé d'API et les chemins de dossiers. Utilisez l'adresse finale comme URL de base.";
 
-/* Worktree, rule-check and boundary messages */
-"Not a linked git worktree: %@" = "Pas un worktree Git lié : %@";
-"The repository of this git worktree can't be reached (is its drive connected?): %@" = "Le dépôt de ce worktree Git est inaccessible (le disque est-il connecté ?) : %@";
-"Git worktree is locked: %@" = "Le worktree Git est verrouillé : %@";
-"Git worktree has submodules: %@" = "Le worktree Git contient des sous-modules : %@";
-"Git is not available to check this worktree: %@" = "Git n'est pas disponible pour vérifier ce worktree : %@";
-"Git could not check %@: %@" = "Git n'a pas pu vérifier %1$@ : %2$@";
-"Checking this git worktree took too long: %@" = "La vérification de ce worktree Git a pris trop de temps : %@";
-"Git worktree has uncommitted or untracked changes: %@" = "Le worktree Git contient des modifications non validées ou non suivies : %@";
-"Git worktree has files hidden from git status: %@" = "Le worktree Git contient des fichiers masqués par git status : %@";
-"Git worktree has commits on no branch or tag: %@" = "Le worktree Git contient des commits sur aucune branche ni étiquette : %@";
-"Git worktree used in the last 2 days: %@" = "Worktree Git utilisé au cours des 2 derniers jours : %@";
-"A running process is working in this git worktree: %@" = "Un processus en cours travaille dans ce worktree Git : %@";
-"Could not check for processes using this git worktree: %@" = "Impossible de vérifier si des processus utilisent ce worktree Git : %@";
-"Git worktree has ignored files that a build would not recreate (such as .env): %@" = "Le worktree Git contient des fichiers ignorés qu'une compilation ne recréerait pas (comme .env) : %@";
-"Could not read the coding agents' session logs to check whether this git worktree is in use: %@" = "Impossible de lire les journaux de session des agents de code pour vérifier si ce worktree Git est utilisé : %@";
-"Left git worktree metadata in place because it changed: %@" = "Métadonnées du worktree Git laissées en place car elles ont changé : %@";
-"Left git worktree metadata in place because the worktree exists again: %@" = "Métadonnées du worktree Git laissées en place car le worktree existe de nouveau : %@";
-"Left git worktree metadata in place because it is locked: %@" = "Métadonnées du worktree Git laissées en place car elles sont verrouillées : %@";
-"Could not remove git worktree metadata: %@" = "Impossible de supprimer les métadonnées du worktree Git : %@";
-"Unknown check %@ for %@" = "Vérification inconnue %1$@ pour %2$@";
-"No valid cache directory tag in %@" = "Aucune balise de répertoire de cache valide dans %@";
-"Could not check every file in %@" = "Impossible de vérifier tous les fichiers de %@";
-"Too many files to check in %@" = "Trop de fichiers à vérifier dans %@";
+/* Wave 1 guard reasons, installer and menu strings */
+"A running process is working in this git worktree: %@" = "Un processus travaille dans ce worktree git : %@";
 "Another volume is mounted inside %@" = "Un autre volume est monté dans %@";
 "Changed in the last 2 days: %@" = "Modifié au cours des 2 derniers jours : %@";
-"The check does not belong to this folder: %@" = "La vérification n'appartient pas à ce dossier : %@";
-"Not a folder the scan recognised as removable" = "Pas un dossier que l'analyse a reconnu comme supprimable";
-"Couldn't read the coding agents' session logs to check recent use" = "Impossible de lire les journaux de session des agents de code pour vérifier l'utilisation récente";
-"Clean Up would not remove these. Move to Trash works like Finder and does not apply its checks:" = "Nettoyer ne supprimerait pas ces éléments. « Déplacer à la Corbeille » fonctionne comme le Finder et n'applique pas ses vérifications :";
+"Check for Updates…" = "Rechercher des mises à jour…";
+"Checking this git worktree took too long: %@" = "La vérification de ce worktree git a pris trop de temps : %@";
+"Clean Up would not remove these. Move to Trash works like Finder and does not apply its checks:" = "Nettoyer ne supprimerait pas ces éléments. Déplacer à la Corbeille fonctionne comme le Finder et n’applique pas les vérifications de Nettoyer :";
+"Clean up with %@ · %@" = "Nettoyer avec %@ · %@";
 "Cleanup incomplete" = "Nettoyage incomplet";
+"Could not check every file in %@" = "Impossible de vérifier tous les fichiers de %@";
+"Could not check for processes using this git worktree: %@" = "Impossible de vérifier les processus qui utilisent ce worktree git : %@";
+"Could not read the coding agents' session logs to check whether this git worktree is in use: %@" = "Impossible de lire les journaux de session des agents de code pour vérifier si ce worktree git est utilisé : %@";
+"Could not remove git worktree metadata: %@" = "Impossible de supprimer les métadonnées du worktree git : %@";
+"Couldn't read the coding agents' session logs to check recent use" = "Impossible de lire les journaux de session des agents de code pour vérifier l’utilisation récente";
+"Filter by name (*, ? wildcards, ⌘F)" = "Filtrer par nom (jokers * et ?, ⌘F)";
+"General" = "Général";
+"Git could not check %@: %@" = "Git n’a pas pu vérifier %@ : %@";
+"Git is not available to check this worktree: %@" = "Git n’est pas disponible pour vérifier ce worktree : %@";
+"Git worktree has commits on no branch or tag: %@" = "Le worktree git contient des commits sur aucune branche ni aucun tag : %@";
+"Git worktree has files hidden from git status: %@" = "Le worktree git contient des fichiers masqués dans git status : %@";
+"Git worktree has ignored files that a build would not recreate (such as .env): %@" = "Le worktree git contient des fichiers ignorés qu’une compilation ne recréerait pas (comme .env) : %@";
+"Git worktree has submodules: %@" = "Le worktree git contient des sous-modules : %@";
+"Git worktree has uncommitted or untracked changes: %@" = "Le worktree git contient des modifications non validées ou non suivies : %@";
+"Git worktree is locked: %@" = "Le worktree git est verrouillé : %@";
+"Git worktree used in the last 2 days: %@" = "Worktree git utilisé au cours des 2 derniers jours : %@";
+"Left git worktree metadata in place because it changed: %@" = "Métadonnées du worktree git laissées en place car elles ont changé : %@";
+"Left git worktree metadata in place because it is locked: %@" = "Métadonnées du worktree git laissées en place car le worktree est verrouillé : %@";
+"Left git worktree metadata in place because the worktree exists again: %@" = "Métadonnées du worktree git laissées en place car le worktree existe de nouveau : %@";
+"List" = "Liste";
+"Model Providers" = "Fournisseurs de modèles";
+"No valid cache directory tag in %@" = "Aucune balise de répertoire de cache valide dans %@";
+"Not a folder the scan recognised as removable" = "Pas un dossier que le scan a reconnu comme supprimable";
+"Not a linked git worktree: %@" = "Pas un worktree git lié : %@";
+"The check does not belong to this folder: %@" = "La vérification n’appartient pas à ce dossier : %@";
+"Too many files to check in %@" = "Trop de fichiers à vérifier dans %@";
+"Unknown check %@ for %@" = "Vérification %@ inconnue pour %@";
+"%@ (custom)" = "%@ (personnalisé)";
+
+/* Worktree, rule-check and boundary messages */
+"The repository of this git worktree can't be reached (is its drive connected?): %@" = "Le dépôt de ce worktree Git est inaccessible (le disque est-il connecté ?) : %@";
 "Dismiss" = "Fermer";
