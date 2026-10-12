@@ -489,6 +489,7 @@ nonisolated enum CleanupPathSafety {
         if let homePath = homeAlias(path, home: home, homeIdentity: homeIdentity),
            let relative = relativePath(homePath, under: home) {
             try homePolicy(relative: relative, path: path) { codexChat(homePath, home: home) != nil }
+            try claudeProjectPolicy(relative: relative, path: path)
         } else if let relative = otherHomeRelative(path) {
             // A scan root wider than the home (the whole Data volume, an
             // external disk) reaches other users' homes: the same policy
@@ -560,6 +561,36 @@ nonisolated enum CleanupPathSafety {
             if lstat((path as NSString).appendingPathComponent(name), &info) == 0 {
                 throw CleanupPathError.protectedPath(path)
             }
+        }
+    }
+
+    /// The most entries of a Claude Code project folder the policy will look at.
+    private static let projectEntryLimit = 100_000
+
+    /// `~/.claude/projects/<project>` holds session transcripts, and Claude Code
+    /// keeps its persistent memory (`memory/`) in the same folder. The engine
+    /// offers the folder only while every entry in it is a transcript
+    /// (`only_transcripts` in src/cleanup.rs: `*.jsonl` files, `.DS_Store`, and
+    /// session-id folders), but it decided that at scan time. Anything added
+    /// since (a `memory/`, a notes file) makes the folder a refusal at capture
+    /// and at every revalidation, whatever its dates say. One directory
+    /// listing: the session folders' contents are not opened, and a folder with
+    /// more entries than the limit, or one that cannot be listed, is refused.
+    private static func claudeProjectPolicy(relative: String, path: String) throws {
+        let parts = relative.split(separator: "/")
+        guard parts.count == 3, parts[0].caseInsensitiveCompare(".claude") == .orderedSame,
+              parts[1].caseInsensitiveCompare("projects") == .orderedSame else { return }
+        guard let names = try? FileManager.default.contentsOfDirectory(atPath: path),
+              names.count <= projectEntryLimit else { throw CleanupPathError.protectedPath(path) }
+        for name in names {
+            var info = stat()
+            guard lstat((path as NSString).appendingPathComponent(name), &info) == 0 else {
+                throw CleanupPathError.protectedPath(path)
+            }
+            let isDirectory = UInt16(truncatingIfNeeded: info.st_mode) & modeMask == modeDirectory
+            let transcript = isDirectory ? UUID(uuidString: name) != nil
+                                         : name == ".DS_Store" || name.hasSuffix(".jsonl")
+            if !transcript { throw CleanupPathError.protectedPath(path) }
         }
     }
 

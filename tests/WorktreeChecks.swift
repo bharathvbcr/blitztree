@@ -418,6 +418,40 @@ enum WorktreeChecks {
             fatalError("memory/ must not be captured, used lately or not")
         } catch { precondition((error as? CleanupPathError) == .protectedPath(memory), "memory/ is protected: \(error)") }
         try old([project + "/today.jsonl", memory + "/MEMORY.md", memory, project])
+        // The project folder with a memory/ in it is not transcripts only, however old.
+        do {
+            _ = try capture(project, activityCheck)
+            fatalError("a project folder holding memory/ must not be captured")
+        } catch { precondition((error as? CleanupPathError) == .protectedPath(project), "project with memory/: \(error)") }
+        try fm.removeItem(atPath: memory)
+        try old([project + "/today.jsonl", project])
+        _ = try capture(project, activityCheck)
+
+        // Planned while it held transcripts only; a memory/ appears afterwards and the dates are put
+        // back: the Trash boundary refuses, with the folder in place.
+        let session = "0b0e6f0e-2f6a-4b61-9a53-0d6a3c1a9a11"
+        try fm.createDirectory(atPath: project + "/" + session + "/subagents", withIntermediateDirectories: true)
+        fixture.write(project + "/" + session + ".jsonl", "{}\n")
+        fixture.write(project + "/.DS_Store", "finder\n")
+        try old([project + "/" + session + "/subagents", project + "/" + session, project + "/" + session + ".jsonl",
+                 project + "/.DS_Store", project])
+        let transcripts = try capture(project, activityCheck)
+        let lateMemory = try folder(".claude/projects/-Users-me-work/memory")
+        fixture.write(lateMemory + "/MEMORY.md", "added after the scan\n")
+        try old([lateMemory + "/MEMORY.md", lateMemory, project])
+        refused("memory/ added after planning and backdated", transcripts) { ($0 as? CleanupPathError) == .protectedPath(project) }
+        try fm.removeItem(atPath: lateMemory)
+        for stray in ["notes.md", "CLAUDE.md", "settings.json"] {
+            fixture.write(project + "/" + stray, "mine\n")
+            try old([project + "/" + stray, project])
+            refused("\(stray) added after planning", transcripts) { ($0 as? CleanupPathError) == .protectedPath(project) }
+            try fm.removeItem(atPath: project + "/" + stray)
+        }
+        try fm.createDirectory(atPath: project + "/not-a-session-id", withIntermediateDirectories: true)
+        try old([project + "/not-a-session-id", project])
+        refused("a folder that is not a session id", transcripts) { ($0 as? CleanupPathError) == .protectedPath(project) }
+        try fm.removeItem(atPath: project + "/not-a-session-id")
+        try old([project])
         _ = try capture(project, activityCheck)
 
         // A subfolder of a worktree answers to the worktree's check.

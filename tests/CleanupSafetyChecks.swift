@@ -255,6 +255,17 @@ enum CleanupSafetyChecks {
             let path = try make(relative, file: relative.hasSuffix(".md"))
             expectGitRejection("~/\(relative)", .protectedPath(path)) { try capture(path) }
         }
+        // A project folder is a target only while it holds transcripts and nothing else.
+        let mixed = try make(".claude/projects/-Users-me-mixed")
+        _ = try make(".claude/projects/-Users-me-mixed/0b0e6f0e-2f6a-4b61-9a53-0d6a3c1a9a11")
+        _ = try make(".claude/projects/-Users-me-mixed/0b0e6f0e-2f6a-4b61-9a53-0d6a3c1a9a11.jsonl", file: true)
+        expectAllowed("a project folder of transcripts") { try capture(mixed) }
+        for stray in ["memory", "notes.md", "not-a-session-id"] {
+            let entry = try make(".claude/projects/-Users-me-mixed/" + stray, file: stray.hasSuffix(".md"))
+            expectGitRejection("a project folder with \(stray) in it", .protectedPath(mixed)) { try capture(mixed) }
+            try fm.removeItem(atPath: entry)
+        }
+        expectAllowed("the project folder again, once the strays are gone") { try capture(mixed) }
         for relative in [".cache/huggingface/token", ".cache/huggingface/stored_tokens"] {
             let path = try make(relative, file: true)
             expectGitRejection("~/\(relative)", .protectedPath(path)) { try capture(path) }
@@ -269,7 +280,7 @@ enum CleanupSafetyChecks {
         precondition(!CleanupPathSafety.isInsideEngineContainer(home.path + "/work/app/node_modules", home: home.path))
         precondition(!CleanupPathSafety.isInsideEngineContainer(home.path + "/.npm", home: home.path))
         // What the engine's rules emit under these folders stays allowed.
-        for relative in [".npm", ".claude/projects/-Users-me-work", ".claude/file-history", ".codex/sessions/2026",
+        for relative in [".npm", ".claude/projects/-Users-me-quiet", ".claude/file-history", ".codex/sessions/2026",
                          ".codex/worktrees/abcd", ".gradle/caches", ".cargo/registry", ".m2/repository",
                          ".ollama/models", ".rustup/toolchains/stable", ".cache/pip"] {
             let path = try make(relative)
