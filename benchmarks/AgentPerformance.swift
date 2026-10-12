@@ -273,6 +273,8 @@ struct AgentPerformance {
                 case .claude:
                     records.append(["type": "stream_event", "event": ["type": "content_block_start", "content_block": ["type": "tool_use", "name": "StructuredOutput"]]])
                     records += chunks(plan, width: 13).map { ["type": "stream_event", "event": ["type": "content_block_delta", "delta": ["partial_json": $0]]] }
+                case .manvi:
+                    preconditionFailure("MANVI streams are checked in tests/ManviChecks.swift; the frozen reference reader predates MANVI")
                 }
             }
             if kind == .codex {
@@ -285,7 +287,9 @@ struct AgentPerformance {
             else { records.append(["type": "result", "structured_output": try! JSONSerialization.jsonObject(with: Data(plan.utf8)), "subtype": "success"]) }
             return Data((records.map(json).joined(separator: "\n") + "\n").utf8)
         }
-        for kind in AgentKind.allCases {
+        // The frozen reference reader knows only these two; MANVI's stream is
+        // covered by tests/ManviChecks.swift.
+        for kind in AgentKind.allCases where kind != .manvi {
             let bytes = Data("not-json\n\n".utf8) + stream(kind, plan: normal, restart: true)
             for width in [1, 7, 4096, 16384, bytes.count] {
                 let oldCapture = AgentCapture(), newCapture = AgentCapture()

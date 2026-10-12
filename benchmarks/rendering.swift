@@ -78,6 +78,7 @@ nonisolated final class Tree: @unchecked Sendable {
     func name(_ node: Int) -> String { names[node] }
     func path(_ node: Int) -> String { names[node] }
     func displayPath(_ node: Int) -> String { names[node] }
+    static func displayPath(_ path: String) -> String { path }
 }
 
 @MainActor final class ScanModel {
@@ -89,11 +90,15 @@ nonisolated final class Tree: @unchecked Sendable {
     var selection: Int?
     var scanRoot = "fixture"
     var agentRun: AgentRun?
+    // Bumped by the real model on each new tree; the fixtures never change theirs.
+    var treeGeneration: UInt64 = 0
+    var highlightedType: [UInt8]? { nil }
     // The node menu's actions; no fixture opens it, so they do nothing.
     var plannerName: String? { nil }
     var canStartRun: Bool { false }
     func startScan(path: String? = nil) {}
     func ask(about node: Int) {}
+    func forget(paths: [String]) {}
 }
 @MainActor struct AgentRun { func highlights(in tree: Tree?) -> [Int] { [] } }
 enum Fmt {
