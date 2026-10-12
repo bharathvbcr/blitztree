@@ -7,8 +7,17 @@
 
 typedef struct BzScan BzScan;
 
+// NULL for a NULL or empty path, or when the scan thread cannot start: that is
+// a failed scan, there is no handle to poll. The path bytes are used exactly
+// (not necessarily UTF-8); a symlink in them is followed, and the root node
+// keeps the name it was given.
 BzScan *bz_scan_start(const char *path);
+// `done` is set once the scan has finished, with or without a tree (a NULL
+// handle also reports done). Any output pointer may be NULL.
 void bz_progress(BzScan *h, uint64_t *files, uint64_t *dirs, uint64_t *bytes, int *done);
+// Node count of the finished tree. 0 means there is none: a scan that failed
+// (an internal error, logged to stderr), a NULL handle, or one not done yet.
+// A handle with 0 nodes is only for bz_free.
 uint64_t bz_take_tree(BzScan *h);
 
 const uint32_t *bz_parents(BzScan *h);

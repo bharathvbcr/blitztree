@@ -25,6 +25,8 @@
 "Clean Up" = "Clean Up";
 "Show folders that are safe to clean up" = "Show folders that are safe to clean up";
 "Pick a target and scan" = "Pick a target and scan";
+"The scan failed" = "The scan failed";
+"BlitzTree could not scan %@" = "BlitzTree could not scan %@";
 "%@ files · %@ folders · %@s" = "%@ files · %@ folders · %@s";
 "%@ files · %@" = "%@ files · %@";
 "%@ system folders unreadable%@" = "%@ system folders unreadable%@";

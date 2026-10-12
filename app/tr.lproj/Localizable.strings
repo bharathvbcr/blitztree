@@ -24,6 +24,8 @@
 "Clean Up" = "Temizle";
 "Show folders that are safe to clean up" = "Güvenle temizlenebilecek klasörleri göster";
 "Pick a target and scan" = "Bir hedef seçin ve tarayın";
+"The scan failed" = "Tarama başarısız oldu";
+"BlitzTree could not scan %@" = "BlitzTree %@ konumunu tarayamadı";
 "%@ files · %@ folders · %@s" = "%@ dosya · %@ klasör · %@s";
 "%@ files · %@" = "%@ dosya · %@";
 "%@ system folders unreadable%@" = "%@ sistem klasörü okunamadı%@";

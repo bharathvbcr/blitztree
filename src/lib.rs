@@ -15,7 +15,7 @@ use std::collections::HashMap;
 use std::ffi::{c_int, c_void, CStr, CString};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::Mutex;
+use std::sync::{Mutex, OnceLock};
 
 // ---- FFI: getattrlistbulk ----
 
@@ -640,6 +640,48 @@ thread_local! {
     static SCRATCH: RefCell<Scratch> = RefCell::default();
 }
 
+/// Whether `BZ_LOG_ERRORS` is set: unreadable directories, failed reads and
+/// dropped entries are then reported on stderr. Read once.
+fn log_errors_enabled() -> bool {
+    static ON: OnceLock<bool> = OnceLock::new();
+    *ON.get_or_init(|| std::env::var_os("BZ_LOG_ERRORS").is_some())
+}
+
+fn log_error(message: impl FnOnce() -> String) {
+    if log_errors_enabled() {
+        eprintln!("[bz] {}", message());
+    }
+}
+
+/// How many times in a row an interrupted `getattrlistbulk` is asked again
+/// before the directory is reported partial.
+const MAX_INTERRUPTS: u32 = 8;
+
+/// Run `call` again while it fails with EINTR or EAGAIN, at most
+/// `MAX_INTERRUPTS` times in a row. The last result (and its `errno`) is
+/// returned untouched.
+fn retry_interrupted(mut call: impl FnMut() -> c_int) -> c_int {
+    let mut n = call();
+    for _ in 0..MAX_INTERRUPTS {
+        if n >= 0 || !matches!(std::io::Error::last_os_error().raw_os_error(), Some(libc::EINTR | libc::EAGAIN)) {
+            break;
+        }
+        n = call();
+    }
+    n
+}
+
+/// # Safety
+/// `fd` is an open directory and `buf` holds `BUF_SIZE` writable bytes.
+unsafe fn bulk_syscall(fd: c_int, attrlist: &mut AttrList, buf: *mut c_void, options: u64) -> c_int {
+    #[cfg(test)]
+    if tests::take_injected_interrupt() {
+        *libc::__error() = libc::EINTR;
+        return -1;
+    }
+    getattrlistbulk(fd, attrlist, buf, BUF_SIZE, options)
+}
+
 /// Read all entries of one directory in bulk into `s`. None if it can't be
 /// opened, else whether every entry was read.
 fn read_dir_bulk(path: &CStr, s: &mut Scratch, progress: &Progress) -> Option<bool> {
@@ -656,13 +698,7 @@ fn read_dir_bulk(path: &CStr, s: &mut Scratch, progress: &Progress) -> Option<bo
     };
     if fd < 0 {
         progress.errors.fetch_add(1, Ordering::Relaxed);
-        if std::env::var_os("BZ_LOG_ERRORS").is_some() {
-            eprintln!(
-                "[bz] skip {} ({})",
-                path.to_string_lossy(),
-                std::io::Error::last_os_error()
-            );
-        }
+        log_error(|| format!("skip {} ({})", path.to_string_lossy(), std::io::Error::last_os_error()));
         return None;
     }
 
@@ -689,15 +725,9 @@ fn read_dir_bulk(path: &CStr, s: &mut Scratch, progress: &Progress) -> Option<bo
     let mut complete = true;
     let mut read_any = false;
     loop {
-        let n = unsafe {
-            getattrlistbulk(
-                fd,
-                &mut attrlist,
-                s.buf.as_mut_ptr() as *mut c_void,
-                BUF_SIZE,
-                options,
-            )
-        };
+        let n = retry_interrupted(|| unsafe {
+            bulk_syscall(fd, &mut attrlist, s.buf.as_mut_ptr() as *mut c_void, options)
+        });
         if n < 0
             && options != 0
             && !read_any
@@ -714,6 +744,7 @@ fn read_dir_bulk(path: &CStr, s: &mut Scratch, progress: &Progress) -> Option<bo
             if n < 0 {
                 progress.errors.fetch_add(1, Ordering::Relaxed);
                 complete = false;
+                log_error(|| format!("read {} ({})", path.to_string_lossy(), std::io::Error::last_os_error()));
             }
             break;
         }
@@ -726,9 +757,15 @@ fn read_dir_bulk(path: &CStr, s: &mut Scratch, progress: &Progress) -> Option<bo
                 progress.entry_errors.fetch_add(1, Ordering::Relaxed);
                 progress.errors.fetch_add(1, Ordering::Relaxed);
                 complete = false;
+                log_error(|| format!("malformed record list in {}", path.to_string_lossy()));
                 break;
             };
-            complete &= parse_entry(record, &mut s.entries, &mut s.names, progress);
+            if !parse_entry(record, &mut s.entries, &mut s.names, progress) {
+                complete = false;
+                log_error(|| {
+                    format!("entry dropped in {} (unreadable, malformed or non-UTF-8 name)", path.to_string_lossy())
+                });
+            }
             off += len;
         }
     }
@@ -764,6 +801,7 @@ fn fill_missing_alloc(dir_fd: c_int, s: &mut Scratch, progress: &Progress) -> bo
             progress.errors.fetch_add(1, Ordering::Relaxed);
             e.alloc = e.size;
             complete = false;
+            log_error(|| format!("stat {} ({})", String::from_utf8_lossy(name), std::io::Error::last_os_error()));
         }
     }
     complete
@@ -922,14 +960,19 @@ fn parse_entry(e: &[u8], out: &mut Vec<Entry>, names: &mut Vec<u8>, progress: &P
     if name.is_empty() {
         return invalid_name();
     }
+    let before = names.len();
     names.extend_from_slice(name);
+    let Ok(name_end) = u32::try_from(names.len()) else {
+        names.truncate(before);
+        return malformed();
+    };
     let key = match clone_id {
         Some(id) => DataStream { dev, id, by_clone_id: true },
         None => DataStream { dev, id: file_id, by_clone_id: false },
     };
     let stream = (!is_dir && (links > 1 || (may_share && clone_id.is_some()))).then_some(key);
     out.push(Entry {
-        name_end: names.len() as u32,
+        name_end,
         is_dir,
         dataless: flags & SF_DATALESS != 0,
         mount_point,
@@ -984,9 +1027,25 @@ impl Arena {
     }
 }
 
+/// How much the tree's 32-bit ABI columns can hold: node numbers, and the
+/// end offsets into the name blob. A walk that would pass either leaves that
+/// directory unlisted and marks it incomplete instead of letting a count wrap.
+/// Within these bounds the derived columns cannot wrap either: `n_files` and
+/// `child_off` never exceed the node count.
+#[derive(Clone, Copy)]
+struct Limits {
+    nodes: u64,
+    name_bytes: u64,
+}
+
+impl Limits {
+    const ABI: Limits = Limits { nodes: u32::MAX as u64, name_bytes: u32::MAX as u64 };
+}
+
 struct Shared<'a> {
     arena: Mutex<Arena>,
     progress: &'a Progress,
+    limits: Limits,
 }
 
 impl Shared<'_> {
@@ -1007,6 +1066,8 @@ fn child_path(dir: &CStr, name: &[u8]) -> Option<CString> {
 }
 
 fn walk<'s>(scope: &rayon::Scope<'s>, shared: &'s Shared<'s>, path: CString, dir_idx: u32) {
+    #[cfg(test)]
+    tests::inject_scan_fault(&path);
     // Nothing below runs another job on this thread (spawn only queues), so
     // the borrow can't nest.
     SCRATCH.with_borrow_mut(|s| {
@@ -1037,34 +1098,48 @@ fn walk<'s>(scope: &rayon::Scope<'s>, shared: &'s Shared<'s>, path: CString, dir
                 progress.skipped_cloud_dirs.fetch_add(1, Ordering::Relaxed);
             }
         }
-        progress.files.fetch_add(n_files, Ordering::Relaxed);
-        progress.dirs.fetch_add(n_dirs, Ordering::Relaxed);
 
-        let (base, bytes) = {
+        let appended = {
             let mut arena = shared.arena.lock().unwrap();
             let t = &mut arena.tree;
-            t.complete[dir_idx as usize] = complete;
-            let base = t.parents.len() as u32;
-            t.parents.extend(std::iter::repeat_n(dir_idx, entries.len()));
-            t.alloc.extend(entries.iter().map(|e| e.alloc));
-            t.logical.extend(entries.iter().map(|e| e.size));
-            t.flags.extend(entries.iter().map(|e| e.is_dir as u8));
-            t.complete.extend(entries.iter().map(|e| !e.is_dir || e.descend()));
-            let blob = t.name_blob.len() as u32;
-            t.name_off.extend(entries.iter().map(|e| blob + e.name_end));
-            t.name_blob.extend_from_slice(names);
-            let mut bytes = 0;
-            let mut shared_bytes = 0;
-            for (k, e) in entries.iter().enumerate() {
-                if !e.is_dir {
-                    let added = arena.account_file(base + k as u32, e.stream);
-                    bytes += added;
-                    shared_bytes += e.alloc - added;
+            let limits = shared.limits;
+            let fits = t.parents.len() as u64 + entries.len() as u64 <= limits.nodes
+                && t.name_blob.len() as u64 + names.len() as u64 <= limits.name_bytes;
+            if !fits {
+                t.complete[dir_idx as usize] = false;
+                None
+            } else {
+                t.complete[dir_idx as usize] = complete;
+                // `fits` bounds every count below by `u32::MAX`.
+                let base = t.parents.len() as u32;
+                t.parents.extend(std::iter::repeat_n(dir_idx, entries.len()));
+                t.alloc.extend(entries.iter().map(|e| e.alloc));
+                t.logical.extend(entries.iter().map(|e| e.size));
+                t.flags.extend(entries.iter().map(|e| e.is_dir as u8));
+                t.complete.extend(entries.iter().map(|e| !e.is_dir || e.descend()));
+                let blob = t.name_blob.len() as u32;
+                t.name_off.extend(entries.iter().map(|e| blob + e.name_end));
+                t.name_blob.extend_from_slice(names);
+                let mut bytes = 0;
+                let mut shared_bytes = 0;
+                for (k, e) in entries.iter().enumerate() {
+                    if !e.is_dir {
+                        let added = arena.account_file(base + k as u32, e.stream);
+                        bytes += added;
+                        shared_bytes += e.alloc - added;
+                    }
                 }
+                progress.shared_bytes.fetch_add(shared_bytes, Ordering::Relaxed);
+                Some((base, bytes))
             }
-            progress.shared_bytes.fetch_add(shared_bytes, Ordering::Relaxed);
-            (base, bytes)
         };
+        let Some((base, bytes)) = appended else {
+            progress.errors.fetch_add(1, Ordering::Relaxed);
+            log_error(|| format!("tree too large for the 32-bit layout; {} left unlisted", path.to_string_lossy()));
+            return;
+        };
+        progress.files.fetch_add(n_files, Ordering::Relaxed);
+        progress.dirs.fetch_add(n_dirs, Ordering::Relaxed);
         progress.bytes.fetch_add(bytes, Ordering::Relaxed);
         if entries.iter().any(|e| e.no_clone_id) {
             progress.clone_ids_unavailable_dirs.fetch_add(1, Ordering::Relaxed);
@@ -1296,9 +1371,105 @@ fn fast_pool() -> rayon::ThreadPool {
 }
 
 
-/// Scan `root` and return the finished tree, ready for the UI.
+/// The directory a scan of `p` reads: `p` made absolute with every symbolic
+/// link in it followed, since the walk opens directories without following
+/// links. The scan root and the CLI both resolve through this.
+///
+/// Each ancestor is checked before resolving deeper: canonicalize/read_dir on
+/// a cloud-only directory can ask its provider to materialize that directory,
+/// so a cloud-only path is refused instead.
+///
+/// At most `MAX_SYMLINK_HOPS` links are followed in total (the kernel's
+/// `MAXSYMLINKS`), however they nest, so a looping or doubling chain fails
+/// at once instead of walking for ever.
+///
+/// A scan keeps the name it was given for its root, not this resolved path,
+/// so for a tree scanned through a symlinked root Clean Up's rules, which
+/// compare resolved paths, match nothing and every action is refused (fail
+/// closed).
+pub fn local_path(p: &Path) -> Result<PathBuf, String> {
+    local_path_at(p, &mut 0)
+}
+
+/// Symbolic links `local_path` follows before giving up (ELOOP).
+const MAX_SYMLINK_HOPS: u32 = 32;
+
+fn local_path_at(p: &Path, hops: &mut u32) -> Result<PathBuf, String> {
+    use std::os::macos::fs::MetadataExt;
+    use std::path::Component;
+    let absolute = if p.is_absolute() {
+        p.to_owned()
+    } else {
+        std::env::current_dir().map_err(|e| e.to_string())?.join(p)
+    };
+    let mut resolved = PathBuf::from("/");
+    let mut is_directory = true;
+    for component in absolute.components() {
+        if !is_directory {
+            return Err(format!("Not a directory: {}", resolved.display()));
+        }
+        match component {
+            Component::RootDir | Component::CurDir => continue,
+            Component::ParentDir => {
+                resolved.pop();
+                continue;
+            }
+            Component::Normal(part) => resolved.push(part),
+            _ => return Err("Unsupported path prefix".into()),
+        }
+        let m = std::fs::symlink_metadata(&resolved)
+            .map_err(|e| format!("Cannot resolve {}: {e}", resolved.display()))?;
+        if m.st_flags() & SF_DATALESS != 0 {
+            return Err(format!("Cloud-only path; refusing to materialize {}", resolved.display()));
+        }
+        if m.file_type().is_symlink() {
+            *hops += 1;
+            if *hops > MAX_SYMLINK_HOPS {
+                return Err(format!("Too many levels of symbolic links: {}", resolved.display()));
+            }
+            let target = std::fs::read_link(&resolved).map_err(|e| e.to_string())?;
+            let target = if target.is_absolute() {
+                target
+            } else {
+                resolved.parent().unwrap_or(Path::new("/")).join(target)
+            };
+            resolved = local_path_at(&target, hops)?;
+            is_directory = std::fs::metadata(&resolved).map_err(|e| e.to_string())?.is_dir();
+        } else {
+            is_directory = m.is_dir();
+        }
+    }
+    Ok(resolved)
+}
+
+/// Scan `root` and return the finished tree, ready for the UI. A symlinked
+/// root is followed (see `local_path`); the root node keeps the name it was
+/// given, as far as it is UTF-8 (the path that is read is always exact). A
+/// root that cannot be resolved is counted as an error and left unread. Since
+/// the root keeps its given name, Clean Up refuses every action in a tree
+/// scanned through a symlinked root (it fails closed); scan the resolved path
+/// for a tree it can act on.
 pub fn scan(root: &Path, progress: &Progress) -> Tree {
+    scan_with(root, progress, Limits::ABI)
+}
+
+/// `scan` for a root already resolved by `local_path`: it is not resolved again.
+pub fn scan_resolved(root: &Path, progress: &Progress) -> Tree {
+    scan_at(root, || Ok(root.to_path_buf()), progress, Limits::ABI)
+}
+
+fn scan_with(root: &Path, progress: &Progress, limits: Limits) -> Tree {
+    scan_at(root, || local_path(root), progress, limits)
+}
+
+fn scan_at(
+    root: &Path,
+    resolve: impl FnOnce() -> Result<PathBuf, String>,
+    progress: &Progress,
+    limits: Limits,
+) -> Tree {
     let root_name = root.to_string_lossy();
+    let root_name = if u32::try_from(root_name.len()).is_ok() { root_name.as_bytes() } else { &[] };
     let tree = Tree {
         parents: vec![NO_PARENT],
         alloc: vec![0],
@@ -1306,7 +1477,7 @@ pub fn scan(root: &Path, progress: &Progress) -> Tree {
         flags: vec![1],
         complete: vec![true],
         name_off: vec![0, root_name.len() as u32],
-        name_blob: root_name.as_bytes().to_vec(),
+        name_blob: root_name.to_vec(),
         ..Default::default()
     };
     let shared = Shared {
@@ -1315,6 +1486,7 @@ pub fn scan(root: &Path, progress: &Progress) -> Tree {
             streams: HashMap::new(),
         }),
         progress,
+        limits,
     };
 
     let t0 = std::time::Instant::now();
@@ -1324,11 +1496,19 @@ pub fn scan(root: &Path, progress: &Progress) -> Tree {
     if root_is_cloud_only {
         progress.skipped_cloud_dirs.fetch_add(1, Ordering::Relaxed);
         shared.mark_incomplete(0);
-    } else if let Ok(path) = CString::new(root.as_os_str().as_encoded_bytes()) {
-        fast_pool().scope(|s| walk(s, &shared, path, 0));
     } else {
-        progress.errors.fetch_add(1, Ordering::Relaxed);
-        shared.mark_incomplete(0);
+        let target = resolve().and_then(|resolved| {
+            CString::new(resolved.as_os_str().as_encoded_bytes())
+                .map_err(|_| "The scan root contains a NUL byte".to_string())
+        });
+        match target {
+            Ok(path) => fast_pool().scope(|s| walk(s, &shared, path, 0)),
+            Err(reason) => {
+                progress.errors.fetch_add(1, Ordering::Relaxed);
+                shared.mark_incomplete(0);
+                log_error(|| format!("skip {} ({reason})", root.to_string_lossy()));
+            }
+        }
     }
     let t1 = std::time::Instant::now();
     let mut tree = shared.arena.into_inner().unwrap().tree;
@@ -2430,6 +2610,218 @@ mod tests {
         }
         println!("without min ns: reference {} one-pass {} ({} nodes)", best[0], best[1], t.len());
     }
+
+
+    thread_local! {
+        static INTERRUPTS: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
+    }
+
+    /// Makes this thread's next `n` `getattrlistbulk` calls fail with EINTR.
+    fn interrupt_next(n: u32) {
+        INTERRUPTS.with(|c| c.set(n));
+    }
+
+    pub(super) fn take_injected_interrupt() -> bool {
+        INTERRUPTS.with(|c| {
+            let left = c.get();
+            c.set(left.saturating_sub(1));
+            left > 0
+        })
+    }
+
+    /// Fault injection: a walk of any path containing this panics on a
+    /// rayon worker. Keyed on the path so parallel tests are unaffected.
+    pub(crate) const PANIC_MARKER: &str = "bz-inject-panic";
+
+    pub(super) fn inject_scan_fault(path: &CStr) {
+        let marker = PANIC_MARKER.as_bytes();
+        if path.to_bytes().windows(marker.len()).any(|w| w == marker) {
+            panic!("injected scan fault");
+        }
+    }
+
+    #[test]
+    fn interrupted_calls_are_retried_a_bounded_number_of_times() {
+        let calls = std::cell::Cell::new(0u32);
+        let interrupted = |until: u32| {
+            calls.set(0);
+            retry_interrupted(|| {
+                calls.set(calls.get() + 1);
+                if calls.get() <= until {
+                    unsafe { *libc::__error() = libc::EINTR };
+                    -1
+                } else {
+                    7
+                }
+            })
+        };
+        assert_eq!(interrupted(0), 7);
+        assert_eq!(interrupted(MAX_INTERRUPTS), 7, "the last allowed retry succeeds");
+        assert_eq!(calls.get(), MAX_INTERRUPTS + 1);
+        assert_eq!(interrupted(MAX_INTERRUPTS + 1), -1, "gives up after the bound");
+        assert_eq!(calls.get(), MAX_INTERRUPTS + 1);
+        assert_eq!(std::io::Error::last_os_error().raw_os_error(), Some(libc::EINTR));
+        // Any other failure is final on the first call.
+        calls.set(0);
+        let n = retry_interrupted(|| {
+            calls.set(calls.get() + 1);
+            unsafe { *libc::__error() = libc::EACCES };
+            -1
+        });
+        assert_eq!((n, calls.get()), (-1, 1));
+    }
+
+    #[test]
+    fn an_interrupted_directory_read_is_retried_instead_of_reported_partial() {
+        let root = std::env::temp_dir().join(format!("bz-test-eintr-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        for name in ["a", "b", "c"] {
+            std::fs::write(root.join(name), b"x").unwrap();
+        }
+        let path = CString::new(root.as_os_str().as_encoded_bytes()).unwrap();
+
+        let (mut scratch, progress) = (Scratch::default(), Progress::default());
+        interrupt_next(3);
+        assert_eq!(read_dir_bulk(&path, &mut scratch, &progress), Some(true));
+        assert_eq!(scratch.entries.len(), 3);
+        assert_eq!(progress.errors.load(Ordering::Relaxed), 0);
+
+        // A call that keeps being interrupted still ends: the listing is partial and counted.
+        interrupt_next(1000);
+        assert_eq!(read_dir_bulk(&path, &mut scratch, &progress), Some(false));
+        assert_eq!(progress.errors.load(Ordering::Relaxed), 1);
+        interrupt_next(0);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn a_symlinked_root_is_scanned_through_the_link() {
+        let base = std::env::temp_dir().join(format!("bz-test-symroot-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        std::fs::create_dir_all(base.join("real/sub")).unwrap();
+        std::fs::write(base.join("real/sub/f"), b"x").unwrap();
+        std::os::unix::fs::symlink(base.join("real"), base.join("abs")).unwrap();
+        std::os::unix::fs::symlink("real", base.join("rel")).unwrap();
+        std::os::unix::fs::symlink("rel", base.join("chain")).unwrap();
+
+        for link in ["abs", "rel", "chain"] {
+            let progress = Progress::default();
+            let t = scan(&base.join(link), &progress);
+            assert_eq!(t.len(), 3, "{link}: root, sub, f");
+            assert_eq!(t.errors, 0, "{link}");
+            assert!(t.complete[0], "{link}");
+            assert_eq!(t.name(0), base.join(link).to_str().unwrap(), "the root keeps the name it was given");
+            assert_eq!(t.name(2), "f");
+        }
+
+        // Nothing to follow: a loop, a dangling link and a link to a file are errors, not a walk.
+        std::os::unix::fs::symlink("loop", base.join("loop")).unwrap();
+        std::os::unix::fs::symlink("nowhere", base.join("dangling")).unwrap();
+        std::os::unix::fs::symlink("real/sub/f", base.join("to_file")).unwrap();
+        for link in ["loop", "dangling", "to_file"] {
+            let t = scan(&base.join(link), &Progress::default());
+            assert_eq!((t.len(), t.errors, t.complete[0]), (1, 1, false), "{link}");
+        }
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn local_path_resolves_every_link_and_dot_segment() {
+        let base = std::fs::canonicalize(std::env::temp_dir()).unwrap().join(format!("bz-test-local-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        std::fs::create_dir_all(base.join("a/b")).unwrap();
+        std::os::unix::fs::symlink("..", base.join("a/b/up")).unwrap();
+        assert_eq!(local_path(&base.join("a/b/up/./b/../b")).unwrap(), base.join("a/b"));
+        assert!(local_path(&base.join("missing")).is_err());
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// A directory `root` with `root/f1..f4` and `root/s/g1,g2`.
+    fn limit_fixture(name: &str) -> PathBuf {
+        let root = std::env::temp_dir().join(format!("{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(root.join("s")).unwrap();
+        for f in ["f1", "f2", "f3", "f4", "s/g1", "s/g2"] {
+            std::fs::write(root.join(f), b"x").unwrap();
+        }
+        root
+    }
+
+    #[test]
+    fn past_the_abi_limits_a_directory_is_left_unlisted_and_incomplete() {
+        let root = limit_fixture("bz-test-limits");
+        let label = root.to_str().unwrap().len() as u64;
+        let full = scan(&root, &Progress::default());
+        assert_eq!(full.len(), 8);
+        assert!(full.complete[0] && full.errors == 0);
+
+        // Root + its five entries fit exactly; the two files under `s` would be node 7 and 8.
+        let progress = Progress::default();
+        let t = scan_with(&root, &progress, Limits { nodes: 6, name_bytes: u32::MAX as u64 });
+        assert_eq!(t.len(), 6, "s's listing is dropped whole, not cut");
+        assert!(!t.complete[0], "the tree is marked incomplete");
+        let s = (0..t.len()).find(|&i| t.name(i) == "s").unwrap();
+        assert!(!t.complete[s] && t.kids(s).is_empty());
+        assert_eq!(t.errors, 1);
+        assert_eq!(progress.files.load(Ordering::Relaxed), 4, "dropped entries are not counted as scanned");
+        assert_eq!(t.n_files[0], 4);
+        assert_partition(&t);
+
+        // The same for the name blob: the root label plus the five names fit, s's two do not.
+        let t = scan_with(&root, &Progress::default(), Limits { nodes: u32::MAX as u64, name_bytes: label + 9 });
+        assert_eq!(t.len(), 6);
+        assert!(!t.complete[0]);
+        assert_eq!(t.errors, 1);
+        assert_eq!(*t.name_off.last().unwrap() as u64, label + 9);
+
+        // A limit the root listing already passes leaves just the root, incomplete.
+        let t = scan_with(&root, &Progress::default(), Limits { nodes: 3, name_bytes: u32::MAX as u64 });
+        assert_eq!((t.len(), t.complete[0], t.errors), (1, false, 1));
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn a_doubling_symlink_chain_fails_at_once_instead_of_walking_for_ever() {
+        // Lk -> L(k+1)/L(k+1): resolving each hop twice made the walk 2^k long.
+        let base = std::env::temp_dir().join(format!("bz-test-doubling-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        std::fs::create_dir_all(&base).unwrap();
+        for k in 0..22 {
+            std::os::unix::fs::symlink(format!("L{}/L{}", k + 1, k + 1), base.join(format!("L{k}"))).unwrap();
+        }
+        std::os::unix::fs::symlink(".", base.join("L22")).unwrap();
+
+        // Off the test thread, so a regression fails here instead of hanging the suite.
+        let (sender, receiver) = std::sync::mpsc::channel();
+        let (start, link) = (std::time::Instant::now(), base.join("L0"));
+        std::thread::spawn(move || {
+            let resolved = local_path(&link);
+            let scanned = scan(&link, &Progress::default());
+            let _ = sender.send((resolved, scanned.errors, scanned.len(), start.elapsed()));
+        });
+        let (resolved, errors, nodes, elapsed) = receiver
+            .recv_timeout(std::time::Duration::from_secs(5))
+            .expect("resolving the chain did not finish");
+        assert!(resolved.unwrap_err().contains("Too many levels of symbolic links"));
+        assert_eq!((errors, nodes), (1, 1), "the scan counts the root as unreadable");
+        assert!(elapsed < std::time::Duration::from_secs(1), "took {elapsed:?}");
+
+        // A chain within the limit still resolves.
+        for k in 0..30 {
+            std::os::unix::fs::symlink(format!("M{}", k + 1), base.join(format!("M{k}"))).unwrap();
+        }
+        std::fs::create_dir(base.join("M30")).unwrap();
+        assert_eq!(local_path(&base.join("M0")).unwrap(), std::fs::canonicalize(&base).unwrap().join("M30"));
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn a_walk_that_panics_reaches_the_caller_of_scan() {
+        let root = std::env::temp_dir().join(format!("{PANIC_MARKER}-lib-{}", std::process::id()));
+        std::fs::create_dir_all(&root).unwrap();
+        let outcome = std::panic::catch_unwind(|| scan(&root, &Progress::default()));
+        assert!(outcome.is_err());
+        let _ = std::fs::remove_dir_all(&root);
+    }
 }
-
-
