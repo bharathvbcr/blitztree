@@ -83,7 +83,10 @@ nonisolated enum CleanupOperations {
                                   worktree: entry)
     }
 
-    private static func systemTrash(_ source: URL) throws -> URL {
+    /// Finder's own move to the Trash, the default of every caller. Checks
+    /// and callers inject another so a refusal that fails to happen cannot
+    /// put a fixture in the real Trash.
+    static func systemTrash(_ source: URL) throws -> URL {
         var destination: NSURL?
         try FileManager.default.trashItem(at: source, resultingItemURL: &destination)
         guard let destination else {

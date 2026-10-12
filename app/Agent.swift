@@ -1094,14 +1094,15 @@ final class AgentRun {
     }
 
     /// Revalidate captured targets at the actual operation boundary.
-    nonisolated static func trash(_ targets: [CleanupTarget]) async -> (moved: [CleanupReceipt], error: String?) {
+    nonisolated static func trash(_ targets: [CleanupTarget], move: @escaping @Sendable (URL) throws -> URL = CleanupOperations.systemTrash)
+        async -> (moved: [CleanupReceipt], error: String?) {
         // Each move re-verifies its target (git, lsof): a dispatch thread,
         // not one of the few cooperative ones.
         await AgentLocator.onBackgroundThread {
             var moved: [CleanupReceipt] = []
             var errors: [String] = []
             for target in targets {
-                do { moved.append(try CleanupOperations.trash(target)) }
+                do { moved.append(try CleanupOperations.trash(target, move: move)) }
                 catch { errors.append("\(target.path): \(error.localizedDescription)") }
             }
             return (moved, errors.isEmpty ? nil : errors.joined(separator: "\n"))

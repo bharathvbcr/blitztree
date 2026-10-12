@@ -36,7 +36,7 @@ old='''                        guard let target = item.target else {
                         }
                         // Revalidating at the boundary checks the folder again
                         // (it may have been used since the scan), rule check included.
-                        receipts.append(try CleanupOperations.trash(target))'''
+                        receipts.append(try CleanupOperations.trash(target, move: move))'''
 p.write_text(hook(source, old, '                        try AgentBenchmarkTrash.move(item)', p, 'manual Trash operation'))
 p=Path(sys.argv[3]); source=p.read_text()
 old='''    func startAgent(_ agent: InstalledAgent, focus: AgentFocus? = nil, routes: [Manvi.Route]? = nil) {

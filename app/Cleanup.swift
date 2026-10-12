@@ -143,7 +143,8 @@ final class CleanupTrashBatch {
     }
 
     @discardableResult
-    func start(_ items: [CleanupItem], completion: @escaping (_ moved: [CleanupItem], _ failed: [String]) -> Void) -> Task<Void, Never>? {
+    func start(_ items: [CleanupItem], move: @escaping @Sendable (URL) throws -> URL = CleanupOperations.systemTrash,
+               completion: @escaping (_ moved: [CleanupItem], _ failed: [String]) -> Void) -> Task<Void, Never>? {
         guard !running else { return nil }
         running = true
         return Task {
@@ -160,7 +161,7 @@ final class CleanupTrashBatch {
                         }
                         // Revalidating at the boundary checks the folder again
                         // (it may have been used since the scan), rule check included.
-                        receipts.append(try CleanupOperations.trash(target))
+                        receipts.append(try CleanupOperations.trash(target, move: move))
                         moved.append(item)
                     } catch {
                         failed.append("\(item.display): \(error.localizedDescription)")

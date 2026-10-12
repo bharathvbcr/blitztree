@@ -1,6 +1,21 @@
 import AppKit
 import Foundation
 
+/// Stands in for the Trash where a check expects every move to be refused.
+nonisolated final class RefusedTrash: @unchecked Sendable {
+    private let lock = NSLock()
+    private var count = 0
+    var calls: Int { lock.lock(); defer { lock.unlock() }; return count }
+    var move: @Sendable (URL) throws -> URL {
+        { [self] source in
+            lock.lock(); count += 1; lock.unlock()
+            // Not moved, and not reported as moved: the check that expected a refusal then fails on `calls`.
+            throw NSError(domain: "BlitzTree.RefusedTrash", code: 1,
+                          userInfo: [NSLocalizedDescriptionKey: "reached the Trash: \(source.path)"])
+        }
+    }
+}
+
 @main
 struct CleanupIntegrationChecks {
     @MainActor
@@ -703,6 +718,9 @@ struct CleanupIntegrationChecks {
                                         paths: [path], action: "trash", command: ""),
                      tree: tree, home: home)
         }
+        // Every move below that must be refused goes through this stand-in: if
+        // a boundary regression let one through it is counted here, not put in ~/.Trash.
+        let noTrash = RefusedTrash()
         try Data("Signature: not the cache tag signature\n".utf8).write(to: tag)
         let forgedCard = agentCard(taggedTree, tagged.path, home: fixture.path)
         precondition(forgedCard.blocked != nil && forgedCard.cleanupTargets.isEmpty && !forgedCard.selected,
@@ -712,8 +730,9 @@ struct CleanupIntegrationChecks {
         precondition(signedCard.blocked == nil && signedCard.cleanupTargets.count == 1 && signedCard.selected,
                      "a signed tag plans: \(String(describing: signedCard.blocked))")
         try Data("Signature: forged after the card was made\n".utf8).write(to: tag)
-        let agentOutcome = await AgentRun.trash(signedCard.cleanupTargets)
-        precondition(agentOutcome.moved.isEmpty && agentOutcome.error != nil && fm.fileExists(atPath: tagged.path),
+        let agentOutcome = await AgentRun.trash(signedCard.cleanupTargets, move: noTrash.move)
+        precondition(agentOutcome.moved.isEmpty && agentOutcome.error != nil && fm.fileExists(atPath: tagged.path)
+                     && noTrash.calls == 0,
                      "Agent.trash refuses a tag forged after planning: \(String(describing: agentOutcome.error))")
 
         // ~/.claude/projects/<project> answers to recent_activity for an agent card too.
@@ -747,8 +766,9 @@ struct CleanupIntegrationChecks {
         precondition(quietCard.blocked == nil && quietCard.cleanupTargets.count == 1,
                      "the same folder untouched for days plans: \(String(describing: quietCard.blocked))")
         try Data("a new transcript\n".utf8).write(to: projectDir.appendingPathComponent("new.jsonl"))
-        let lateOutcome = await AgentRun.trash(quietCard.cleanupTargets)
-        precondition(lateOutcome.moved.isEmpty && lateOutcome.error != nil && fm.fileExists(atPath: projectDir.path),
+        let lateOutcome = await AgentRun.trash(quietCard.cleanupTargets, move: noTrash.move)
+        precondition(lateOutcome.moved.isEmpty && lateOutcome.error != nil && fm.fileExists(atPath: projectDir.path)
+                     && noTrash.calls == 0,
                      "a project used after the card was made is refused at the Trash")
 
         // Containers and user data inside them: a real scan of a fixture home,
@@ -825,8 +845,8 @@ struct CleanupIntegrationChecks {
         try Data("changed after the scan\n".utf8).write(to: tag)
         let batch = CleanupTrashBatch()
         var movedNow: [CleanupItem] = [], failedNow: [String] = []
-        await batch.start([genuine]) { moved, failed in movedNow = moved; failedNow = failed }?.value
-        precondition(movedNow.isEmpty && failedNow.count == 1 && fm.fileExists(atPath: tagged.path),
+        await batch.start([genuine], move: noTrash.move) { moved, failed in movedNow = moved; failedNow = failed }?.value
+        precondition(movedNow.isEmpty && failedNow.count == 1 && fm.fileExists(atPath: tagged.path) && noTrash.calls == 0,
                      "the verifier runs again before the Trash")
 
         try await worktrees()
@@ -965,5 +985,35 @@ struct CleanupIntegrationChecks {
                             stagedBytes: 1, tree: tree)
         precondition(last.status == .done && last.notices == outcome.notices && fm.fileExists(atPath: admin),
                      "the card is done and carries the notice")
+
+        // The panel only moves to the Trash; the admin entry goes when the Trash is emptied.
+        let panelBin = base.appendingPathComponent("panel-trash")
+        try fm.createDirectory(at: panelBin, withIntermediateDirectories: true)
+        let toPanelBin: @Sendable (URL) throws -> URL = { source in
+            let destination = panelBin.appendingPathComponent(source.lastPathComponent)
+            try FileManager.default.moveItem(at: source, to: destination)
+            return destination
+        }
+        let batch = CleanupTrashBatch()
+        let panelItems = [paths[1], paths[2]].map { path in offered.first { $0.path == path }! }
+        let adminOne = git.admin(of: paths[1]), adminTwo = git.admin(of: paths[2])
+        var movedByPanel: [CleanupItem] = []
+        await batch.start(panelItems, move: toPanelBin) { moved, _ in movedByPanel = moved }?.value
+        precondition(movedByPanel.count == 2 && panelItems.allSatisfy { !fm.fileExists(atPath: $0.path) },
+                     "the panel moved both worktrees: \(batch.failures)")
+        await batch.settleWorktrees()
+        precondition(fm.fileExists(atPath: adminOne) && fm.fileExists(atPath: adminTwo) && batch.notices.isEmpty,
+                     "while they sit in the Trash their entries stay, so Put Back works")
+        git.write(adminTwo + "/gitdir", paths[0] + "/.git\n")
+        for item in panelItems { try fm.removeItem(at: panelBin.appendingPathComponent((item.path as NSString).lastPathComponent)) }
+        await batch.settleWorktrees()
+        precondition(!fm.fileExists(atPath: adminOne), "Trash emptied: the admin entry is gone")
+        precondition(fm.fileExists(atPath: adminTwo) && batch.notices.count == 1,
+                     "a changed entry is left and reported: \(batch.notices)")
+        let outstanding = batch.notices
+        await batch.settleWorktrees()
+        precondition(batch.notices == outstanding, "settled receipts are not asked again")
+        batch.clearNotices()
+        precondition(batch.notices.isEmpty)
     }
 }
