@@ -63,12 +63,24 @@ fn inject(mode: Injected) {
     EXTENDED_REQUESTS.with(|c| c.set(0));
 }
 
+/// Removes its folder and stops injecting failures when dropped, so a failed
+/// assertion cleans up too.
+struct Fixture(PathBuf);
+
+impl Drop for Fixture {
+    fn drop(&mut self) {
+        inject(Injected::Kernel);
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
+}
+
 #[test]
 fn einval_on_extended_attributes_falls_back_to_the_plain_set() {
     let root = std::fs::canonicalize(std::env::temp_dir())
         .unwrap()
         .join(format!("bz-test-einval-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&root);
+    let _cleanup = Fixture(root.clone());
     std::fs::create_dir_all(root.join("sub")).unwrap();
     for (name, bytes) in [("a", 10_000usize), ("b", 20_000), ("c", 1)] {
         std::fs::write(root.join(name), vec![7u8; bytes]).unwrap();
@@ -161,7 +173,6 @@ fn einval_on_extended_attributes_falls_back_to_the_plain_set() {
             && progress.errors.load(Ordering::Relaxed) == 1
     );
     assert!(scratch.entries.is_empty());
-    let _ = std::fs::remove_dir_all(&root);
 }
 
 /// hdiutil attaches one image at a time; the tests share the machine's disk

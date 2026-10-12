@@ -182,7 +182,7 @@
 "Which AI proposes what can go from the scan. Nothing is removed without your say." = "La IA que propone qué puede ir del escaneo. Nada se elimina sin su confirmación.";
 
 "Save changes" = "Guardar cambios";
-"HTTP %@: %@" = "HTTP %@: %@";
+"HTTP %lld: %@" = "HTTP %lld: %@";
 /* Step lines */
 "Reading your scan" = "Leyendo tu escaneo";
 "Asking %@ what can go" = "Preguntando a %@ qué puede eliminarse";

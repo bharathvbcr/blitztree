@@ -173,7 +173,7 @@
 "Which AI proposes what can go from the scan. Nothing is removed without your say." = "Which AI proposes what can go from the scan. Nothing is removed without your say.";
 
 "Save changes" = "Save changes";
-"HTTP %@: %@" = "HTTP %@: %@";
+"HTTP %lld: %@" = "HTTP %lld: %@";
 /* Step lines */
 "Reading your scan" = "Reading your scan";
 "Asking %@ what can go" = "Asking %@ what can go";

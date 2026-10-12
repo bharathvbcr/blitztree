@@ -182,7 +182,7 @@
 "Which AI proposes what can go from the scan. Nothing is removed without your say." = "スキャンから何を消せるか提案する AI の選択。あなたの確認なしに削除はしません。";
 
 "Save changes" = "変更を保存";
-"HTTP %@: %@" = "HTTP %@: %@";
+"HTTP %lld: %@" = "HTTP %lld: %@";
 /* Step lines */
 "Reading your scan" = "スキャンを読み取り中";
 "Asking %@ what can go" = "%@に削除できるものを確認中";

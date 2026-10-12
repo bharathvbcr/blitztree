@@ -1,7 +1,34 @@
 #!/bin/zsh
 # Offline regression checks. All filesystem operations stay in disposable fixtures.
 set -euo pipefail
-cd "$(dirname "$0")/.."
+SELF=${0:A}
+cd "${SELF:h}/.."
+# A check that cannot run here (no Keychain, no hdiutil, no fish ...) prints a
+# line starting with SKIP and carries on: a skip is not a failure, so the exit
+# code is untouched. But a skipped check must never read as a plain pass, so
+# the run is wrapped: everything it prints is kept, and when it ends every SKIP
+# line is listed again with a count (and, on GitHub Actions, as a warning
+# annotation on the run page).
+if [[ -z "${BZ_CLEANUP_INNER:-}" ]]; then
+  RUN_LOG=$(mktemp /tmp/blitztree-cleanup-log.XXXXXX)
+  set +e
+  BZ_CLEANUP_INNER=1 zsh "$SELF" "$@" 2>&1 | tee "$RUN_LOG"
+  RUN_STATUS=${pipestatus[1]}
+  set -e
+  SKIPS=("${(@f)$(grep -E '^SKIP' "$RUN_LOG" || true)}")
+  SKIPS=("${(@)SKIPS:#}")
+  rm -f "$RUN_LOG"
+  if (( ${#SKIPS} == 0 )); then
+    echo "no checks skipped"
+  else
+    echo "${#SKIPS} checks SKIPPED (not failures, but nothing was checked):"
+    for line in "${SKIPS[@]}"; do
+      echo "  $line"
+      [[ -n "${GITHUB_ACTIONS:-}" ]] && echo "::warning title=Check skipped::${line//\%/%25}"
+    done
+  fi
+  exit $RUN_STATUS
+fi
 CLEANUP_TEST_TMP=$(mktemp -d /tmp/blitztree-cleanup-checks.XXXXXX)
 PROVIDER_MOCK=""
 # Only the mock this script started (by PID) is stopped on the way out.

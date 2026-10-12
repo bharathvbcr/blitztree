@@ -188,26 +188,24 @@ struct SourceKey {
             return false
         }
     }
-    /// The key Swift writes for the literal: `\(n)` becomes `%lld`, a String `%@`.
-    var pattern: NSRegularExpression {
-        var p = "^"
-        for part in parts {
-            switch part {
-            case .text(let t): p += NSRegularExpression.escapedPattern(for: t)
-            case .hole: p += "%(?:\\d+\\$)?(?:@|ll[dux]|l[dux]|[dux]|lf|f|c|s)"
-            }
-        }
-        return try! NSRegularExpression(pattern: p + "$")
-    }
 }
 
+/// Reads the localizable literals out of one Swift file that the compiler
+/// cannot be run on (Main.swift imports Sparkle, which the check does not
+/// have). Everything else comes from the compiler's own list of keys, which
+/// knows each interpolation's real type; this scanner knows none, so a
+/// literal with an interpolation is an error here, as is any localizable call
+/// whose literal it cannot read (multi-line, raw) and `NSLocalizedString`,
+/// which the compiler does not list. It never skips such a call quietly.
 final class SourceScanner {
     static let views: Set<String> = [
         "Text", "Button", "Label", "Toggle", "Picker", "Section", "TextField", "SecureField", "Menu", "Link",
         "GroupBox", "ProgressView", "Stepper", "DisclosureGroup", "LabeledContent", "Gauge", "Slider",
+        "LocalizedStringKey",
     ]
     static let modifiers: Set<String> = [
         "help", "navigationTitle", "accessibilityLabel", "accessibilityHint", "accessibilityValue", "badge",
+        "alert", "confirmationDialog",
     ]
 
     let bytes: [UInt8]
@@ -215,6 +213,8 @@ final class SourceScanner {
     private(set) var found: [SourceKey] = []
     /// `String(localized:)` calls whose argument is not a literal: not checkable here.
     private(set) var dynamic = 0
+    /// Localizable calls this scanner cannot read: (line, what).
+    private(set) var unreadable: [(line: Int, what: String)] = []
 
     init(file: String, text: String) {
         self.file = file
@@ -343,6 +343,11 @@ final class SourceScanner {
             let prev = i > 0 ? bytes[i - 1] : 0
             let afterName = skipSpace(j)
             guard afterName < end, bytes[afterName] == 40 else { i = j; continue }
+            if name == "NSLocalizedString" {
+                unreadable.append((line(i), "NSLocalizedString (the compiler does not list its keys; use String(localized:))"))
+                i = j
+                continue
+            }
             let arg = skipSpace(afterName + 1)
             var call: String?
             var quote = arg
@@ -358,7 +363,16 @@ final class SourceScanner {
             } else if prev != 46, Self.views.contains(name) {
                 call = name
             }
-            guard let call, quote < end, bytes[quote] == 34, !has(quote, "\"\"\""), let lit = literal(at: quote) else {
+            guard let call, quote < end else { i = j; continue }
+            if bytes[quote] == 35 || has(quote, "\"\"\"") {
+                unreadable.append((line(quote), "\(call) with a multi-line or raw literal"))
+                i = j
+                continue
+            }
+            // Not a literal (a variable, `verbatim:`): not localized from here.
+            guard bytes[quote] == 34 else { i = j; continue }
+            guard let lit = literal(at: quote) else {
+                unreadable.append((line(quote), "\(call) with a literal that does not end on its line"))
                 i = j
                 continue
             }
@@ -374,9 +388,18 @@ struct L10nReport {
     var warnings: [String] = []
     var languages: [String] = []
     var keyCount = 0
-    var checkedLiterals = 0
-    var literalsByCall: [String: Int] = [:]
-    var dynamicCalls = 0
+    /// Keys the compiler listed, and literals the scanner read from the files it could not compile.
+    var compilerKeys = 0
+    var scannedLiterals = 0
+    var compiledFiles = 0
+    var scannedFiles: [String] = []
+}
+
+/// A key with every format specifier replaced by `%`: two keys with the same
+/// shape differ only in the types of their arguments.
+func specifierShape(_ key: String) -> String {
+    key.replacingOccurrences(
+        of: #"%(\d+\$)?[-+#0']*\d*(\.\d+)?(hh|h|ll|l|q|L|z|t|j)?[@dDiuUxXoOfFeEgGaAcCsSpP]"#, with: "%", options: .regularExpression)
 }
 
 enum L10nAudit {
@@ -388,7 +411,7 @@ enum L10nAudit {
 
     /// `never | text` (deliberately untranslated) and `gap | text` (missing
     /// from the tables when the check was added) lines, `#` comments. The text
-    /// is the literal as the error prints it, interpolations shown as `\(…)`.
+    /// is the key exactly as the compiler writes it (`%lld`, `%@` for interpolations).
     /// A malformed line is an error, so a typo cannot silently exempt nothing.
     static func loadExceptions(root: String, report: inout L10nReport) -> [String: ExceptionKind] {
         guard let data = FileManager.default.contents(atPath: root + "/" + exceptionsPath) else { return [:] }
@@ -412,7 +435,7 @@ enum L10nAudit {
         return out
     }
 
-    static func run(root: String) -> L10nReport {
+    static func run(root: String, emitted: String) -> L10nReport {
         var report = L10nReport()
         let fm = FileManager.default
         let appDir = root + "/app"
@@ -496,11 +519,68 @@ enum L10nAudit {
             }
         }
 
-        // Source literals handed to the localization helper.
+        // Every key the app's code asks the tables for. The compiler's list is
+        // the truth for the files it compiled; the scanner reads the rest.
         var used = Set<String>()
         var exceptionsUsed = Set<String>()
         var knownGaps = Set<String>()
         let exceptions = loadExceptions(root: root, report: &report)
+        let enByShape = Dictionary(grouping: enValues.keys, by: specifierShape)
+
+        func require(_ key: String, file: String, line: Int, call: String) {
+            guard key.unicodeScalars.contains(where: { $0.properties.isAlphabetic }) else { return }
+            if enValues[key] != nil {
+                used.insert(key)
+                return
+            }
+            if let kind = exceptions[key] {
+                exceptionsUsed.insert(key)
+                if kind == .gap { knownGaps.insert(key) }
+                return
+            }
+            var message = "\(file):\(line): \(call) key \"\(key)\" is not in en.lproj, so no language can translate it"
+            // A key that differs from a table key only in a format specifier is
+            // the live trap: the table entry is dead and the string stays English.
+            if let near = enByShape[specifierShape(key)]?.sorted(), !near.isEmpty {
+                message += "; the table has \(near.map { "\"\($0)\"" }.joined(separator: ", ")), which differs only in format specifiers"
+                    + " (the compiler writes the key with the argument's real type)"
+            }
+            report.errors.append(message)
+        }
+
+        let emittedFiles = ((try? fm.contentsOfDirectory(atPath: emitted)) ?? []).filter { $0.hasSuffix(".stringsdata") }.sorted()
+        if emittedFiles.isEmpty {
+            report.errors.append("the compiler listed no localized strings at all (\(emitted)): nothing was checked")
+        }
+        var compiled = Set<String>()
+        for file in emittedFiles {
+            guard let data = fm.contents(atPath: emitted + "/" + file),
+                  let json = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
+                  let source = json["source"] as? String,
+                  let byTable = json["tables"] as? [String: Any] else {
+                report.errors.append("\(file): not a localized-strings listing from the compiler")
+                continue
+            }
+            let name = (source as NSString).lastPathComponent
+            compiled.insert(name)
+            report.compiledFiles += 1
+            for (table, entries) in byTable.sorted(by: { $0.key < $1.key }) {
+                guard let entries = entries as? [[String: Any]] else { continue }
+                if table != "Localizable", !entries.isEmpty {
+                    report.errors.append("app/\(name): \(entries.count) key(s) go to the table \"\(table)\", which this check does not read")
+                    continue
+                }
+                for entry in entries {
+                    guard let key = entry["key"] as? String else { continue }
+                    let line = ((entry["location"] as? [String: Any])?["startingLine"] as? Int) ?? 0
+                    report.compilerKeys += 1
+                    require(key, file: "app/" + name, line: line, call: "localized")
+                }
+            }
+        }
+
+        // Files the compiler was not given are read by the scanner; every
+        // file is also searched for calls the compiler's list cannot contain.
         let sources = ((try? fm.contentsOfDirectory(atPath: appDir)) ?? []).filter { $0.hasSuffix(".swift") }.sorted()
         for name in sources {
             guard let data = fm.contents(atPath: appDir + "/" + name), let text = String(data: data, encoding: .utf8) else {
@@ -509,29 +589,19 @@ enum L10nAudit {
             }
             let scanner = SourceScanner(file: "app/" + name, text: text)
             scanner.scan()
-            report.dynamicCalls += scanner.dynamic
-            for key in scanner.found where key.hasLetters {
-                report.checkedLiterals += 1
-                report.literalsByCall[key.call, default: 0] += 1
-                let matches: [String]
-                if let plain = key.plain {
-                    matches = enValues[plain] != nil ? [plain] : []
-                } else {
-                    let regex = key.pattern
-                    matches = enValues.keys.filter {
-                        regex.firstMatch(in: $0, range: NSRange($0.startIndex..., in: $0)) != nil
-                    }
+            let scanned = !compiled.contains(name)
+            if scanned { report.scannedFiles.append(name) }
+            for item in scanner.unreadable where scanned || item.what.hasPrefix("NSLocalizedString") {
+                report.errors.append("app/\(name):\(item.line): \(item.what) cannot be checked")
+            }
+            guard scanned else { continue }
+            for key in scanner.found {
+                guard let plain = key.plain else {
+                    report.errors.append("\(key.file):\(key.line): \(key.call) \"\(key.shown)\" has an interpolation; its format specifier is only known to the compiler, which was not run on this file")
+                    continue
                 }
-                if matches.isEmpty {
-                    let shown = key.shown
-                    if let kind = exceptions[shown] {
-                        exceptionsUsed.insert(shown)
-                        if kind == .gap { knownGaps.insert(shown) }
-                    } else {
-                        report.errors.append("\(key.file):\(key.line): \(key.call) \"\(shown)\" has no key in en.lproj, so no language can translate it")
-                    }
-                }
-                used.formUnion(matches)
+                report.scannedLiterals += 1
+                require(plain, file: key.file, line: key.line, call: key.call)
             }
         }
         if !knownGaps.isEmpty {
@@ -550,6 +620,7 @@ enum L10nAudit {
     }
 }
 
+
 // MARK: - Self-tests: the check must fail on the faults it exists to catch.
 
 enum L10nFixtures {
@@ -563,8 +634,12 @@ enum L10nFixtures {
         return root
     }
 
+    static func escaped(_ s: String) -> String {
+        s.replacingOccurrences(of: "\\", with: "\\\\").replacingOccurrences(of: "\"", with: "\\\"").replacingOccurrences(of: "\n", with: "\\n")
+    }
+
     static func table(_ pairs: [(String, String)]) -> String {
-        "/* fixture */\n" + pairs.map { "\"\($0.0)\" = \"\($0.1)\";" }.joined(separator: "\n") + "\n"
+        "/* fixture */\n" + pairs.map { "\"\(escaped($0.0))\" = \"\(escaped($0.1))\";" }.joined(separator: "\n") + "\n"
     }
 
     /// A valid tree in all required languages; `overrides` replaces a language's table.
@@ -578,10 +653,51 @@ enum L10nFixtures {
         return files
     }
 
-    static func audit(_ files: [String: String]) -> L10nReport {
+    /// What the compiler writes for one file: its keys, in the Localizable table.
+    static func stringsdata(source: String, keys: [String]) -> String {
+        let entries = keys.enumerated().map { i, key in
+            ["key": key, "comment": "", "location": ["startingLine": i + 1, "startingColumn": 1]] as [String: Any]
+        }
+        let json: [String: Any] = ["source": source, "tables": entries.isEmpty ? [:] : ["Localizable": entries]]
+        return String(decoding: try! JSONSerialization.data(withJSONObject: json), as: UTF8.self)
+    }
+
+    /// Audits a tree whose compiled files list the given keys (file name -> keys).
+    static func audit(_ files: [String: String], compiled: [String: [String]] = ["Compiled.swift": []]) -> L10nReport {
+        var files = files
+        let emitted = NSTemporaryDirectory() + "l10n-emitted-" + UUID().uuidString
+        try! FileManager.default.createDirectory(atPath: emitted, withIntermediateDirectories: true)
+        for (name, keys) in compiled {
+            files["app/\(name)"] = files["app/\(name)"] ?? ""
+            try! stringsdata(source: "app/\(name)", keys: keys).write(toFile: emitted + "/\(name).stringsdata", atomically: true, encoding: .utf8)
+        }
         let root = tree(files)
-        defer { try? FileManager.default.removeItem(atPath: root) }
-        return L10nAudit.run(root: root)
+        defer {
+            try? FileManager.default.removeItem(atPath: root)
+            try? FileManager.default.removeItem(atPath: emitted)
+        }
+        return L10nAudit.run(root: root, emitted: emitted)
+    }
+
+    /// Runs the compiler over one Swift file the way check-l10n.sh does and returns the directory it wrote.
+    static func compile(_ source: String) -> String {
+        let dir = NSTemporaryDirectory() + "l10n-compile-" + UUID().uuidString
+        try! FileManager.default.createDirectory(atPath: dir + "/out", withIntermediateDirectories: true)
+        try! source.write(toFile: dir + "/Forms.swift", atomically: true, encoding: .utf8)
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/swiftc")
+        process.arguments = [
+            dir + "/Forms.swift", "-parse-as-library", "-swift-version", "6", "-target", "arm64-apple-macos14.0", "-c", "-wmo",
+            "-module-name", "Forms", "-o", dir + "/x.o", "-emit-localized-strings", "-emit-localized-strings-path", dir + "/out",
+        ]
+        let errors = Pipe()
+        process.standardError = errors
+        process.standardOutput = FileHandle.nullDevice
+        try! process.run()
+        let text = String(decoding: errors.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
+        process.waitUntilExit()
+        precondition(process.terminationStatus == 0, "swiftc could not compile the fixture: \(text)")
+        return dir + "/out"
     }
 }
 
@@ -595,30 +711,100 @@ struct L10nChecks {
         precondition(!report.errors.isEmpty, "\(what): expected a failure")
     }
 
+    /// Every localizable form the scanner used to skip, compiled for real: the
+    /// compiler's list must contain it, so the tables are held to it.
+    static let formsSource = ##"""
+    import SwiftUI
+
+    struct FormsView: View {
+        @State var shown = false
+        var code = 404
+        var message = "x"
+        var body: some View {
+            Text(LocalizedStringKey("Form key"))
+                .alert("Form alert", isPresented: $shown) { Button("Form alert OK") {} }
+                .confirmationDialog("Form dialog", isPresented: $shown) { Button("Form dialog go") {} }
+        }
+        func plain() -> [String] {
+            [String(localized: """
+                Form multi
+                line
+                """),
+             String(localized: #"Form raw "quoted" literal"#),
+             String(localized: "HTTP \(code): \(message)"),
+             String(localized: "Counted \(code) things")]
+        }
+    }
+    """##
+
+    static let formsKeys = [
+        "Form key", "Form alert", "Form alert OK", "Form dialog", "Form dialog go", "Form multi\nline",
+        "Form raw \"quoted\" literal", "HTTP %lld: %@", "Counted %lld things",
+    ]
+
+    static func compilerBackedTests() {
+        let emitted = L10nFixtures.compile(formsSource)
+        defer { try? FileManager.default.removeItem(atPath: (emitted as NSString).deletingLastPathComponent) }
+
+        // The tables as they stood: none of the forms is in them, and the HTTP key carries the wrong specifier.
+        func tree(source: String, extra: [(String, String)], http: String) -> [String: String] {
+            var files: [String: String] = ["app/Forms.swift": source]
+            for lang in L10nAudit.requiredLanguages {
+                let pairs = (extra + [(http, "")]).map { ($0.0, lang == "en" ? $0.0 : $0.0 + " [\(lang)]") }
+                files["app/\(lang).lproj/Localizable.strings"] = L10nFixtures.table(pairs)
+            }
+            return files
+        }
+        var files = tree(source: formsSource + "\nlet legacy = NSLocalizedString(\"Form NSLocalized\", comment: \"\")\n", extra: [], http: "HTTP %@: %@")
+        let root = L10nFixtures.tree(files)
+        defer { try? FileManager.default.removeItem(atPath: root) }
+        let broken = L10nAudit.run(root: root, emitted: emitted)
+        expect(broken, errorContaining: [
+            "key \"Form key\"", "key \"Form alert\"", "key \"Form alert OK\"", "key \"Form dialog\"", "key \"Form dialog go\"",
+            "key \"Form multi\nline\"", "key \"Form raw \"quoted\" literal\"", "key \"Counted %lld things\"",
+            "key \"HTTP %lld: %@\" is not in en.lproj",
+            "the table has \"HTTP %@: %@\", which differs only in format specifiers",
+            "NSLocalizedString",
+        ], "forms the old scanner skipped")
+        precondition(broken.compilerKeys == formsKeys.count, "the compiler listed every form: \(broken.compilerKeys)")
+
+        // With the keys in every table (and the real HTTP specifier) and no NSLocalizedString it passes.
+        files = tree(source: formsSource, extra: formsKeys.filter { $0 != "HTTP %lld: %@" }.map { ($0, "") }, http: "HTTP %lld: %@")
+        let fixedRoot = L10nFixtures.tree(files)
+        defer { try? FileManager.default.removeItem(atPath: fixedRoot) }
+        let fixed = L10nAudit.run(root: fixedRoot, emitted: emitted)
+        precondition(fixed.errors.isEmpty, "with every key present the forms pass: \(fixed.errors)")
+        precondition(fixed.compilerKeys == formsKeys.count, "\(fixed.compilerKeys) keys from the compiler")
+        print("PASS: l10n checker holds LocalizedStringKey, .alert, .confirmationDialog, multi-line and raw literals, and typed interpolations to the tables")
+    }
+
     static func selfTests() {
-        // A coherent tree passes, with source literals of every shape the app uses.
+        compilerBackedTests()
+
+        // A coherent tree passes: compiled keys from the list, Main.swift from the scanner.
+        let keys = ["Scan", "Move %lld items to Trash?", "%@ of %@"]
         let source = """
         import SwiftUI
         // String(localized: "Ghost in a comment")
         let s = "String(localized: \\"Ghost in a string\\")"
         struct V: View {
-            var n = 3
             var body: some View {
                 Text("Scan").help("Scan")
                 Text(verbatim: "Never localized")
                 Text(variable)
                 Button("Scan") {}
-                Label("\\(n) of \\(name)", systemImage: "x")
-                let a = String(localized: "Move \\(n) items to Trash?")
-                let b = String(localized: "\\(String(localized: "Scan")) of \\(n.description)")
                 let c = String(localized: someKey)
                 let d = String(format: String(localized: "%@ of %@"), x, y)
             }
         }
         """
-        let clean = L10nFixtures.audit(L10nFixtures.valid(source: source))
+        let clean = L10nFixtures.audit(L10nFixtures.valid(source: source), compiled: ["Compiled.swift": keys])
         precondition(clean.errors.isEmpty, "clean tree must pass, got \(clean.errors)")
-        precondition(clean.dynamicCalls == 1, "the non-literal String(localized:) is counted as unchecked, got \(clean.dynamicCalls)")
+        precondition(clean.scannedFiles == ["Main.swift"] && clean.compiledFiles == 1 && clean.compilerKeys == 3, "\(clean)")
+
+        // Nothing emitted by the compiler is an error, never a pass.
+        let silent = L10nFixtures.audit(L10nFixtures.valid(), compiled: [:])
+        expect(silent, errorContaining: ["the compiler listed no localized strings"], "no compiler output")
 
         // Missing and extra keys are listed per language.
         var files = L10nFixtures.valid()
@@ -640,6 +826,7 @@ struct L10nChecks {
         expect(L10nFixtures.audit(files), errorContaining: ["es:4: mixes positional"], "mixed positional and plain")
         precondition(FormatSpecifiers.parse("100%% of %2$@ and %1$-5.2lf").byPosition == [2: "@", 1: "lf"], "%% is literal, flags and precision are skipped")
         precondition(FormatSpecifiers.parse("%@ — %@ of %@").byPosition == [1: "@", 2: "@", 3: "@"], "plain specifiers count in order")
+        precondition(specifierShape("HTTP %lld: %@") == specifierShape("HTTP %@: %@") && specifierShape("a %@") != specifierShape("b %@"), "shape ignores only the specifiers")
 
         // Syntax errors, duplicate keys and empty values fail.
         files = L10nFixtures.valid(overrides: ["ja": "\"Scan\" = \"x\"\n"])
@@ -652,27 +839,54 @@ struct L10nChecks {
         files["app/de.lproj/Localizable.strings"] = nil
         expect(L10nFixtures.audit(files), errorContaining: ["app/de.lproj is missing"], "language directory gone")
 
-        // Source literals that no table holds fail, with file and line.
-        let leaky = "import Foundation\nlet a = String(localized: \"Not in the table\")\nlet b = String(localized: \"Move \\(n) things\")\nstruct V { var body: some View { Text(\"Also missing\").help(\"Help missing\") } }\n"
-        let sourceReport = L10nFixtures.audit(L10nFixtures.valid(source: leaky))
-        expect(sourceReport, errorContaining: [
-            "app/Main.swift:2: String(localized:) \"Not in the table\"",
-            "app/Main.swift:3: String(localized:) \"Move \\(…) things\"",
-            "app/Main.swift:4: Text \"Also missing\"",
-            "app/Main.swift:4: .help \"Help missing\"",
+        // Compiler keys no table holds fail with file and line; a table that differs only in a specifier is named.
+        let report = L10nFixtures.audit(L10nFixtures.valid(), compiled: ["Compiled.swift": ["Not in the table", "Move %d things", "Scan"]])
+        expect(report, errorContaining: ["app/Compiled.swift:1: localized key \"Not in the table\" is not in en.lproj",
+                                         "app/Compiled.swift:2: localized key \"Move %d things\""], "compiler keys missing from the tables")
+        let typed = L10nFixtures.audit(L10nFixtures.valid(), compiled: ["Compiled.swift": ["Move %d items to Trash?"]])
+        expect(typed, errorContaining: ["the table has \"Move %lld items to Trash?\", which differs only in format specifiers"], "typed specifier mismatch")
+        let otherTable = L10nFixtures.stringsdata(source: "app/Compiled.swift", keys: ["Scan"]).replacingOccurrences(of: "Localizable", with: "Errors")
+        let emitted = NSTemporaryDirectory() + "l10n-emitted-" + UUID().uuidString
+        try! FileManager.default.createDirectory(atPath: emitted, withIntermediateDirectories: true)
+        try! otherTable.write(toFile: emitted + "/Compiled.stringsdata", atomically: true, encoding: .utf8)
+        let root = L10nFixtures.tree(L10nFixtures.valid())
+        expect(L10nAudit.run(root: root, emitted: emitted), errorContaining: ["go to the table \"Errors\""], "another table")
+        try? FileManager.default.removeItem(atPath: root)
+        try? FileManager.default.removeItem(atPath: emitted)
+
+        // The scanner (Main.swift only) never skips what it cannot read.
+        let leaky = "import Foundation\nlet a = String(localized: \"Not in the table\")\nstruct V { var body: some View { Text(\"Also missing\").help(\"Help missing\") } }\n"
+        expect(L10nFixtures.audit(L10nFixtures.valid(source: leaky)), errorContaining: [
+            "app/Main.swift:2: String(localized:) key \"Not in the table\" is not in en.lproj",
+            "app/Main.swift:3: Text key \"Also missing\"",
+            "app/Main.swift:3: .help key \"Help missing\"",
         ], "untranslatable source literals")
+        let hard = "let a = String(localized: \"Move \\(n) things\")\nlet b = Text(LocalizedStringKey(\"Scan\"))\nlet c = String(localized: \"\"\"\nScan\n\"\"\")\nlet d = Text(#\"Scan\"#)\nlet e = NSLocalizedString(\"Scan\", comment: \"\")\nlet f = x.alert(\"Missing alert\", isPresented: y) {}\n"
+        expect(L10nFixtures.audit(L10nFixtures.valid(source: hard)), errorContaining: [
+            "app/Main.swift:1: String(localized:) \"Move \\(…) things\" has an interpolation",
+            "app/Main.swift:3: String(localized:) with a multi-line or raw literal cannot be checked",
+            "app/Main.swift:6: Text with a multi-line or raw literal cannot be checked",
+            "app/Main.swift:7: NSLocalizedString",
+            "app/Main.swift:8: .alert key \"Missing alert\"",
+        ], "forms the scanner cannot read")
+        precondition(L10nFixtures.audit(L10nFixtures.valid(source: "let b = Text(LocalizedStringKey(\"Scan\"))\n")).errors.isEmpty, "LocalizedStringKey with a known key passes")
+        // NSLocalizedString is refused in compiled files too: the compiler does not list its keys.
+        var nsFiles = L10nFixtures.valid()
+        nsFiles["app/Compiled.swift"] = "let x = NSLocalizedString(\"Scan\", comment: \"\")\n"
+        expect(L10nFixtures.audit(nsFiles, compiled: ["Compiled.swift": ["Scan"]]), errorContaining: ["app/Compiled.swift:1: NSLocalizedString"], "NSLocalizedString in a compiled file")
 
         // Listed exceptions pass (a gap with a warning); a stale line warns; a malformed one fails.
-        files = L10nFixtures.valid(source: leaky)
-        files[L10nAudit.exceptionsPath] = "# note\nnever | Also missing\ngap | Not in the table\ngap | Move \\(…) things\ngap | Help missing\ngap | Nothing uses this\n"
-        let excepted = L10nFixtures.audit(files)
+        let missing = ["Not in the table", "Move %d things", "Help missing"]
+        files = L10nFixtures.valid()
+        files[L10nAudit.exceptionsPath] = "# note\nnever | Not in the table\ngap | Move %d things\ngap | Help missing\ngap | Nothing uses this\n"
+        let excepted = L10nFixtures.audit(files, compiled: ["Compiled.swift": missing])
         precondition(excepted.errors.isEmpty, "listed exceptions must pass: \(excepted.errors)")
-        precondition(excepted.warnings.contains { $0.hasPrefix("3 source string(s) have no key") }, "gaps counted: \(excepted.warnings)")
+        precondition(excepted.warnings.contains { $0.hasPrefix("2 source string(s) have no key") }, "gaps counted: \(excepted.warnings)")
         precondition(excepted.warnings.contains { $0.contains("\"Nothing uses this\"") }, "stale line reported: \(excepted.warnings)")
         files[L10nAudit.exceptionsPath] = "maybe | Not in the table\n"
-        expect(L10nFixtures.audit(files), errorContaining: ["l10n-exceptions.txt:1: expected"], "malformed exception line")
-        files[L10nAudit.exceptionsPath] = "gap | Move \\(…) things\n"
-        expect(L10nFixtures.audit(files), errorContaining: ["\"Not in the table\" has no key", "\"Also missing\" has no key"], "partial exception list")
+        expect(L10nFixtures.audit(files, compiled: ["Compiled.swift": missing]), errorContaining: ["l10n-exceptions.txt:1: expected"], "malformed exception line")
+        files[L10nAudit.exceptionsPath] = "gap | Move %d things\n"
+        expect(L10nFixtures.audit(files, compiled: ["Compiled.swift": missing]), errorContaining: ["key \"Not in the table\" is not in en.lproj", "key \"Help missing\""], "partial exception list")
 
         // Identical-to-English is only a warning.
         files = L10nFixtures.valid(overrides: ["de": L10nFixtures.table([("Scan", "Scan"), ("Move %lld items to Trash?", "Move %lld items to Trash?"), ("%@ of %@", "%@ of %@")])])
@@ -684,17 +898,20 @@ struct L10nChecks {
 
     static func main() {
         selfTests()
-        let root = CommandLine.arguments.count > 1 ? CommandLine.arguments[1] : FileManager.default.currentDirectoryPath
-        let report = L10nAudit.run(root: root)
+        guard CommandLine.arguments.count == 3 else {
+            print("usage: L10nChecks ROOT EMITTED_DIR  (EMITTED_DIR: swiftc -emit-localized-strings-path output for app/*.swift)")
+            exit(2)
+        }
+        let report = L10nAudit.run(root: CommandLine.arguments[1], emitted: CommandLine.arguments[2])
         print("l10n: \(report.languages.joined(separator: ", ")); \(report.keyCount) keys in en; "
-            + "\(report.checkedLiterals) source literals checked, \(report.dynamicCalls) non-literal String(localized:) calls not checkable")
-        print("l10n: literals by call: " + report.literalsByCall.sorted { $0.key < $1.key }.map { "\($0.key) \($0.value)" }.joined(separator: ", "))
+            + "\(report.compilerKeys) keys from the compiler (\(report.compiledFiles) files), "
+            + "\(report.scannedLiterals) literals read by the scanner in \(report.scannedFiles.joined(separator: ", "))")
         for w in report.warnings { print("WARNING: " + w) }
         for e in report.errors { print("ERROR: " + e) }
         guard report.errors.isEmpty else {
             print("FAIL: l10n: \(report.errors.count) error(s)")
             exit(1)
         }
-        print("PASS: l10n tables agree on keys and format specifiers; every app/ literal has a key")
+        print("PASS: l10n tables agree on keys and format specifiers; every key app/ asks for is in them")
     }
 }

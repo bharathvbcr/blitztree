@@ -182,7 +182,7 @@
 "Which AI proposes what can go from the scan. Nothing is removed without your say." = "Taramadan neler gidebileceğini hangi yapay zekanın önereceği. Siz demeden hiçbir şey silinmez.";
 
 "Save changes" = "Değişiklikleri kaydet";
-"HTTP %@: %@" = "HTTP %@: %@";
+"HTTP %lld: %@" = "HTTP %lld: %@";
 /* Step lines */
 "Reading your scan" = "Taramanız okunuyor";
 "Asking %@ what can go" = "%@ adlı modele nelerin gidebileceği soruluyor";
