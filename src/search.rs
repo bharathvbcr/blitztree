@@ -26,24 +26,26 @@ impl Tree {
 
         // Each task scans a run of nodes with its own counter and selection;
         // the selections merge in any order to the same top `limit`.
-        let (total, top) = (0..(self.len() - 1).div_ceil(SCAN_CHUNK))
-            .into_par_iter()
-            .map(|chunk| {
-                let start = 1 + chunk * SCAN_CHUNK;
-                let mut count = 0u64;
-                let mut top = TopK::new(self, limit);
-                for idx in start..(start + SCAN_CHUNK).min(self.len()) {
-                    if matcher.matches(self.name_bytes(idx)) {
-                        count += 1;
-                        top.push(idx);
+        let (total, top) = crate::pool::run(|| {
+            (0..(self.len() - 1).div_ceil(SCAN_CHUNK))
+                .into_par_iter()
+                .map(|chunk| {
+                    let start = 1 + chunk * SCAN_CHUNK;
+                    let mut count = 0u64;
+                    let mut top = TopK::new(self, limit);
+                    for idx in start..(start + SCAN_CHUNK).min(self.len()) {
+                        if matcher.matches(self.name_bytes(idx)) {
+                            count += 1;
+                            top.push(idx);
+                        }
                     }
-                }
-                (count, top)
-            })
-            .reduce(
-                || (0u64, TopK::new(self, limit)),
-                |(count_a, top_a), (count_b, top_b)| (count_a + count_b, top_a.merge(top_b)),
-            );
+                    (count, top)
+                })
+                .reduce(
+                    || (0u64, TopK::new(self, limit)),
+                    |(count_a, top_a), (count_b, top_b)| (count_a + count_b, top_a.merge(top_b)),
+                )
+        });
 
         (
             total,

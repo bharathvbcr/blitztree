@@ -7,6 +7,7 @@
 pub mod cleanup;
 pub mod ffi;
 pub mod ranking;
+mod pool;
 mod search;
 pub use search::{AsciiToken, PatternToken, QueryMatcher};
 pub mod types;
@@ -1112,35 +1113,6 @@ impl Tree {
     }
 }
 
-extern "C" {
-    fn pthread_set_qos_class_self_np(qos_class: u32, relative_priority: c_int) -> c_int;
-}
-const QOS_CLASS_USER_INTERACTIVE: u32 = 0x21;
-
-/// # Safety
-/// Only affects the calling thread's scheduling class.
-pub unsafe fn set_thread_qos_user_interactive() {
-    pthread_set_qos_class_self_np(QOS_CLASS_USER_INTERACTIVE, 0);
-}
-
-const QOS_CLASS_USER_INITIATED: u32 = 0x19;
-
-/// Rayon pool whose workers run at USER_INITIATED QoS. That still puts them
-/// on the performance cores inside a GUI app (at the app's default QoS they
-/// land on efficiency cores and scan twice as slowly), and it scans as fast
-/// as USER_INTERACTIVE did, but it no longer outranks the UI and the system
-/// compositor: at USER_INTERACTIVE a worker on every core made the window
-/// (and screen recordings) skip frames for a quarter second mid-scan.
-fn fast_pool() -> rayon::ThreadPool {
-    rayon::ThreadPoolBuilder::new()
-        .start_handler(|_| unsafe {
-            pthread_set_qos_class_self_np(QOS_CLASS_USER_INITIATED, 0);
-        })
-        .build()
-        .expect("thread pool")
-}
-
-
 /// The directory a scan of `p` reads: `p` made absolute with every symbolic
 /// link in it followed, since the walk opens directories without following
 /// links. The scan root and the CLI both resolve through this.
@@ -1272,7 +1244,7 @@ fn scan_at(
                 .map_err(|_| "The scan root contains a NUL byte".to_string())
         });
         match target {
-            Ok(path) => fast_pool().scope(|s| walk(s, &shared, path, 0)),
+            Ok(path) => pool::run(|| rayon::scope(|s| walk(s, &shared, path, 0))),
             Err(reason) => {
                 progress.errors.fetch_add(1, Ordering::Relaxed);
                 shared.mark_incomplete(0);
@@ -1286,10 +1258,11 @@ fn scan_at(
     tree.errors = progress.errors.load(Ordering::Relaxed);
     if std::env::var_os("BZ_TIMING").is_some() {
         eprintln!(
-            "[bz] walk {:.3}s  finish {:.1}ms  ({} nodes)",
+            "[bz] walk {:.3}s  finish {:.1}ms  ({} nodes, {} workers)",
             (t1 - t0).as_secs_f64(),
             t1.elapsed().as_secs_f64() * 1e3,
-            tree.len()
+            tree.len(),
+            pool::threads()
         );
     }
     tree

@@ -116,6 +116,8 @@ fn scan_path(bytes: &[u8]) -> Option<PathBuf> {
 /// a stop cut the walk short: that tree is dropped here, and the candidates
 /// of a partial tree are not looked for.
 fn run_scan(path: &Path, progress: &Progress) -> Option<Flat> {
+    #[cfg(test)]
+    crate::pool::probe::record_coordinator(path);
     let t0 = std::time::Instant::now();
     let tree = scan(path, progress);
     if progress.stopped_early() {
@@ -153,7 +155,7 @@ pub extern "C" fn bz_scan_start(path: *const c_char) -> *mut BzScan {
 
 /// `bz_scan_start` with the scan's counters supplied, so a test can hand in
 /// ones that were already cancelled.
-fn start_scan(path: PathBuf, progress: Arc<Progress>) -> *mut BzScan {
+pub(crate) fn start_scan(path: PathBuf, progress: Arc<Progress>) -> *mut BzScan {
     let status = Arc::new(AtomicU8::new(ScanStatus::Running as u8));
     let result = Arc::new(Mutex::new(None));
 
@@ -162,7 +164,7 @@ fn start_scan(path: PathBuf, progress: Arc<Progress>) -> *mut BzScan {
         let status = status.clone();
         let result = result.clone();
         std::thread::Builder::new().spawn(move || {
-            unsafe { crate::set_thread_qos_user_interactive() };
+            crate::pool::set_thread_qos_user_initiated();
             let (outcome, ended) =
                 match catch_unwind(AssertUnwindSafe(|| run_scan(&path, &progress))) {
                     Ok(Some(flat)) => (Some(Ok(flat)), ScanStatus::Done),
