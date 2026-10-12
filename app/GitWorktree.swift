@@ -179,13 +179,17 @@ nonisolated enum GitWorktree {
         if status.overflow { throw GitWorktreeError.changes(path) }
         for entry in status.stdout.split(separator: 0, omittingEmptySubsequences: true) {
             guard entry.count > 3, entry.starts(with: Array("!! ".utf8)) else { throw GitWorktreeError.changes(path) }
-            let parts = String(decoding: entry.dropFirst(3), as: UTF8.self).split(separator: "/").map(String.init)
+            let text = String(decoding: entry.dropFirst(3), as: UTF8.self)
+            let parts = text.split(separator: "/").map(String.init)
             // Finder writes .DS_Store into every folder it opens, and most
             // global gitignores list it: it holds nothing worth keeping.
             if parts.last == ".DS_Store" { continue }
-            if !parts.contains(where: { CleanupPathSafety.rebuildable.contains($0) }) {
-                throw GitWorktreeError.ignoredFiles(path)
-            }
+            // `matching` reports a folder that is ignored as a whole with a
+            // trailing slash. Only such a folder named for build output may
+            // stay; a file inside a rebuildable name (`data/target/prod.db`,
+            // `node_modules/secret.db`) or a partly ignored folder is data.
+            if text.hasSuffix("/"), let last = parts.last, CleanupPathSafety.rebuildable.contains(last) { continue }
+            throw GitWorktreeError.ignoredFiles(path)
         }
 
         // Assume-unchanged (lowercase tag) and skip-worktree ("S") entries are

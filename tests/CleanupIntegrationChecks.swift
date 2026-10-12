@@ -23,7 +23,8 @@ struct CleanupIntegrationChecks {
         let cache = try directory(".cache/uv")
         let other = try directory(".cache/other")
         let secret = try directory(".ssh/node_modules")
-        try Data(repeating: 1, count: 8192).write(to: URL(fileURLWithPath: cache + "/data"))
+        // Over the engine's 50 MB floor, so the cache is a folder the scan recognises.
+        try Data(repeating: 1, count: 51_000_000).write(to: URL(fileURLWithPath: cache + "/data"))
         // Over a focused question's 1 MB cutoff, so they get table rows.
         let asked = try directory("projects/big")
         let askedInside = try directory("projects/big/sub")
@@ -745,6 +746,78 @@ struct CleanupIntegrationChecks {
         let lateOutcome = await AgentRun.trash(quietCard.cleanupTargets)
         precondition(lateOutcome.moved.isEmpty && lateOutcome.error != nil && fm.fileExists(atPath: projectDir.path),
                      "a project used after the card was made is refused at the Trash")
+
+        // Containers and user data inside them: a real scan of a fixture home,
+        // then agent cards for paths the engine never offers. Only what the
+        // scan recognised may go, and it answers to its own check. Nothing
+        // here reaches the real Trash: the one move renames inside the fixture.
+        let boxHome = fixture.appendingPathComponent("container-home")
+        func boxFile(_ relative: String, bytes count: Int) throws {
+            let url = boxHome.appendingPathComponent(relative)
+            try fm.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try Data(repeating: 6, count: count).write(to: url)
+        }
+        try boxFile(".claude/projects/-p1/session.jsonl", bytes: 1000)
+        try boxFile(".claude/projects/-p1/memory/MEMORY.md", bytes: 1000)
+        try boxFile(".claude/projects/-p2/session.jsonl", bytes: 51_000_000)
+        try boxFile(".cache/huggingface/token", bytes: 40)
+        try boxFile(".cache/huggingface/hub/models--a--b/blob", bytes: 1000)
+        try boxFile(".cache/pip/blob", bytes: 51_000_000)
+        try boxFile(".codex/worktrees/abc/repo/file.txt", bytes: 1000)
+        let boxOld = Date().addingTimeInterval(-5 * 86400)
+        for relative in [".claude/projects/-p2/session.jsonl", ".claude/projects/-p2"] {
+            try fm.setAttributes([.modificationDate: boxOld], ofItemAtPath: boxHome.appendingPathComponent(relative).path)
+        }
+        let previousHome = ProcessInfo.processInfo.environment["HOME"]
+        setenv("HOME", boxHome.path, 1)
+        guard let boxHandle = bz_scan_start(boxHome.path) else { fatalError("container scan failed") }
+        done = 0
+        while done == 0 {
+            bz_progress(boxHandle, &files, &dirs, &bytes, &done)
+            if done == 0 { try await Task.sleep(for: .milliseconds(5)) }
+        }
+        guard let boxTree = Tree(handle: boxHandle) else { bz_free(boxHandle); fatalError("container tree failed") }
+        if let previousHome { setenv("HOME", previousHome, 1) } else { unsetenv("HOME") }
+        let recognised = Set((0..<boxTree.cleanupCount).map { boxTree.path(Int(boxTree.cleanupNodes[$0])) })
+        for relative in [".claude/projects/-p2", ".cache/pip"] {
+            precondition(recognised.contains(boxHome.appendingPathComponent(relative).path),
+                         "the engine recognises \(relative): \(recognised)")
+        }
+        for relative in [".claude/projects", ".claude/projects/-p1", ".claude/projects/-p1/memory",
+                         ".claude/projects/-p1/memory/MEMORY.md", ".cache/huggingface", ".cache/huggingface/token",
+                         ".codex/worktrees", ".codex/worktrees/abc"] {
+            let path = boxHome.appendingPathComponent(relative).path
+            precondition(!recognised.contains(path), "\(relative) is not an engine candidate")
+            let card = agentCard(boxTree, path, home: boxHome.path)
+            precondition(card.blocked != nil && card.cleanupTargets.isEmpty && !card.selected,
+                         "an agent card for \(relative) is refused: \(String(describing: card.blocked))")
+        }
+        let pipCard = agentCard(boxTree, boxHome.appendingPathComponent(".cache/pip").path, home: boxHome.path)
+        precondition(pipCard.blocked == nil && pipCard.cleanupTargets.count == 1, "a recognised cache plans")
+        let quietProject = boxHome.appendingPathComponent(".claude/projects/-p2")
+        let boxQuietCard = agentCard(boxTree, quietProject.path, home: boxHome.path)
+        precondition(boxQuietCard.blocked == nil && boxQuietCard.cleanupTargets.count == 1,
+                     "a recognised, quiet project folder plans: \(String(describing: boxQuietCard.blocked))")
+        // A path inside a recognised folder inherits its check.
+        try Data("x\n".utf8).write(to: quietProject.appendingPathComponent("new.jsonl"))
+        let busyCard = agentCard(boxTree, quietProject.appendingPathComponent("session.jsonl").path, home: boxHome.path)
+        precondition(busyCard.blocked != nil && busyCard.cleanupTargets.isEmpty,
+                     "a file inside a project used today answers to the project's check")
+        try fm.removeItem(at: quietProject.appendingPathComponent("new.jsonl"))
+        for path in [quietProject.path] {
+            try fm.setAttributes([.modificationDate: boxOld], ofItemAtPath: path)
+        }
+        let boxBin = fixture.appendingPathComponent("container-trash")
+        try fm.createDirectory(at: boxBin, withIntermediateDirectories: true)
+        let boxTarget = try CleanupPathSafety.capture(path: quietProject.path, root: boxHome.path, home: boxHome.path,
+                                                       check: CleanupCheck(verify: "recent_activity", folder: quietProject.path))
+        let boxReceipt = try CleanupOperations.trash(boxTarget) { source in
+            let destination = boxBin.appendingPathComponent(UUID().uuidString)
+            try fm.moveItem(at: source, to: destination)
+            return destination
+        }
+        precondition(fm.fileExists(atPath: boxReceipt.url.path) && !fm.fileExists(atPath: quietProject.path),
+                     "the recognised folder moved inside the fixture")
         try Data("changed after the scan\n".utf8).write(to: tag)
         let batch = CleanupTrashBatch()
         var movedNow: [CleanupItem] = [], failedNow: [String] = []

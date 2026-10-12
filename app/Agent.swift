@@ -366,7 +366,7 @@ nonisolated struct AgentFocus: Sendable, Equatable {
         } else {
             do {
                 let root = CleanupPathSafety.plannerRoot(for: tree.path(node), home: home)
-                _ = try CleanupPathSafety.capture(path: tree.path(node), root: root, home: home)
+                _ = try CleanupPathSafety.capture(path: tree.path(node), root: root, home: home, check: .policyOnly)
                 // A scratchpad's session check ran in the capture above.
                 let recent = root == home && CleanupGuard.recentlyUsed(path)
                 local = recent ? "In a project used in the last 2 days" : nil
@@ -433,9 +433,9 @@ final class PlanItem: Identifiable {
                     // cannot redirect a cache command into arbitrary deletion.
                     if asked.isEmpty { asked = [expected] }
                     do {
-                        let target = try CleanupPathSafety.capture(path: expected, root: home, home: home)
+                        let target = try CleanupPathSafety.capture(path: expected, root: home, home: home, check: .policyOnly)
                         let supplied = try asked.map {
-                            try CleanupPathSafety.capture(path: $0, root: home, home: home).identity
+                            try CleanupPathSafety.capture(path: $0, root: home, home: home, check: .policyOnly).identity
                         }
                         guard Set(supplied) == [target.identity] else {
                             throw CleanupOperations.failure(String(localized: "The supplied paths do not match this tool's cache"))

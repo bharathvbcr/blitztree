@@ -73,6 +73,22 @@ enum WorktreeChecks {
         _ = expectVerified("an ignored file inside node_modules is part of it", env)
         fixture.write(env + "/stray.txt", "untracked\n")
         expectBlocked("an untracked file is still a change", env, .changes(env))
+
+        // A rebuildable name above an ignored FILE exempts nothing: only a
+        // folder ignored as a whole and named for build output may stay.
+        for (label, file) in [("a database under a folder named target", "data/target/prod.db"),
+                              (".env under a folder named target", "src/target/.env"),
+                              ("a database under node_modules that is not ignored as a whole", "x/node_modules/secret.db")] {
+            let nested = worktree("ignored-nested")
+            fixture.write(nested + "/.gitignore", "*.db\n.env\n")
+            fixture.run(["add", ".gitignore"], in: nested)
+            fixture.run(["commit", "-q", "-m", "ignore files"], in: nested)
+            _ = expectVerified("\(label): nothing there yet", nested)
+            try fm.createDirectory(atPath: (nested + "/" + file as NSString).deletingLastPathComponent,
+                                   withIntermediateDirectories: true)
+            fixture.write(nested + "/" + file, "keep me\n")
+            expectBlocked(label, nested, .ignoredFiles(nested))
+        }
     }
 
     // MARK: Verification
@@ -240,7 +256,7 @@ enum WorktreeChecks {
             try fm.createDirectory(atPath: path, withIntermediateDirectories: true)
             return path
         }
-        func capture(_ path: String, _ check: CleanupCheck?) throws -> CleanupTarget {
+        func capture(_ path: String, _ check: CleanupCheck) throws -> CleanupTarget {
             try CleanupPathSafety.capture(path: path, root: home.path, home: home.path, check: check)
         }
         func move(_ source: URL) throws -> URL {
@@ -288,11 +304,8 @@ enum WorktreeChecks {
         try fm.removeItem(at: tag)
         refused("a folder inside a tagged cache answers to the cache's tag", insideTarget, failedCheck)
 
-        // A target whose rule was never looked up cannot be trashed at all.
+        // Checks that cannot be satisfied block at capture.
         let unchecked = try folder("caches/unchecked")
-        refused("no rule lookup", try capture(unchecked, nil)) { error in
-            (error as NSError).domain == "BlitzTree.Cleanup"
-        }
         let elsewhere = try folder("caches/elsewhere")
         for (label, check) in [("the engine gave no answer", CleanupCheck(verify: CleanupVerify.unavailable, folder: unchecked)),
                                ("a verifier nobody knows", CleanupCheck(verify: "made_up", folder: unchecked)),
@@ -316,8 +329,8 @@ enum WorktreeChecks {
         fixture.write(memory + "/MEMORY.md", "kept\n")
         do {
             _ = try capture(memory, activityCheck)
-            fatalError("memory/ inside a recently used project must not be captured")
-        } catch { precondition(failedCheck(error)) }
+            fatalError("memory/ must not be captured, used lately or not")
+        } catch { precondition((error as? CleanupPathError) == .protectedPath(memory), "memory/ is protected: \(error)") }
         try old([project + "/today.jsonl", memory + "/MEMORY.md", memory, project])
         _ = try capture(project, activityCheck)
 
@@ -457,7 +470,41 @@ enum WorktreeChecks {
         try fm.removeItem(at: related)
         try fm.removeItem(at: projects)
         _ = expectVerified("no sessions folder at all is no sessions", clean, within: GitWorktree.recentWindow)
+
+        // A sessions root that is itself a symlink (a dotfiles checkout) is
+        // resolved once; it reads as sessions, not as unknown.
+        let real = projects.deletingLastPathComponent().appendingPathComponent("projects-real")
+        try fm.createDirectory(at: real, withIntermediateDirectories: true)
+        try fm.createSymbolicLink(at: projects, withDestinationURL: real)
+        _ = expectVerified("symlinked sessions root, no sessions", clean, within: GitWorktree.recentWindow)
+        let linkedFolder = real.appendingPathComponent(cleanKey)
+        try fm.createDirectory(at: linkedFolder, withIntermediateDirectories: true)
+        try Data("{\"type\":\"user\",\"cwd\":\"\(clean)\"}\n".utf8)
+            .write(to: linkedFolder.appendingPathComponent("\(UUID().uuidString).jsonl"))
+        expectBlocked("a session found through a symlinked root", clean, .recentlyUsed(clean), within: GitWorktree.recentWindow)
+        try fm.removeItem(at: linkedFolder)
+        // A symlink below the root is not followed, and that is not "no sessions".
+        let target = real.deletingLastPathComponent().appendingPathComponent("linked-logs")
+        try fm.createDirectory(at: target, withIntermediateDirectories: true)
+        try fm.createSymbolicLink(at: real.appendingPathComponent(cleanKey), withDestinationURL: target)
+        expectBlocked("a symlinked project folder below the root", clean, .sessionsUnreadable(clean), within: GitWorktree.recentWindow)
+        try fm.removeItem(at: real.appendingPathComponent(cleanKey))
+        try fm.removeItem(at: target)
+        try fm.removeItem(at: projects)
+        try fm.removeItem(at: real)
         try fm.createDirectory(at: projects, withIntermediateDirectories: true)
+        // And the same for Codex's root, which is enumerated whole.
+        let codexRoot = AgentSessions.codex
+        let codexReal = codexRoot.deletingLastPathComponent().appendingPathComponent("sessions-real")
+        try fm.moveItem(at: codexRoot, to: codexReal)
+        try fm.createSymbolicLink(at: codexRoot, withDestinationURL: codexReal)
+        try fm.createDirectory(at: codexReal.appendingPathComponent("2026/10/08"), withIntermediateDirectories: true)
+        try Data("{\"payload\":{\"cwd\":\"\(clean)\"}}\n".utf8)
+            .write(to: codexReal.appendingPathComponent("2026/10/08/rollout.jsonl"))
+        expectBlocked("a Codex session found through a symlinked root", clean, .recentlyUsed(clean), within: GitWorktree.recentWindow)
+        try fm.removeItem(at: codexRoot)
+        try fm.moveItem(at: codexReal, to: codexRoot)
+        try fm.removeItem(at: codexRoot.appendingPathComponent("2026"))
 
         // Codex: a rollout whose first line (session_meta with its instructions) is large.
         let codexDay = AgentSessions.codex.appendingPathComponent("2026/10/07")

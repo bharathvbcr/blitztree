@@ -8,11 +8,6 @@ nonisolated enum CleanupGuard {
 
     static var rebuildable: Set<String> { CleanupPathSafety.rebuildable }
 
-    static func blockReason(path: String) -> String? {
-        do { _ = try CleanupPathSafety.capture(path: path); return nil }
-        catch { return error.localizedDescription }
-    }
-
     static func blockReason(command: String) -> String? {
         CleanupCommand.parse(command) == nil ? "Command or arguments not allowed" : nil
     }
@@ -131,6 +126,14 @@ nonisolated enum CleanupGuard {
                 let scratch = root != home
                 if scratch, !tree.ancestry(node).contains(where: candidates.contains) {
                     throw CleanupOperations.failure(String(localized: "Only build output BlitzTree recognised can go from a Claude Code scratchpad"))
+                }
+                // Inside a folder the engine sorts item by item (a cache folder,
+                // ~/.claude/projects, ~/.codex/worktrees...) only what the scan
+                // itself recognised may go, and it answers to that item's check.
+                // (A tool's own cache folder named by its allowlisted command is not a model-chosen path.)
+                if !scratch, !folderCache, CleanupPathSafety.isInsideEngineContainer(target.path, home: home),
+                   !tree.ancestry(node).contains(where: candidates.contains) {
+                    throw CleanupOperations.failure(String(localized: "Not a folder the scan recognised as removable"))
                 }
                 if codexChat(target.path) == nil,
                    let app = runningOwner(of: [target.path]) {

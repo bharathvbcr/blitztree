@@ -43,10 +43,19 @@ nonisolated enum AgentSessions {
 
     /// `folders`, when given, picks which top-level folders of `root` to read;
     /// every folder is read otherwise.
-    static func scan(in root: URL, since: Date? = nil, folders: ((String) -> Bool)? = nil,
+    static func scan(in requested: URL, since: Date? = nil, folders: ((String) -> Bool)? = nil,
                      cwdBudget: Int = cwdBudget, scanBudget: Int = scanBudget) -> Activity {
         var activity = Activity()
         var remaining = scanBudget
+        // The sessions root itself may be a symlink (a dotfiles checkout): it
+        // is resolved once, here. A symlink below it is still not followed
+        // and still makes the answer unknown.
+        let root: URL
+        switch resolve(requested.path) {
+        case .resolved(let path): root = URL(fileURLWithPath: path)
+        case .missing: return activity
+        case .failed: activity.complete = false; return activity
+        }
         let roots: [URL]
         if let keep = folders {
             switch listing(root.path) {
@@ -168,6 +177,17 @@ nonisolated enum AgentSessions {
         guard let end else { return nil }
         let literal = Data([0x22]) + line[start.upperBound..<end] + Data([0x22])
         return (try? JSONSerialization.jsonObject(with: literal, options: .fragmentsAllowed)) as? String
+    }
+
+    private enum Resolution { case resolved(String), missing, failed }
+
+    /// `realpath`, which is bounded by PATH_MAX and by the system's own symlink limit.
+    private static func resolve(_ path: String) -> Resolution {
+        guard let resolved = realpath(path, nil) else {
+            return errno == ENOENT || errno == ENOTDIR ? .missing : .failed
+        }
+        defer { free(resolved) }
+        return .resolved(String(cString: resolved))
     }
 
     private enum Listing { case names([String]), missing, failed }
