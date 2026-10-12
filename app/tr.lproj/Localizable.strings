@@ -127,7 +127,6 @@
 /* Settings */
 "Custom model providers" = "Özel model sağlayıcıları";
 "Add provider" = "Sağlayıcı Ekle";
-"Connect a relay, a self-hosted server, or any other OpenAI- or Anthropic-compatible endpoint by its base URL, protocol, and models." = "Bir aktarıcıyı, kendi barındırdığınız sunucunuzu ya da başka herhangi bir OpenAI veya Anthropic uyumlu uç noktayı temel URL'si, protokolü ve modelleriyle bağlayın.";
 "Edit" = "Düzenle";
 "Delete" = "Sil";
 "Custom model API" = "Özel model API'si";
@@ -159,7 +158,6 @@
 
 /* Setup offer: custom providers */
 "Or use any model — a self-hosted server, a relay, a gateway." = "Ya da herhangi bir model kullanın — kendi sunucunuz, bir aktarıcı, bir ağ geçidi.";
-"Set up a model provider" = "";
 
 "Add a model provider" = "Model sağlayıcı ekle";
 "Or" = "veya";

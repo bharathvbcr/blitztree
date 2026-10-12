@@ -127,7 +127,6 @@
 /* Settings */
 "Custom model providers" = "自定义模型提供商";
 "Add provider" = "添加提供商";
-"Connect a relay, a self-hosted server, or any other OpenAI- or Anthropic-compatible endpoint by its base URL, protocol, and models." = "通过基础 URL、协议和模型，连接中继、自托管服务器或任何其他兼容 OpenAI 或 Anthropic 的端点。";
 "Edit" = "编辑";
 "Delete" = "删除";
 "Custom model API" = "自定义模型 API";
@@ -159,7 +158,6 @@
 
 /* Setup offer: custom providers */
 "Or use any model — a self-hosted server, a relay, a gateway." = "或使用任意模型——自托管服务器、中继或网关。";
-"Set up a model provider" = "";
 
 "Add a model provider" = "添加模型提供商";
 "Or" = "或";

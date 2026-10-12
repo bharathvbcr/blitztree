@@ -127,7 +127,6 @@
 /* Settings */
 "Custom model providers" = "カスタムモデルプロバイダ";
 "Add provider" = "プロバイダを追加";
-"Connect a relay, a self-hosted server, or any other OpenAI- or Anthropic-compatible endpoint by its base URL, protocol, and models." = "中継サーバー、自己ホストのサーバー、その他のOpenAIまたはAnthropic互換エンドポイントを、ベースURL・プロトコル・モデルで接続します。";
 "Edit" = "編集";
 "Delete" = "削除";
 "Custom model API" = "カスタムモデルAPI";
@@ -159,7 +158,6 @@
 
 /* Setup offer: custom providers */
 "Or use any model — a self-hosted server, a relay, a gateway." = "または任意のモデルを使用 — セルフホストサーバー、リレー、ゲートウェイ。";
-"Set up a model provider" = "";
 
 "Add a model provider" = "モデルプロバイダを追加";
 "Or" = "または";

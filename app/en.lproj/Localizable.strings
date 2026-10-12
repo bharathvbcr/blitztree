@@ -122,7 +122,6 @@
 "Is “%@” safe to clean?" = "Is “%@” safe to clean?";
 "Custom model providers" = "Custom model providers";
 "Add provider" = "Add provider";
-"Connect a relay, a self-hosted server, or any other OpenAI- or Anthropic-compatible endpoint by its base URL, protocol, and models." = "Connect a relay, a self-hosted server, or any other OpenAI- or Anthropic-compatible endpoint by its base URL, protocol, and models.";
 "Edit" = "Edit";
 "Delete" = "Delete";
 "Custom model API" = "Custom model API";
@@ -150,7 +149,6 @@
 "missing provider, back to the installed agent" = "missing provider, back to the installed agent";
 "the installed agent, Claude Code first" = "the installed agent, Claude Code first";
 "Or use any model — a self-hosted server, a relay, a gateway." = "Or use any model — a self-hosted server, a relay, a gateway.";
-"Set up a model provider" = "Set up a model provider";
 "Add a model provider" = "Add a model provider";
 
 "Or" = "Or";
