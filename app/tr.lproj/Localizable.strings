@@ -92,6 +92,14 @@
 "Planned in %@ s" = "%@ sn'de planlandı";
 "Reveal %@ in Finder" = "%@ ögesini Finder'da göster";
 "Reveal in Finder" = "Finder'da Göster";
+"Export as CSV…" = "CSV Olarak Dışa Aktar…";
+"Could not export" = "Dışa aktarılamadı";
+"Exporting to CSV…" = "CSV olarak dışa aktarılıyor…";
+"%@ of %@ rows" = "%@ / %@ satır";
+"Exports “%@” and everything in it as a CSV file." = "“%@” ve içindeki her şeyi CSV dosyası olarak dışa aktarır.";
+"BlitzTree could not save the CSV file. %@" = "BlitzTree CSV dosyasını kaydedemedi. %@";
+"The export could not be started." = "Dışa aktarma başlatılamadı.";
+"The export failed." = "Dışa aktarma başarısız oldu.";
 "%@ is looking" = "%@ inceliyor";
 "Nothing worth removing" = "Kaldırılmaya değer bir şey yok";
 "Here's the plan" = "İşte plan";

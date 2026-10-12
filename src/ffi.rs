@@ -17,7 +17,7 @@ use std::sync::atomic::{AtomicU64, AtomicU8, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
 use crate::types::Breakdown;
-use crate::{cleanup, ranking, scan, Coverage, Progress, Tree};
+use crate::{cleanup, export, ranking, scan, Coverage, Progress, Tree};
 
 /// How a scan stands (`bz_scan_status`). Anything but `Running` means the
 /// scan thread has finished and `bz_progress` reports done.
@@ -43,7 +43,7 @@ pub struct BzScan {
     /// Empty for a cancelled scan.
     result: Arc<Mutex<Option<Result<Flat, String>>>>,
     // Kept alive for the lifetime of the handle; Swift holds raw pointers in.
-    flat: Option<Box<Flat>>,
+    flat: Option<Arc<Flat>>,
 }
 
 impl BzScan {
@@ -246,7 +246,7 @@ pub extern "C" fn bz_take_tree(h: *mut BzScan) -> u64 {
         };
         if h.flat.is_none() {
             match lock(&h.result).take() {
-                Some(Ok(f)) => h.flat = Some(Box::new(f)),
+                Some(Ok(f)) => h.flat = Some(Arc::new(f)),
                 Some(Err(why)) => eprintln!("[bz] scan failed: {why}"),
                 None => {}
             }
@@ -393,7 +393,7 @@ pub unsafe extern "C" fn bz_remove(h: *mut BzScan, nodes: *const u32, count: u32
             progress: Arc::new(Progress::default()),
             status: Arc::new(AtomicU8::new(ScanStatus::Done as u8)),
             result: Arc::new(Mutex::new(None)),
-            flat: Some(Box::new(with_cleanup(
+            flat: Some(Arc::new(with_cleanup(
                 tree,
                 coverage,
                 &cleanup::Anchors::from_env(),
@@ -588,6 +588,217 @@ pub extern "C" fn bz_types_free(t: *mut Breakdown) {
     }
 }
 
+/// How an export stands (`bz_export_progress`). Anything but `Running` means
+/// the export thread has finished: the file is in place (`Done`) or there is
+/// no file and no temporary one (`Cancelled`, `Failed`).
+#[repr(u8)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum ExportStatus {
+    Running = 0,
+    Done = 1,
+    Cancelled = 2,
+    Failed = 3,
+}
+
+pub struct BzExport {
+    control: Arc<export::Control>,
+    /// An `ExportStatus`, written once by the export thread after `outcome`.
+    status: Arc<AtomicU8>,
+    /// Why the export failed (`ExportStatus::Failed` only).
+    outcome: Arc<Mutex<Option<String>>>,
+    /// `outcome` as a C string, made on the first `bz_export_error`.
+    error: Option<CString>,
+    thread: Option<std::thread::JoinHandle<()>>,
+}
+
+impl BzExport {
+    fn status(&self) -> ExportStatus {
+        match self.status.load(Ordering::Acquire) {
+            0 => ExportStatus::Running,
+            1 => ExportStatus::Done,
+            2 => ExportStatus::Cancelled,
+            _ => ExportStatus::Failed,
+        }
+    }
+
+    /// Ask the export to stop and wait for its thread, so that when this
+    /// returns the temporary file is gone.
+    fn finish(&mut self) {
+        self.control.cancel();
+        if let Some(thread) = self.thread.take() {
+            let _ = thread.join();
+        }
+    }
+}
+
+/// What the export thread runs: the file, then the status that says how it went.
+fn run_export(
+    flat: Arc<Flat>,
+    root: usize,
+    dest: PathBuf,
+    control: Arc<export::Control>,
+    status: Arc<AtomicU8>,
+    outcome: Arc<Mutex<Option<String>>>,
+) {
+    let (ended, why) = match catch_unwind(AssertUnwindSafe(|| {
+        export::export_file(&flat.tree, root, &dest, &control)
+    })) {
+        Ok(Ok(_)) => (ExportStatus::Done, None),
+        Ok(Err(export::Error::Cancelled)) => (ExportStatus::Cancelled, None),
+        Ok(Err(error)) => (ExportStatus::Failed, Some(error.to_string())),
+        Err(payload) => (
+            ExportStatus::Failed,
+            Some(format!("internal error: {}", panic_message(&*payload))),
+        ),
+    };
+    *lock(&outcome) = why;
+    status.store(ended as u8, Ordering::Release);
+}
+
+/// Start writing the CSV of the subtree at `root` (node 0: the whole scan) to
+/// `dest_path`, on a background thread. See `export.rs` for the file. NULL for
+/// a NULL handle or path, a handle without a tree, a `root` outside it, a
+/// path that is empty or not absolute, or when the thread cannot start.
+///
+/// The export keeps its own reference to the tree: `bz_free(h)` or a rescan
+/// while it runs cannot pull the tree out from under it.
+///
+/// # Safety
+/// `h` must be NULL or a live scan handle, not being freed concurrently with
+/// this call. `dest_path` must be NULL or a NUL-terminated string.
+#[no_mangle]
+pub unsafe extern "C" fn bz_export_start(
+    h: *mut BzScan,
+    root: u32,
+    dest_path: *const c_char,
+) -> *mut BzExport {
+    guarded(std::ptr::null_mut(), || {
+        if dest_path.is_null() {
+            return std::ptr::null_mut();
+        }
+        let dest = unsafe { CStr::from_ptr(dest_path) }.to_bytes();
+        let Some(flat) = (unsafe { h.as_ref() }).and_then(|h| h.flat.clone()) else {
+            return std::ptr::null_mut();
+        };
+        // The folder a relative path would land in is whatever the process's
+        // current directory is: never a place the user chose.
+        if dest.first() != Some(&b'/') || root as usize >= flat.tree.len() {
+            return std::ptr::null_mut();
+        }
+        start_export(
+            flat,
+            root as usize,
+            PathBuf::from(OsStr::from_bytes(dest)),
+            Arc::new(export::Control::new()),
+        )
+    })
+}
+
+/// `bz_export_start` with the export's controls supplied, so a test can hold
+/// the export at a chosen row.
+fn start_export(
+    flat: Arc<Flat>,
+    root: usize,
+    dest: PathBuf,
+    control: Arc<export::Control>,
+) -> *mut BzExport {
+    let status = Arc::new(AtomicU8::new(ExportStatus::Running as u8));
+    let outcome = Arc::new(Mutex::new(None));
+    let spawned = {
+        let (control, status, outcome) = (control.clone(), status.clone(), outcome.clone());
+        std::thread::Builder::new()
+            .spawn(move || run_export(flat, root, dest, control, status, outcome))
+    };
+    let Ok(thread) = spawned else {
+        return std::ptr::null_mut();
+    };
+    Box::into_raw(Box::new(BzExport {
+        control,
+        status,
+        outcome,
+        error: None,
+        thread: Some(thread),
+    }))
+}
+
+/// Rows written, rows to write (0 until the export has started) and
+/// `BZ_EXPORT_*`. Any output pointer may be NULL. A NULL handle reports
+/// `BZ_EXPORT_FAILED` with zero counts, so a poller stops.
+///
+/// # Safety
+/// `e` must be NULL or a live export handle, not being freed concurrently.
+/// The outputs must be NULL or valid for writing.
+#[no_mangle]
+pub unsafe extern "C" fn bz_export_progress(
+    e: *mut BzExport,
+    rows_done: *mut u64,
+    rows_total: *mut u64,
+    status: *mut c_int,
+) {
+    let e = unsafe { e.as_ref() };
+    unsafe {
+        if let Some(out) = rows_done.as_mut() {
+            *out = e.map_or(0, |e| e.control.rows_done());
+        }
+        if let Some(out) = rows_total.as_mut() {
+            *out = e.map_or(0, |e| e.control.rows_total());
+        }
+        if let Some(out) = status.as_mut() {
+            *out = e.map_or(ExportStatus::Failed, BzExport::status) as c_int;
+        }
+    }
+}
+
+/// Ask a running export to stop. It ends promptly with `BZ_EXPORT_CANCELLED`,
+/// no file written and no temporary file left; one that had already put its
+/// file in place stays `BZ_EXPORT_DONE`. A no-op for NULL and when repeated.
+///
+/// # Safety
+/// `e` must be NULL or a live export handle, not being freed concurrently.
+#[no_mangle]
+pub unsafe extern "C" fn bz_export_cancel(e: *mut BzExport) {
+    if let Some(e) = unsafe { e.as_ref() } {
+        e.control.cancel();
+    }
+}
+
+/// Why the export failed, in English, for `BZ_EXPORT_FAILED`; NULL in any
+/// other state and for a NULL handle. Valid until `bz_export_free`.
+///
+/// # Safety
+/// `e` must be NULL or a live export handle, with no concurrent free.
+#[no_mangle]
+pub unsafe extern "C" fn bz_export_error(e: *mut BzExport) -> *const c_char {
+    guarded(std::ptr::null(), || {
+        let Some(e) = (unsafe { e.as_mut() }) else {
+            return std::ptr::null();
+        };
+        if e.status() != ExportStatus::Failed {
+            return std::ptr::null();
+        }
+        if e.error.is_none() {
+            let why = lock(&e.outcome)
+                .clone()
+                .unwrap_or_else(|| "The export failed".into());
+            e.error = Some(CString::new(why.replace('\0', "\u{fffd}")).unwrap_or_default());
+        }
+        e.error.as_ref().map_or(std::ptr::null(), |s| s.as_ptr())
+    })
+}
+
+/// Release an export. One still running is stopped first and waited for
+/// (promptly: it checks before every row), so its temporary file is gone when
+/// this returns.
+///
+/// # Safety
+/// `e` must be NULL or a live export handle, not used afterwards or concurrently.
+#[no_mangle]
+pub unsafe extern "C" fn bz_export_free(e: *mut BzExport) {
+    if !e.is_null() {
+        let mut export = unsafe { Box::from_raw(e) };
+        export.finish();
+    }
+}
 
 #[cfg(test)]
 mod tests {
@@ -610,7 +821,7 @@ mod tests {
                 progress: Arc::new(Progress::default()),
                 status: Arc::new(AtomicU8::new(ScanStatus::Done as u8)),
                 result: Arc::new(std::sync::Mutex::new(None)),
-                flat: Some(Box::new(with_cleanup(tree, Coverage::default(), &anchors))),
+                flat: Some(Arc::new(with_cleanup(tree, Coverage::default(), &anchors))),
             };
             let h = &mut handle as *mut BzScan;
             assert_eq!(unsafe { bz_cleanup_count(h) } as usize, expected.len());
@@ -658,7 +869,7 @@ mod tests {
             progress: Arc::new(Progress::default()),
             status: Arc::new(AtomicU8::new(ScanStatus::Done as u8)),
             result: Arc::new(std::sync::Mutex::new(None)),
-            flat: Some(Box::new(flat)),
+            flat: Some(Arc::new(flat)),
         };
         let h = &mut handle as *mut BzScan;
         unsafe {
@@ -706,7 +917,7 @@ mod tests {
             progress: Arc::new(Progress::default()),
             status: Arc::new(AtomicU8::new(ScanStatus::Done as u8)),
             result: Arc::new(std::sync::Mutex::new(None)),
-            flat: Some(Box::new(with_cleanup(
+            flat: Some(Arc::new(with_cleanup(
                 tree,
                 Coverage::default(),
                 &cleanup::Anchors::default(),
@@ -760,7 +971,7 @@ mod tests {
             progress: Arc::new(Progress::default()),
             status: Arc::new(AtomicU8::new(ScanStatus::Done as u8)),
             result: Arc::new(std::sync::Mutex::new(None)),
-            flat: Some(Box::new(with_cleanup(
+            flat: Some(Arc::new(with_cleanup(
                 tree,
                 Coverage::default(),
                 &cleanup::Anchors::default(),
@@ -789,7 +1000,7 @@ mod tests {
             progress: Arc::new(Progress::default()),
             status: Arc::new(AtomicU8::new(ScanStatus::Done as u8)),
             result: Arc::new(std::sync::Mutex::new(None)),
-            flat: Some(Box::new(with_cleanup(
+            flat: Some(Arc::new(with_cleanup(
                 tree,
                 Coverage::default(),
                 &cleanup::Anchors::default(),
@@ -821,7 +1032,7 @@ mod tests {
             progress: Arc::new(Progress::default()),
             status: Arc::new(AtomicU8::new(ScanStatus::Done as u8)),
             result: Arc::new(std::sync::Mutex::new(None)),
-            flat: Some(Box::new(with_cleanup(
+            flat: Some(Arc::new(with_cleanup(
                 tree,
                 Coverage::default(),
                 &cleanup::Anchors::default(),
@@ -1218,7 +1429,7 @@ mod tests {
             progress: Arc::new(Progress::default()),
             status: Arc::new(AtomicU8::new(ScanStatus::Done as u8)),
             result: Arc::new(Mutex::new(None)),
-            flat: Some(Box::new(with_cleanup(
+            flat: Some(Arc::new(with_cleanup(
                 tree,
                 coverage,
                 &cleanup::Anchors::default(),
@@ -1370,5 +1581,371 @@ mod tests {
             "the cancels never landed mid-scan; the stress proved nothing"
         );
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    // ---- CSV export through the bridge ----
+
+    /// A finished handle over `/r/{big/{a,b},small,empty/}`.
+    fn export_handle() -> *mut BzScan {
+        let mut tree = Tree::with_root("/r");
+        let big = tree.push("big", 0, 0, 0, true);
+        tree.push("small.txt", 0, 5, 8, false);
+        tree.push("empty", 0, 0, 0, true);
+        tree.push("a,\"q\".bin", big, 700, 700, false);
+        tree.push("b.txt", big, 300, 304, false);
+        crate::finish(&mut tree);
+        let flat = with_cleanup(tree, Coverage::default(), &cleanup::Anchors::default());
+        Box::into_raw(Box::new(BzScan {
+            progress: Arc::new(Progress::default()),
+            status: Arc::new(AtomicU8::new(ScanStatus::Done as u8)),
+            result: Arc::new(Mutex::new(None)),
+            flat: Some(Arc::new(flat)),
+        }))
+    }
+
+    fn export_status(e: *mut BzExport) -> c_int {
+        let mut status = -1;
+        unsafe { bz_export_progress(e, std::ptr::null_mut(), std::ptr::null_mut(), &mut status) };
+        status
+    }
+
+    fn wait_export(e: *mut BzExport) -> c_int {
+        let deadline = Instant::now() + Duration::from_secs(10);
+        loop {
+            let status = export_status(e);
+            if status != ExportStatus::Running as c_int {
+                return status;
+            }
+            assert!(Instant::now() < deadline, "the export never finished");
+            std::thread::sleep(Duration::from_millis(1));
+        }
+    }
+
+    fn export_dir(name: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("bz-ffi-export-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    fn tmp_files(dir: &Path) -> usize {
+        std::fs::read_dir(dir)
+            .unwrap()
+            .filter(|e| {
+                e.as_ref()
+                    .unwrap()
+                    .file_name()
+                    .to_string_lossy()
+                    .starts_with(".blitztree-export-")
+            })
+            .count()
+    }
+
+    const EXPORT_DONE: c_int = ExportStatus::Done as c_int;
+    const EXPORT_CANCELLED: c_int = ExportStatus::Cancelled as c_int;
+    const EXPORT_FAILED: c_int = ExportStatus::Failed as c_int;
+
+    #[test]
+    fn the_bridge_exports_a_folder_and_reports_progress() {
+        let h = export_handle();
+        let dir = export_dir("basic");
+        let dest = dir.join("out.csv");
+        let e = unsafe { bz_export_start(h, 1, c_path(&dest).as_ptr()) };
+        assert!(!e.is_null());
+        assert_eq!(wait_export(e), EXPORT_DONE);
+        let (mut done, mut total) = (0, 0);
+        unsafe { bz_export_progress(e, &mut done, &mut total, std::ptr::null_mut()) };
+        assert_eq!((done, total), (3, 3), "big, and the two files in it");
+        assert!(
+            unsafe { bz_export_error(e) }.is_null(),
+            "no error to report"
+        );
+        let csv = std::fs::read_to_string(&dest).unwrap();
+        assert_eq!(
+            csv,
+            "path,allocated_bytes,logical_bytes,file_count,is_folder,complete\r\n\
+             /r/big,1004,1000,2,true,true\r\n\
+             \"/r/big/a,\"\"q\"\".bin\",700,700,1,false,true\r\n\
+             /r/big/b.txt,304,300,1,false,true\r\n"
+        );
+        assert_eq!(tmp_files(&dir), 0);
+        unsafe { bz_export_free(e) };
+
+        // The whole scan, as the same handle.
+        let all = dir.join("all.csv");
+        let e = unsafe { bz_export_start(h, 0, c_path(&all).as_ptr()) };
+        assert_eq!(wait_export(e), EXPORT_DONE);
+        assert_eq!(
+            std::fs::read_to_string(&all).unwrap().lines().count(),
+            1 + 6
+        );
+        unsafe { bz_export_free(e) };
+        bz_free(h);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn the_bridge_refuses_what_it_cannot_export() {
+        let h = export_handle();
+        let dir = export_dir("refuse");
+        let dest = c_path(&dir.join("out.csv"));
+        unsafe {
+            assert!(
+                bz_export_start(std::ptr::null_mut(), 0, dest.as_ptr()).is_null(),
+                "no handle"
+            );
+            assert!(bz_export_start(h, 0, std::ptr::null()).is_null(), "no path");
+            assert!(bz_export_start(h, 0, c"".as_ptr()).is_null(), "empty path");
+            assert!(
+                bz_export_start(h, 0, c"out.csv".as_ptr()).is_null(),
+                "a relative path has no place"
+            );
+            assert!(
+                bz_export_start(h, 6, dest.as_ptr()).is_null(),
+                "a node past the end"
+            );
+            assert!(bz_export_start(h, u32::MAX, dest.as_ptr()).is_null());
+            let unscanned = Box::into_raw(Box::new(BzScan {
+                progress: Arc::new(Progress::default()),
+                status: Arc::new(AtomicU8::new(ScanStatus::Running as u8)),
+                result: Arc::new(Mutex::new(None)),
+                flat: None,
+            }));
+            assert!(
+                bz_export_start(unscanned, 0, dest.as_ptr()).is_null(),
+                "no tree yet"
+            );
+            bz_free(unscanned);
+
+            let null: *mut BzExport = std::ptr::null_mut();
+            assert_eq!(
+                export_status(null),
+                EXPORT_FAILED,
+                "a poller on no export stops"
+            );
+            let (mut done, mut total) = (9, 9);
+            bz_export_progress(null, &mut done, &mut total, std::ptr::null_mut());
+            assert_eq!((done, total), (0, 0));
+            bz_export_progress(
+                null,
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+            );
+            bz_export_cancel(null);
+            assert!(bz_export_error(null).is_null());
+            bz_export_free(null);
+        }
+        assert_eq!(tmp_files(&dir), 0);
+        assert!(!dir.join("out.csv").exists());
+        bz_free(h);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_failed_export_says_why_and_leaves_nothing() {
+        let h = export_handle();
+        let dir = export_dir("failed");
+        let missing = dir.join("no-such-folder/out.csv");
+        let e = unsafe { bz_export_start(h, 0, c_path(&missing).as_ptr()) };
+        assert!(!e.is_null());
+        assert_eq!(wait_export(e), EXPORT_FAILED);
+        let why = unsafe { CStr::from_ptr(bz_export_error(e)) }
+            .to_str()
+            .unwrap();
+        assert!(why.contains("No such file or directory"), "{why}");
+        assert_eq!(
+            unsafe { bz_export_error(e) },
+            unsafe { bz_export_error(e) },
+            "the same string each time"
+        );
+        unsafe { bz_export_free(e) };
+
+        // The destination is a folder.
+        let e = unsafe { bz_export_start(h, 0, c_path(&dir).as_ptr()) };
+        assert_eq!(wait_export(e), EXPORT_FAILED);
+        let why = unsafe { CStr::from_ptr(bz_export_error(e)) }
+            .to_str()
+            .unwrap();
+        assert!(why.contains("is a folder"), "{why}");
+        unsafe { bz_export_free(e) };
+        assert_eq!(tmp_files(&dir), 0);
+        bz_free(h);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Holds an export at its second row until told to go on, or cancelled.
+    fn hold_at_row_two(
+        control: &export::Control,
+    ) -> (std::sync::mpsc::Receiver<()>, Arc<AtomicBool>) {
+        let (reached, wait) = std::sync::mpsc::channel();
+        let go = Arc::new(AtomicBool::new(false));
+        let release = go.clone();
+        control.on_row(move |rows, ctl| {
+            if rows == 2 {
+                let _ = reached.send(());
+                while !release.load(Ordering::Acquire) && !ctl.is_cancelled() {
+                    std::thread::sleep(Duration::from_millis(1));
+                }
+            }
+        });
+        (wait, go)
+    }
+
+    #[test]
+    fn freeing_the_scan_while_it_exports_cannot_pull_the_tree_away() {
+        let h = export_handle();
+        let dir = export_dir("free-scan");
+        let dest = dir.join("out.csv");
+        let weak = Arc::downgrade(&unsafe { (*h).flat.clone() }.unwrap());
+        assert_eq!(weak.strong_count(), 1, "the handle's");
+
+        let control = Arc::new(export::Control::new());
+        let (reached, go) = hold_at_row_two(&control);
+        let e = start_export(
+            unsafe { (*h).flat.clone() }.unwrap(),
+            0,
+            dest.clone(),
+            control,
+        );
+        assert!(!e.is_null());
+        reached
+            .recv_timeout(Duration::from_secs(10))
+            .expect("the export is under way");
+
+        // The UI lets go of the scan (a rescan replaced it) mid-export.
+        bz_free(h);
+        assert_eq!(
+            weak.strong_count(),
+            1,
+            "the export now holds the only reference"
+        );
+        go.store(true, Ordering::Release);
+        assert_eq!(wait_export(e), EXPORT_DONE);
+        let csv = std::fs::read_to_string(&dest).unwrap();
+        assert_eq!(
+            csv.lines().count(),
+            1 + 6,
+            "every row, read from a tree whose handle was freed"
+        );
+        assert!(csv.contains("/r/empty,0,0,0,true,true"));
+        unsafe { bz_export_free(e) };
+        assert_eq!(weak.strong_count(), 0, "the tree goes with the last reader");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn freeing_a_running_export_stops_it_and_removes_its_temporary_file() {
+        let h = export_handle();
+        let dir = export_dir("free-export");
+        let dest = dir.join("out.csv");
+        std::fs::write(&dest, b"before").unwrap();
+        let control = Arc::new(export::Control::new());
+        let (reached, _never_released) = hold_at_row_two(&control);
+        let e = start_export(
+            unsafe { (*h).flat.clone() }.unwrap(),
+            0,
+            dest.clone(),
+            control,
+        );
+        reached
+            .recv_timeout(Duration::from_secs(10))
+            .expect("the export is under way");
+        assert_eq!(
+            tmp_files(&dir),
+            1,
+            "the half-written file is a temporary one"
+        );
+        assert_eq!(export_status(e), ExportStatus::Running as c_int);
+        unsafe { bz_export_free(e) };
+        assert_eq!(tmp_files(&dir), 0, "gone by the time free returns");
+        assert_eq!(
+            std::fs::read(&dest).unwrap(),
+            b"before",
+            "the destination is as it was"
+        );
+        bz_free(h);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn cancelling_before_halfway_and_at_the_end_through_the_bridge() {
+        let h = export_handle();
+        let dir = export_dir("cancel");
+        let dest = dir.join("out.csv");
+        // 0%: cancelled before the first row.
+        let control = Arc::new(export::Control::new());
+        control.cancel();
+        let e = start_export(
+            unsafe { (*h).flat.clone() }.unwrap(),
+            0,
+            dest.clone(),
+            control,
+        );
+        assert_eq!(wait_export(e), EXPORT_CANCELLED);
+        assert!(
+            unsafe { bz_export_error(e) }.is_null(),
+            "a stop is not an error"
+        );
+        unsafe { bz_export_free(e) };
+        // 50%: stopped by the caller while held mid-file.
+        let control = Arc::new(export::Control::new());
+        let (reached, _never_released) = hold_at_row_two(&control);
+        let e = start_export(
+            unsafe { (*h).flat.clone() }.unwrap(),
+            0,
+            dest.clone(),
+            control,
+        );
+        reached.recv_timeout(Duration::from_secs(10)).unwrap();
+        unsafe { bz_export_cancel(e) };
+        unsafe { bz_export_cancel(e) };
+        assert_eq!(wait_export(e), EXPORT_CANCELLED);
+        unsafe { bz_export_free(e) };
+        // Cancelling after it finished leaves the file.
+        let e = unsafe { bz_export_start(h, 0, c_path(&dest).as_ptr()) };
+        assert_eq!(wait_export(e), EXPORT_DONE);
+        unsafe { bz_export_cancel(e) };
+        assert_eq!(export_status(e), EXPORT_DONE);
+        unsafe { bz_export_free(e) };
+        assert!(dest.exists());
+        assert_eq!(tmp_files(&dir), 0);
+        bz_free(h);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn exports_started_together_from_one_handle_each_write_their_file() {
+        let h = export_handle();
+        let dir = export_dir("together");
+        let addr = h as usize;
+        let workers: Vec<_> = (0..6)
+            .map(|k| {
+                let dest = dir.join(format!("out-{}.csv", k % 3));
+                std::thread::spawn(move || {
+                    for _ in 0..10 {
+                        let e = unsafe {
+                            bz_export_start(addr as *mut BzScan, k % 2, c_path(&dest).as_ptr())
+                        };
+                        assert!(!e.is_null());
+                        assert_eq!(wait_export(e), EXPORT_DONE);
+                        unsafe { bz_export_free(e) };
+                    }
+                })
+            })
+            .collect();
+        for w in workers {
+            w.join().unwrap();
+        }
+        for k in 0..3 {
+            let csv = std::fs::read_to_string(dir.join(format!("out-{k}.csv"))).unwrap();
+            assert!(
+                csv.starts_with("path,") && csv.ends_with("\r\n"),
+                "out-{k}.csv"
+            );
+        }
+        assert_eq!(tmp_files(&dir), 0);
+        bz_free(h);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

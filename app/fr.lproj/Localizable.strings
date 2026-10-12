@@ -92,6 +92,14 @@
 "Planned in %@ s" = "Planifié en %@ s";
 "Reveal %@ in Finder" = "Afficher %@ dans le Finder";
 "Reveal in Finder" = "Afficher dans le Finder";
+"Export as CSV…" = "Exporter en CSV…";
+"Could not export" = "Exportation impossible";
+"Exporting to CSV…" = "Exportation en CSV…";
+"%@ of %@ rows" = "%@ sur %@ lignes";
+"Exports “%@” and everything in it as a CSV file." = "Exporte « %@ » et tout son contenu dans un fichier CSV.";
+"BlitzTree could not save the CSV file. %@" = "BlitzTree n’a pas pu enregistrer le fichier CSV. %@";
+"The export could not be started." = "L’exportation n’a pas pu démarrer.";
+"The export failed." = "L’exportation a échoué.";
 "%@ is looking" = "%@ regarde";
 "Nothing worth removing" = "Rien qui mérite d'être supprimé";
 "Here's the plan" = "Voici le plan";

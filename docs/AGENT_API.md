@@ -1,15 +1,18 @@
-# Read-only JSON CLI
+# JSON CLI
 
 The `blitztree` executable exposes a versioned JSON interface over the same Rust
 scanner as the GUI. It does not launch the GUI, an AI agent, a shell, a server or
 any network request. It reads filesystem metadata; it never deletes files or
-reads regular file contents. No daemon or API key is needed.
+reads regular file contents. No daemon or API key is needed. `scan` and
+`quick-wins` are read-only; `export-csv` writes the one file you name (see
+[Exporting to CSV](#exporting-to-csv-export-csv)).
 
 ```sh
 cargo build --locked --release --features cli --bin blitztree
 ./target/release/blitztree quick-wins
 ./target/release/blitztree quick-wins --root "$HOME/projects" --limit 30
 ./target/release/blitztree scan --root "$HOME/Downloads" --min-bytes 104857600
+./target/release/blitztree export-csv --root "$HOME/Downloads" --output downloads.csv
 ./target/release/blitztree --help
 ```
 
@@ -209,6 +212,61 @@ review before any removal. Partially scanned candidates remain visible, like in
 the panel, with `complete=false`; their reported sizes describe only observed
 data. Improving these rules is a change shared by both callers, not a second
 policy inside the CLI.
+
+## Exporting to CSV (`export-csv`)
+
+`blitztree export-csv --output FILE [--root PATH]` scans `--root` (default: the
+home folder) and writes every scanned item to `FILE`. It is the same writer
+(`src/export.rs`) the app's File → Export as CSV… uses, which writes the folder
+on screen (the whole scan when you are at the top). `--min-bytes` and `--limit`
+do not apply and are refused; so is `--output` on the other commands. A relative
+`FILE` is resolved against the current directory.
+
+**The file.** RFC 4180: one header row, then one row per scanned item (the
+root included), every row ended by CRLF, UTF-8 without a byte-order mark.
+
+| column            | meaning                                                              |
+|-------------------|----------------------------------------------------------------------|
+| `path`            | absolute path                                                        |
+| `allocated_bytes` | on-disk bytes; a folder's is its subtree's total                     |
+| `logical_bytes`   | content bytes; a folder's is its subtree's total                     |
+| `file_count`      | a folder: files below it (what the window's status bar shows); a file or link: 1 |
+| `is_folder`       | `true` / `false`                                                     |
+| `complete`        | `false` when the item, or something below it, could not be read in full |
+
+Rows are in pre-order (a folder, then its children largest first). Symlinks are
+rows of their own and are not followed. A hard link or whole APFS clone has its
+bytes on one path only (the first path scanned, as in `summary`); its other
+paths are rows with 0 bytes that still count as one file each, so folder totals
+add up. Quoting: a field is quoted when it holds a comma, a double quote, CR or
+LF, or begins or ends with a space, and a quote inside is doubled. Names in a
+scan are valid UTF-8 (an entry whose name is not is dropped by the scan and
+counted in `coverage.invalid_names`, so it has no row); any bytes a tree
+holds are written unchanged.
+
+**Spreadsheet formulas.** The `path` column is the only free text and every path
+is absolute, so it starts with `/`, which no spreadsheet treats as a formula:
+no file name can reach the start of a cell. Other columns are numbers and
+`true`/`false`. Names are never rewritten. (The writer would neutralise a
+relative root that began with `=`, `+`, `-`, `@`, TAB or CR by prefixing a single
+quote; the CLI and the app always have absolute roots.) Treat the file's
+contents as data like any report.
+
+**Writing it.** The CSV streams through a buffer, one row at a time, so
+memory does not grow with the tree (a 1,001,001-row export holds under 64 KB
+beyond its write buffer; see the test `a_million_row_export_holds_constant_memory`).
+It is written to a hidden `.blitztree-export-*.tmp` file in `FILE`'s folder,
+synced, and renamed over `FILE`: `FILE` is whole or untouched. Any error (a
+folder that is missing or read-only, a full disk, a folder removed meanwhile),
+SIGINT or SIGTERM during the write removes the temporary file, leaves `FILE`
+as it was, prints a JSON error and exits `1`. The folder is checked before the
+scan starts, so a bad `--output` fails at once. An existing `FILE` is replaced
+(a symlink there is replaced, not written through); a folder there is an error.
+
+The JSON result has the common fields with `read_only: false` and
+`report`: `output`, `rows`, `bytes_written`, `write_seconds`, `format`, `columns`,
+`row_order` and a `note`. Check `coverage.complete`: rows with `complete=false`
+carry lower-bound sizes.
 
 ## Reproducibility
 

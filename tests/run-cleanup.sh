@@ -63,6 +63,12 @@ swiftc "${SOURCES[@]}" tests/SearchIntegrationChecks.swift "${FLAGS[@]}" \
   -import-objc-header app/bz.h -L target/release -lblitztree \
   -framework AppKit -framework SwiftUI -o "$CLEANUP_TEST_TMP/search"
 "$CLEANUP_TEST_TMP/search"
+# File > Export as CSV…: the exporter that drives the engine's streamed,
+# atomic CSV writer (whole scan, folder, failures, cancel, scan kept alive).
+swiftc "${SOURCES[@]}" tests/ExportChecks.swift "${FLAGS[@]}" \
+  -import-objc-header app/bz.h -L target/release -lblitztree \
+  -framework AppKit -framework SwiftUI -o "$CLEANUP_TEST_TMP/export"
+"$CLEANUP_TEST_TMP/export"
 swiftc "${SOURCES[@]}" tests/VolumeChecks.swift "${FLAGS[@]}" \
   -import-objc-header app/bz.h -L target/release -lblitztree \
   -framework AppKit -framework SwiftUI -o "$CLEANUP_TEST_TMP/volumes"

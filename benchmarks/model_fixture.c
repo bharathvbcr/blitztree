@@ -121,6 +121,11 @@ const uint8_t *bz_types_ext_blob(BzTypes *t) { (void)t; abort(); }
 const uint64_t *bz_types_alloc(BzTypes *t) { (void)t; abort(); }
 const uint64_t *bz_types_files(BzTypes *t) { (void)t; abort(); }
 void bz_types_free(BzTypes *t) { (void)t; abort(); }
+BzExport *bz_export_start(BzScan *h, uint32_t root, const char *dest_path) { (void)h; (void)root; (void)dest_path; abort(); }
+void bz_export_progress(BzExport *e, uint64_t *rows_done, uint64_t *rows_total, int *status) { (void)e; (void)rows_done; (void)rows_total; (void)status; abort(); }
+void bz_export_cancel(BzExport *e) { (void)e; abort(); }
+const char *bz_export_error(BzExport *e) { (void)e; abort(); }
+void bz_export_free(BzExport *e) { (void)e; abort(); }
 
 void bz_free(BzScan *h) {
     if (!h) return;

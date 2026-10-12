@@ -76,6 +76,14 @@ nonisolated final class Tree: @unchecked Sendable {
         return tree
     }
 
+    /// Starts the engine writing the CSV of the folder at `root` to the
+    /// absolute path `path` (see `bz_export_start`). The export keeps its own
+    /// reference to the tree. Nil if the engine refused. Free with `bz_export_free`.
+    func startExport(root: Int, to path: String) -> OpaquePointer? {
+        guard root >= 0, root < count else { return nil }
+        return path.withCString { bz_export_start(handle, UInt32(root), $0) }
+    }
+
     func isDir(_ i: Int) -> Bool { flags[i] & 1 != 0 }
 
     /// The node's own listing was partial (an unreadable entry, a skipped
