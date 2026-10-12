@@ -57,7 +57,70 @@ struct PlannerFallbackChecks {
         providerURLs()
         await requestTimeURLCheck()
         keychainFailures()
+        realKeychainRoundTrip()
         print("PlannerFallbackChecks passed")
+    }
+
+    /// The real login Keychain under a throwaway provider id, so the item is
+    /// `dev.ahmed.blitztree.bz-test-<uuid>`, never one a user has. Every
+    /// Keychain call is made and its result kept before anything is asserted,
+    /// and the item is removed before the first assertion: a trap skips defers.
+    /// Where the Keychain can't be used (CI without an unlocked login keychain)
+    /// it says SKIP and checks nothing; it never reports a pass.
+    @MainActor
+    private static func realKeychainRoundTrip() {
+        let id = "bz-test-" + UUID().uuidString.lowercased()
+        let suite = "dev.ahmed.blitztree.test.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suite)!
+        let store = ProviderStore(defaults: defaults)
+        let provider = LLMProvider(id: id, displayName: "Round trip", baseURL: URL(string: "https://gw.example/v1")!,
+                                   api: .anthropic, model: "m")
+        func items() -> Int {
+            let query: [String: Any] = [
+                kSecClass as String: kSecClassGenericPassword,
+                kSecAttrService as String: "dev.ahmed.blitztree." + id,
+                kSecReturnAttributes as String: true,
+                kSecMatchLimit as String: kSecMatchLimitAll,
+            ]
+            var found: CFTypeRef?
+            guard SecItemCopyMatching(query as CFDictionary, &found) == errSecSuccess else { return 0 }
+            return (found as? [[String: Any]])?.count ?? 0
+        }
+
+        var failure: Error?
+        var first: String?, second: String?, keptWithoutKey: String?
+        var itemsAfterTwoSaves = 0
+        do {
+            try store.save(provider, key: "first-key", keychain: .system)
+            first = store.key(for: id)
+            try store.save(provider, key: "second-key-é-日本", keychain: .system)
+            second = store.key(for: id)
+            itemsAfterTwoSaves = items()
+            try store.save(provider, key: nil)
+            keptWithoutKey = store.key(for: id)
+        } catch { failure = error }
+        let reloaded = ProviderStore(defaults: defaults).providers
+        let before = store.key(for: id)
+        store.delete(provider)
+        let afterDelete = ProviderStore.getKey(for: id)
+        ProviderStore.deleteKey(for: id)
+        let leftBehind = items()
+        defaults.removePersistentDomain(forName: suite)
+
+        if let failure = failure as? KeychainFailure,
+           [errSecInteractionNotAllowed, errSecNotAvailable, errSecNoSuchKeychain, errSecAuthFailed].contains(failure.status) {
+            print("SKIP real Keychain round trip: the Keychain is not usable here (OSStatus \(failure.status)); nothing was checked")
+            return
+        }
+        precondition(failure == nil, "the Keychain refused a test key: \(String(describing: failure))")
+        precondition(first == "first-key", "a saved key reads back: \(String(describing: first))")
+        precondition(second == "second-key-é-日本", "saving again replaces the key (UTF-8 intact): \(String(describing: second))")
+        precondition(itemsAfterTwoSaves == 1, "replacing a key updates the item, never adds a second: \(itemsAfterTwoSaves)")
+        precondition(keptWithoutKey == "second-key-é-日本", "saving a provider without a key keeps the stored one")
+        precondition(reloaded == [provider], "the provider persisted without its key")
+        precondition(before != nil && store.providers.isEmpty && afterDelete == nil, "delete removes the provider and its key")
+        precondition(leftBehind == 0, "no Keychain item left behind: \(leftBehind)")
+        print("PASS real Keychain: save, replace, keep, delete under a throwaway service")
     }
 
     // MARK: Custom provider base URL
