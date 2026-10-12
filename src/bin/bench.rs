@@ -9,6 +9,8 @@
 //!   BZ_INCOMPLETE=<file> (bulk) writes the sorted paths of incomplete subtrees.
 //!          search      - scan path, then benchmark interactive query matching
 //!          search-synth- benchmark matching over synthetic 3.6M-entry disk scan
+//!                        (BZ_SYNTH_COUNT sizes it; BZ_SYNTH_TIES=1 gives every entry
+//!                        the same size, so top-K is decided by the path tie-break)
 //!          types       - scan path, then time the file-type breakdown of the root
 //!                        and of its largest folder (BZ_RUNS, default 11)
 //!          naive       - serial read_dir + per-file lstat (Disk Inventory X style)
@@ -119,22 +121,6 @@ fn main() {
                 progress.errors.load(Ordering::Relaxed),
             )
         }
-        "searchfs" => {
-            let progress = Progress::default();
-            match blitztree::searchfs::catalog_dump(&path, &progress) {
-                Ok(entries) => {
-                    let e = entries.len();
-                    eprintln!("  ({e} catalog entries)");
-                }
-                Err(err) => eprintln!("  searchfs failed: {err}"),
-            }
-            (
-                progress.files.load(Ordering::Relaxed),
-                progress.dirs.load(Ordering::Relaxed),
-                progress.bytes.load(Ordering::Relaxed),
-                progress.errors.load(Ordering::Relaxed),
-            )
-        }
         "search" => {
             let progress = Progress::default();
             let tree = scan(&path, &progress);
@@ -217,6 +203,7 @@ fn main() {
                 .ok()
                 .and_then(|s| s.parse().ok())
                 .unwrap_or(3_600_000);
+            let ties = std::env::var_os("BZ_SYNTH_TIES").is_some();
             println!("Building synthetic tree with {n} entries...");
             let mut tree = blitztree::Tree::default();
             tree.parents.reserve(n);
@@ -243,8 +230,9 @@ fn main() {
                 let ext = extensions[i % extensions.len()];
                 let name = format!("entry_{i:07}_{}.{}", if i % 10 == 0 { "photo" } else { "file" }, ext);
                 tree.parents.push(0);
-                tree.alloc.push((i as u64 * 1024) % 1_000_000_000);
-                tree.logical.push((i as u64 * 1024) % 1_000_000_000);
+                let bytes = if ties { 4096 } else { (i as u64 * 1024) % 1_000_000_000 };
+                tree.alloc.push(bytes);
+                tree.logical.push(bytes);
                 tree.flags.push(if i % 8 == 0 { 1 } else { 0 });
                 tree.complete.push(true);
                 tree.name_blob.extend_from_slice(name.as_bytes());

@@ -68,7 +68,9 @@ engine scan plus about 0.15 s to hand the tree to the UI.
 - `searchfs(2)`, the closest thing macOS has to reading NTFS's MFT, was 5×
   slower than the parallel walk on an earlier 1.9M-entry volume (38 s vs
   7.1 s): it is one sequential kernel iteration over the catalog and cannot be
-  split across cores. The code is kept in `src/searchfs.rs` for reference.
+  split across cores. The experiment's code (`src/searchfs.rs`) was removed:
+  it was bench-only, never faster, and shipped in the app's static library
+  with unchecked record parsing; it is in git history before the removal.
 - Thread count sweet spot is about the core count. 32+ threads regress ~40%.
 - Scan threads run at `QOS_CLASS_USER_INITIATED`. At a GUI app's default
   QoS they land on efficiency cores and the scan takes twice as long.
@@ -96,6 +98,37 @@ Interactive matching runs in the Rust engine over the flat name arrays, in paral
 | `'東京*'` | Non-ASCII prefix | **8.3 ms** | 0 matches | 433M entries/s |
 
 Every query resolves in under 12 ms, well within a 16.6 ms 60 Hz frame budget, ensuring typing remains responsive during whole-disk scans.
+
+### Deterministic top-K at the size cutoff
+
+`Tree::search` used to keep each Rayon worker's own heap and evict only on a
+strictly larger size, so when more than `limit` matches tied at the cutoff,
+which of them came back depended on how the work was split. It now selects
+with `ranking::top_by_alloc`'s ordering (size, then path, then node index; one
+`ranking::TopK` for both callers), so the result is the same on every run.
+
+Before/after, same synthetic 3.6M-entry tree, limit 1,000, M5 Pro (18 cores),
+load from other work present. 12 interleaved base/new process runs per cell,
+each the min of 5 in-process runs; the table shows the min over the 12. An
+A/A control (the base binary against itself, 5 rounds) moved ±2–6%. Base is
+70472bb with only the `BZ_SYNTH_TIES` bench switch added. "varied" is the
+default tree (sizes mostly distinct); "all tied" is `BZ_SYNTH_TIES=1`, every
+entry the same size, so every match reaches the path tie-break:
+
+| Query | varied before | varied after | all tied before | all tied after |
+|---|---|---|---|---|
+| `'photo'` | 7.09 ms | 7.75 ms (+9%) | 6.74 ms | 7.39 ms (+10%) |
+| `'entry_0000001'` | 5.43 ms | 5.87 ms (+8%) | 5.43 ms | 5.65 ms (+4%) |
+| `'*.png'` | 7.78 ms | 7.55 ms (-3%) | 6.92 ms | 7.12 ms (+3%) |
+| `'entry_*_photo.jpg'` | 7.39 ms | 7.32 ms (-1%) | 7.19 ms | 7.78 ms (+8%) |
+| `'*münchen*'` | 16.48 ms | 14.31 ms (-13%) | 14.30 ms | 14.53 ms (+2%) |
+| `'東京*'` | 11.74 ms | 11.32 ms (-4%) | 11.52 ms | 11.63 ms (+1%) |
+
+No change beyond noise on wildcard and non-ASCII queries. The ASCII substring
+queries are 4–10% slower (up to ~0.7 ms); the rare-match `'entry_0000001'`
+cell has almost no top-K work, so that part is scan-loop shape, not ranking.
+Absolute latencies are still well inside one 60 Hz frame. Raw output:
+[benchmarks/results/2026-10-12-search-topk](benchmarks/results/2026-10-12-search-topk).
 
 ## File-type breakdown (WizTree parity)
 
