@@ -213,8 +213,13 @@ tool. Never reuse a stale report as authorization or as an identity guarantee.
 ```sh
 cargo test --locked --release --features cli
 cargo build --locked --release --features cli --bin blitztree
-python3 -m unittest discover -s tests -v
+python3 -m unittest discover -s tests -p 'test_*.py' -v
 ```
+
+CI runs exactly these commands (plus `cargo fmt --check` and
+`cargo clippy --locked --all-targets --features cli -- -D warnings`). The Python
+contract tests drive the built `blitztree` binary, so build it first; pytest is
+not used.
 
 The Rust tests cover the rule set (including rules whose ancestor is the scan
 root), home anchoring, traversal, threshold, stable ordering and the C bridge,
