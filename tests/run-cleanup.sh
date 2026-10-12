@@ -3,21 +3,23 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 CLEANUP_TEST_TMP=$(mktemp -d /tmp/blitztree-cleanup-checks.XXXXXX)
-trap 'rm -rf "$CLEANUP_TEST_TMP"' EXIT
+PROVIDER_MOCK=""
+# Only the mock this script started (by PID) is stopped on the way out.
+trap '[[ -n "$PROVIDER_MOCK" ]] && kill "$PROVIDER_MOCK" 2>/dev/null; rm -rf "$CLEANUP_TEST_TMP"' EXIT
 FLAGS=(-parse-as-library -swift-version 6 -default-isolation MainActor -target arm64-apple-macos14.0)
 swiftc app/CleanupCommand.swift tests/CleanupCommandChecks.swift "${FLAGS[@]}" -o "$CLEANUP_TEST_TMP/commands"
 "$CLEANUP_TEST_TMP/commands"
-# The guard verifies linked git worktrees, so it compiles with GitWorktree and
+# The guard verifies linked git worktrees and runs each rule's check, so it compiles with GitWorktree, CleanupVerify and
 # the session-log reader it consults; the checks build fixtures with real git.
-GUARD=(app/CleanupSafety.swift app/GitWorktree.swift app/AgentSessions.swift tests/GitFixture.swift)
+GUARD=(app/CleanupSafety.swift app/CleanupVerify.swift app/GitWorktree.swift app/Subprocess.swift app/AgentSessions.swift tests/GitFixture.swift)
 swiftc "${GUARD[@]}" tests/CleanupSafetyChecks.swift "${FLAGS[@]}" -o "$CLEANUP_TEST_TMP/paths"
 "$CLEANUP_TEST_TMP/paths"
-swiftc "${GUARD[@]}" app/CleanupVerify.swift app/CleanupOperations.swift tests/WorktreeChecks.swift \
+swiftc "${GUARD[@]}" app/CleanupOperations.swift tests/WorktreeChecks.swift \
   "${FLAGS[@]}" -Xcc -include -Xcc removefile.h -o "$CLEANUP_TEST_TMP/worktrees"
 "$CLEANUP_TEST_TMP/worktrees"
 # Claude Code scratchpads: path shape, the live-session registry, and the
 # policy that refuses a running session's build output at every capture.
-swiftc "${GUARD[@]}" app/CleanupVerify.swift tests/ScratchpadChecks.swift \
+swiftc "${GUARD[@]}" tests/ScratchpadChecks.swift \
   "${FLAGS[@]}" -o "$CLEANUP_TEST_TMP/scratchpad"
 "$CLEANUP_TEST_TMP/scratchpad"
 cargo build --locked --release --lib
@@ -62,9 +64,25 @@ swiftc "${SOURCES[@]}" tests/ScanFailureChecks.swift "${FLAGS[@]}" \
   -framework AppKit -framework SwiftUI -o "$CLEANUP_TEST_TMP/scanfail"
 "$CLEANUP_TEST_TMP/scanfail"
 # Sign-in opens the authorize URL itself. No scan engine and no real browser.
-swiftc app/AgentLogin.swift tests/AgentLoginChecks.swift "${FLAGS[@]}" \
+swiftc app/AgentLogin.swift app/Subprocess.swift tests/AgentLoginChecks.swift "${FLAGS[@]}" \
   -framework AppKit -o "$CLEANUP_TEST_TMP/login"
 "$CLEANUP_TEST_TMP/login"
+# The shared subprocess helper: SIGPIPE, bounded and cancellable waits, no
+# leaked reader or descriptor, the install script, many children at once.
+swiftc "${SOURCES[@]}" tests/SubprocessChecks.swift "${FLAGS[@]}" \
+  -import-objc-header app/bz.h -L target/release -lblitztree \
+  -framework AppKit -framework SwiftUI -o "$CLEANUP_TEST_TMP/subprocess"
+"$CLEANUP_TEST_TMP/subprocess"
+# The custom-provider pipeline against a local mock: stream shapes, errors,
+# refused http, and that a redirect never carries the key to another origin.
+# The mock picks free loopback ports and reports them in a file.
+swiftc -parse-as-library app/PlanParsing.swift app/ModelProvider.swift tests/provider-pipeline/main.swift \
+  -o "$CLEANUP_TEST_TMP/provider-pipeline"
+python3 tests/provider-pipeline/server.py "$CLEANUP_TEST_TMP/ports.json" &
+PROVIDER_MOCK=$!
+for _ in {1..100}; do [[ -s "$CLEANUP_TEST_TMP/ports.json" ]] && break; sleep 0.1; done
+[[ -s "$CLEANUP_TEST_TMP/ports.json" ]] || { echo "provider mock did not start" >&2; exit 1; }
+"$CLEANUP_TEST_TMP/provider-pipeline" "$CLEANUP_TEST_TMP/ports.json"
 # Stopping a scan, the earlier tree coming back, and the coverage the engine
 # reports reaching the app (marks, summary text, strings in every language).
 swiftc "${SOURCES[@]}" tests/ScanCancelChecks.swift "${FLAGS[@]}" \

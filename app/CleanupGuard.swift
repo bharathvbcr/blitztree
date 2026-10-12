@@ -8,11 +8,6 @@ nonisolated enum CleanupGuard {
 
     static var rebuildable: Set<String> { CleanupPathSafety.rebuildable }
 
-    static func blockReason(path: String) -> String? {
-        do { _ = try CleanupPathSafety.capture(path: path); return nil }
-        catch { return error.localizedDescription }
-    }
-
     static func blockReason(command: String) -> String? {
         CleanupCommand.parse(command) == nil ? "Command or arguments not allowed" : nil
     }
@@ -30,15 +25,22 @@ nonisolated enum CleanupGuard {
     /// counts as used when it started or Codex worked in it since (folder
     /// dates are no help there: Finder's .DS_Store writes bump them).
     static func recentlyUsed(_ path: String, within: TimeInterval = 2 * 86400) -> Bool {
+        recentUse(path, within: within) != .unused
+    }
+
+    /// `recentlyUsed` keeping apart "used" from "the agents' session logs could
+    /// not all be read": the second is not evidence of use, but it blocks too,
+    /// because the folder cannot be shown unused.
+    static func recentUse(_ path: String, within: TimeInterval = 2 * 86400) -> AgentSessions.Usage {
         let fm = FileManager.default
         let cutoff = Date().addingTimeInterval(-within)
         if let chat = codexChat(path) {
             let day = ((chat as NSString).deletingLastPathComponent as NSString).lastPathComponent
-            if let started = try? Date(day + "T23:59:59Z", strategy: .iso8601), started > cutoff { return true }
-            return AgentSessions.worked(in: chat, root: AgentSessions.codex, since: cutoff)
+            if let started = try? Date(day + "T23:59:59Z", strategy: .iso8601), started > cutoff { return .used }
+            return AgentSessions.usage(in: chat, root: AgentSessions.codex, since: cutoff)
         }
         let url = URL(fileURLWithPath: path)
-        guard rebuildable.contains(url.lastPathComponent) else { return false }
+        guard rebuildable.contains(url.lastPathComponent) else { return .unused }
         let project = url.deletingLastPathComponent()
         var stamps = [path, project.path]
         let git = project.appendingPathComponent(".git")
@@ -53,9 +55,10 @@ nonisolated enum CleanupGuard {
                 stamps.append(URL(fileURLWithPath: dir, relativeTo: project).appendingPathComponent("index").path)
             }
         }
-        return stamps.contains { p in
+        if stamps.contains(where: { p in
             ((try? fm.attributesOfItem(atPath: p))?[.modificationDate] as? Date).map { $0 > cutoff } ?? false
-        } || AgentSessions.claudeWorked(in: project.path, since: cutoff)
+        }) { return .used }
+        return AgentSessions.claudeUsage(in: project.path, since: cutoff)
     }
 
     /// An app that must be quit before its files go, when one is running.
@@ -103,12 +106,18 @@ nonisolated enum CleanupGuard {
         var firstExclusion: String?
         var reason: String?
         if asked.isEmpty { reason = String(localized: "Nothing to remove") }
-        let candidates = Set((0..<tree.cleanupCount).map { Int(tree.cleanupNodes[$0]) })
+        let indexByNode = tree.cleanupIndexByNode()
+        let candidates = Set(indexByNode.keys)
         for path in asked {
             do {
                 let root = CleanupPathSafety.plannerRoot(for: path, home: home)
-                let target = try CleanupPathSafety.capture(path: path, root: root, home: home)
-                guard let node = tree.node(at: target.path), node != 0 else {
+                // The engine's rule for this path (or the folder around it) names
+                // a check; the capture runs it, and so does the trash boundary.
+                let normalized = try CleanupPathSafety.normalize(path)
+                let found = tree.node(at: normalized)
+                let check = found.map { tree.cleanupCheck(for: $0, path: normalized, indexByNode: indexByNode) } ?? .policyOnly
+                let target = try CleanupPathSafety.capture(path: path, root: root, home: home, check: check)
+                guard let node = found, node != 0 else {
                     throw CleanupOperations.failure(String(localized: "Path is not an item in this scan"))
                 }
                 if folderCache && !tree.isDir(node) {
@@ -118,13 +127,28 @@ nonisolated enum CleanupGuard {
                 if scratch, !tree.ancestry(node).contains(where: candidates.contains) {
                     throw CleanupOperations.failure(String(localized: "Only build output BlitzTree recognised can go from a Claude Code scratchpad"))
                 }
+                // Inside a folder the engine sorts item by item (a cache folder,
+                // ~/.claude/projects, ~/.codex/worktrees...) only what the scan
+                // itself recognised may go, and it answers to that item's check.
+                // (A tool's own cache folder named by its allowlisted command is not a model-chosen path.)
+                if !scratch, !folderCache, CleanupPathSafety.isInsideEngineContainer(target.path, home: home),
+                   !tree.ancestry(node).contains(where: candidates.contains) {
+                    throw CleanupOperations.failure(String(localized: "Not a folder the scan recognised as removable"))
+                }
                 if codexChat(target.path) == nil,
                    let app = runningOwner(of: [target.path]) {
                     throw CleanupOperations.failure(String(localized: "Quit \(app) to clean this"))
                 }
-                if !scratch, recentlyUsed(target.path) {
-                    throw CleanupOperations.failure(codexChat(target.path) != nil
-                        ? String(localized: "A Codex chat you used in the last 2 days") : String(localized: "In a project used in the last 2 days"))
+                if !scratch {
+                    switch recentUse(target.path) {
+                    case .used:
+                        throw CleanupOperations.failure(codexChat(target.path) != nil
+                            ? String(localized: "A Codex chat you used in the last 2 days") : String(localized: "In a project used in the last 2 days"))
+                    case .unknown:
+                        throw CleanupOperations.failure(String(localized: "Couldn't read the coding agents' session logs to check recent use"))
+                    case .unused:
+                        break
+                    }
                 }
                 kept.append(target)
             } catch {

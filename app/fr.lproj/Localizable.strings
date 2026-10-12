@@ -319,3 +319,13 @@
 "No key found. Export %@ in your shell profile, or save the key in your Keychain as “%@”." = "Aucune clé trouvée. Exportez %@ dans le profil de votre shell, ou enregistrez la clé dans votre trousseau sous « %@ ».";
 "Ready: %@" = "Prêt : %@";
 "A cloud run sends folder paths and sizes from the scan, never file contents, to that provider. MANVI only plans: BlitzTree starts it read-only, where it can't write files or run commands, and does the cleanup itself." = "Une exécution dans le cloud envoie à ce fournisseur les chemins et tailles des dossiers analysés, jamais le contenu des fichiers. MANVI ne fait que planifier : BlitzTree le lance en lecture seule, sans pouvoir écrire de fichiers ni exécuter de commandes, et fait le nettoyage lui-même.";
+"Installation was cancelled. Nothing was downloaded or run." = "Installation annulée. Rien n'a été téléchargé ni exécuté.";
+"Run the Claude Code installer?" = "Exécuter l'installateur de Claude Code ?";
+"BlitzTree will download %@ and run it with bash, as you. It is Anthropic's own installer, but it isn't pinned to a checksum and can change between releases. This is the exact command:\n\n%@" = "BlitzTree va télécharger %@ et l'exécuter avec bash, sous votre compte. C'est l'installateur officiel d'Anthropic, mais il n'est pas épinglé à une somme de contrôle et peut changer d'une version à l'autre. Voici la commande exacte :\n\n%@";
+"Download and Run" = "Télécharger et exécuter";
+"Enter a full URL, such as https://gateway.example/v1." = "Saisissez une URL complète, par exemple https://gateway.example/v1.";
+"The URL needs a host name, such as gateway.example." = "L'URL doit contenir un nom d'hôte, par exemple gateway.example.";
+"“%@://” isn't supported. Use https://." = "« %@:// » n'est pas pris en charge. Utilisez https://.";
+"“%@” is reached over plain http, so your API key and folder paths would cross the network unencrypted. Use https://. Plain http is allowed only for localhost, 127.0.0.1 and ::1." = "« %@ » est joint en http non chiffré : votre clé d'API et les chemins de dossiers circuleraient sans chiffrement sur le réseau. Utilisez https://. Le http simple n'est autorisé que pour localhost, 127.0.0.1 et ::1.";
+"Couldn't save the API key to the Keychain: %@ (%@)." = "Impossible d'enregistrer la clé d'API dans le Trousseau : %@ (%@).";
+"The server redirected the request to “%@”, which is a different address, so it was stopped before your API key and folder paths were sent there. Use the final address as the base URL." = "Le serveur a redirigé la requête vers « %@ », une autre adresse : elle a été arrêtée avant d'y envoyer votre clé d'API et les chemins de dossiers. Utilisez l'adresse finale comme URL de base.";

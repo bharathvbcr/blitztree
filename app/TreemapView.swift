@@ -680,8 +680,20 @@ final class NodeMenu: NSObject {
         trashAlert([TrashTarget(path: path, displayPath: displayPath)])
     }
 
+    /// DECISION (ft-99ac, item 4): a manual Move to Trash is the user's own
+    /// choice and works like Finder, so Clean Up's guards (protected folders,
+    /// `.git`, recent use, the rule checks) do not stop it. It is not silent
+    /// about them: the confirmation names every item Clean Up would refuse,
+    /// and why, judged on the path alone (no git, no process checks, which
+    /// cannot run on the main actor). Recorded in the README as well.
+    static func refusals(_ targets: [TrashTarget]) -> [(target: TrashTarget, reason: String)] {
+        targets.compactMap { target in
+            CleanupPathSafety.refusal(of: target.path).map { (target, $0.errorDescription ?? $0.englishDescription) }
+        }
+    }
+
     /// One confirmation for all of `targets`: by name for one, by count and
-    /// total size for several.
+    /// total size for several. Items Clean Up would refuse are named in it.
     static func trashAlert(_ targets: [TrashTarget]) -> NSAlert {
         let alert = NSAlert()
         if targets.count == 1, let target = targets.first {
@@ -698,6 +710,15 @@ final class NodeMenu: NSObject {
                 lines.insert(String(localized: "\(Fmt.size(sizes.reduce(0, +))) in total") + "\n", at: 0)
             }
             alert.informativeText = lines.joined(separator: "\n")
+        }
+        let refused = refusals(targets)
+        if !refused.isEmpty {
+            var lines = refused.prefix(listedPaths).map { "\($0.target.displayPath): \($0.reason)" }
+            if refused.count > listedPaths {
+                lines.append(String(localized: "and \(refused.count - listedPaths) more"))
+            }
+            alert.informativeText += "\n\n" + String(localized: "Clean Up would not remove these. Move to Trash works like Finder and does not apply its checks:")
+                + "\n" + lines.joined(separator: "\n")
         }
         alert.addButton(withTitle: String(localized: "Move to Trash"))
         alert.addButton(withTitle: String(localized: "Cancel"))

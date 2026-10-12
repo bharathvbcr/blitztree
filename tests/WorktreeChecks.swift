@@ -21,11 +21,74 @@ enum WorktreeChecks {
         }
 
         try verification(fixture: fixture, repo: repo, worktree: worktree)
+        try ignoredFiles(fixture: fixture, worktree: worktree)
         try recency(fixture: fixture, worktree: worktree)
+        try sessionLogs(fixture: fixture, worktree: worktree)
         try processes(worktree: worktree)
         try cleanupVerify(base: base, worktree: worktree)
+        try boundary(base: base, fixture: fixture, worktree: worktree)
         try await flow(fixture: fixture, base: base, repo: repo, worktree: worktree)
         print("PASS WorktreeChecks")
+    }
+
+    // MARK: Ignored files
+
+    /// `git status` leaves ignored files out, but a `.env` or a local database
+    /// kept under an ignored path is not recreated by a build: it blocks. An
+    /// ignored folder a build recreates (`node_modules`) still passes, at any depth.
+    private static func ignoredFiles(fixture: GitFixture, worktree: (String) -> String) throws {
+        let env = worktree("ignored-env")
+        fixture.write(env + "/.gitignore", "node_modules/\n.env\ndata/\n")
+        fixture.run(["add", ".gitignore"], in: env)
+        fixture.run(["commit", "-q", "-m", "ignore more"], in: env)
+        fixture.write(env + "/.env", "SECRET=1\n")
+        precondition(fixture.run(["status", "--porcelain"], in: env).isEmpty, "git status cannot see the ignored file")
+        expectBlocked("ignored .env", env, .ignoredFiles(env))
+        try fm.removeItem(atPath: env + "/.env")
+        _ = expectVerified("the ignored file removed", env)
+
+        try fm.createDirectory(atPath: env + "/data/db", withIntermediateDirectories: true)
+        fixture.write(env + "/data/db/local.sqlite", "rows\n")
+        expectBlocked("ignored data folder", env, .ignoredFiles(env))
+        try fm.removeItem(atPath: env + "/data")
+
+        for path in ["/node_modules/pkg", "/web/node_modules/pkg"] {
+            try fm.createDirectory(atPath: env + path, withIntermediateDirectories: true)
+            fixture.write(env + path + "/index.js", "x\n")
+        }
+        _ = expectVerified("ignored node_modules at the top and nested", env)
+        try fm.createDirectory(atPath: env + "/docs", withIntermediateDirectories: true)
+        fixture.write(env + "/docs/.env", "SECRET=2\n")
+        expectBlocked("ignored .env next to rebuildable folders", env, .ignoredFiles(env))
+        try fm.removeItem(atPath: env + "/docs")
+        fixture.write(env + "/.gitignore", "node_modules/\n.env\ndata/\n.DS_Store\n")
+        fixture.run(["add", ".gitignore"], in: env)
+        fixture.run(["commit", "-q", "-m", "ignore Finder files"], in: env)
+        fixture.write(env + "/.DS_Store", "finder\n")
+        try fm.createDirectory(atPath: env + "/docs", withIntermediateDirectories: true)
+        fixture.write(env + "/docs/.DS_Store", "finder\n")
+        _ = expectVerified("Finder's .DS_Store is not a file worth keeping", env)
+        try fm.removeItem(atPath: env + "/docs")
+        fixture.write(env + "/node_modules/.env", "INSIDE=1\n")
+        _ = expectVerified("an ignored file inside node_modules is part of it", env)
+        fixture.write(env + "/stray.txt", "untracked\n")
+        expectBlocked("an untracked file is still a change", env, .changes(env))
+
+        // A rebuildable name above an ignored FILE exempts nothing: only a
+        // folder ignored as a whole and named for build output may stay.
+        for (label, file) in [("a database under a folder named target", "data/target/prod.db"),
+                              (".env under a folder named target", "src/target/.env"),
+                              ("a database under node_modules that is not ignored as a whole", "x/node_modules/secret.db")] {
+            let nested = worktree("ignored-nested")
+            fixture.write(nested + "/.gitignore", "*.db\n.env\n")
+            fixture.run(["add", ".gitignore"], in: nested)
+            fixture.run(["commit", "-q", "-m", "ignore files"], in: nested)
+            _ = expectVerified("\(label): nothing there yet", nested)
+            try fm.createDirectory(atPath: (nested + "/" + file as NSString).deletingLastPathComponent,
+                                   withIntermediateDirectories: true)
+            fixture.write(nested + "/" + file, "keep me\n")
+            expectBlocked(label, nested, .ignoredFiles(nested))
+        }
     }
 
     // MARK: Verification
@@ -178,6 +241,281 @@ enum WorktreeChecks {
         _ = expectVerified("sessions gone", worked, within: GitWorktree.recentWindow)
     }
 
+    // MARK: Trash boundary
+
+    /// The rule's check runs wherever a target is captured or revalidated,
+    /// and `CleanupOperations.trash` is where nothing can skip it: a tag
+    /// forged after planning, a folder used since, a target never given its
+    /// rule, a check that belongs to another folder.
+    private static func boundary(base: URL, fixture: GitFixture, worktree: (String) -> String) throws {
+        let home = base.appendingPathComponent("boundary-home")
+        let bin = base.appendingPathComponent("boundary-trash")
+        try fm.createDirectory(at: bin, withIntermediateDirectories: true)
+        func folder(_ relative: String) throws -> String {
+            let path = home.appendingPathComponent(relative).path
+            try fm.createDirectory(atPath: path, withIntermediateDirectories: true)
+            return path
+        }
+        func capture(_ path: String, _ check: CleanupCheck) throws -> CleanupTarget {
+            try CleanupPathSafety.capture(path: path, root: home.path, home: home.path, check: check)
+        }
+        func move(_ source: URL) throws -> URL {
+            let destination = bin.appendingPathComponent(UUID().uuidString)
+            try fm.moveItem(at: source, to: destination)
+            return destination
+        }
+        func refused(_ label: String, _ target: CleanupTarget, _ matches: (Error) -> Bool) {
+            var moved = false
+            do {
+                _ = try CleanupOperations.trash(target) { url in moved = true; return url }
+                fatalError("\(label): reached the Trash")
+            } catch {
+                precondition(!moved && matches(error), "\(label): refused for the wrong reason: \(error)")
+                precondition(fm.fileExists(atPath: target.path), "\(label): the folder must stay")
+            }
+        }
+        func failedCheck(_ error: Error) -> Bool {
+            if case CleanupPathError.checkFailed = error { return true }
+            return false
+        }
+        func old(_ paths: [String]) throws {
+            let date = Date().addingTimeInterval(-5 * 86400)
+            for path in paths { try fm.setAttributes([.modificationDate: date], ofItemAtPath: path) }
+        }
+
+        // A CACHEDIR.TAG without the signature, or forged after planning.
+        let tagged = try folder("caches/tagged")
+        let tag = URL(fileURLWithPath: tagged + "/CACHEDIR.TAG")
+        let tagCheck = CleanupCheck(verify: "cachedir_tag", folder: tagged)
+        try Data((CleanupVerify.cacheSignature + "\n").utf8).write(to: tag)
+        let planned = try capture(tagged, tagCheck)
+        _ = try CleanupOperations.trash(try capture(tagged, tagCheck)) { url in url }
+        try Data("Signature: forged\n".utf8).write(to: tag)
+        refused("tag forged after planning", planned, failedCheck)
+        do {
+            _ = try capture(tagged, tagCheck)
+            fatalError("a tag without the signature must not be captured")
+        } catch { precondition(failedCheck(error), "captured for the wrong reason: \(error)") }
+        try fm.removeItem(at: tag)
+        refused("tag removed after planning", planned, failedCheck)
+        try Data((CleanupVerify.cacheSignature + "\n").utf8).write(to: tag)
+        let inside = try folder("caches/tagged/sub")
+        let insideTarget = try capture(inside, tagCheck)
+        try fm.removeItem(at: tag)
+        refused("a folder inside a tagged cache answers to the cache's tag", insideTarget, failedCheck)
+
+        // Checks that cannot be satisfied block at capture.
+        let unchecked = try folder("caches/unchecked")
+        let elsewhere = try folder("caches/elsewhere")
+        for (label, check) in [("the engine gave no answer", CleanupCheck(verify: CleanupVerify.unavailable, folder: unchecked)),
+                               ("a verifier nobody knows", CleanupCheck(verify: "made_up", folder: unchecked)),
+                               ("a check that belongs to another folder", CleanupCheck(verify: "cachedir_tag", folder: elsewhere))] {
+            do {
+                _ = try capture(unchecked, check)
+                fatalError("\(label): captured")
+            } catch { precondition(failedCheck(error), "\(label): \(error)") }
+        }
+        let moved = try CleanupOperations.trash(try capture(unchecked, CleanupCheck.policyOnly), move: move)
+        precondition(!fm.fileExists(atPath: unchecked) && fm.fileExists(atPath: moved.url.path), "no rule, only the path policy")
+
+        // recent_activity (what ~/.claude/projects/<x> carries), through the capture.
+        let project = try folder(".claude/projects/-Users-me-work")
+        try fm.setAttributes([.modificationDate: Date().addingTimeInterval(-5 * 86400)], ofItemAtPath: project)
+        let activityCheck = CleanupCheck(verify: "recent_activity", folder: project)
+        let quiet = try capture(project, activityCheck)
+        fixture.write(project + "/today.jsonl", "{}\n")
+        refused("a project folder touched today", quiet, failedCheck)
+        let memory = try folder(".claude/projects/-Users-me-work/memory")
+        fixture.write(memory + "/MEMORY.md", "kept\n")
+        do {
+            _ = try capture(memory, activityCheck)
+            fatalError("memory/ must not be captured, used lately or not")
+        } catch { precondition((error as? CleanupPathError) == .protectedPath(memory), "memory/ is protected: \(error)") }
+        try old([project + "/today.jsonl", memory + "/MEMORY.md", memory, project])
+        _ = try capture(project, activityCheck)
+
+        // A subfolder of a worktree answers to the worktree's check.
+        let wt = worktree("boundary")
+        fixture.backdate(wt)
+        let wtCheck = CleanupCheck(verify: "git_worktree", folder: wt)
+        let source = wt + "/src"
+        try fm.createDirectory(atPath: source, withIntermediateDirectories: true)
+        let plannedSource = try CleanupPathSafety.capture(path: source, root: base.path, home: base.path, check: wtCheck)
+        fixture.write(wt + "/dirty.txt", "uncommitted\n")
+        refused("a subfolder of a worktree that was dirtied", plannedSource, failedCheck)
+        try mounts(base: base)
+    }
+
+    /// A volume mounted inside a recent_activity folder is never walked
+    /// (FTS_XDEV), so the folder cannot be shown unchanged: it blocks.
+    private static func mounts(base: URL) throws {
+        let folder = base.appendingPathComponent("mount-host")
+        let mountpoint = folder.appendingPathComponent("volume")
+        try fm.createDirectory(at: mountpoint, withIntermediateDirectories: true)
+        try Data([1]).write(to: folder.appendingPathComponent("file"))
+        let old = Date().addingTimeInterval(-5 * 86400)
+        for path in [folder.appendingPathComponent("file").path, mountpoint.path, folder.path] {
+            try fm.setAttributes([.modificationDate: old], ofItemAtPath: path)
+        }
+        precondition(CleanupVerify.blockReason(verify: "recent_activity", path: folder.path) == nil, "no mount, old files")
+        let image = base.appendingPathComponent("mount.sparseimage").path
+        func hdiutil(_ arguments: [String]) -> Bool {
+            let process = Process()
+            process.executableURL = URL(fileURLWithPath: "/usr/bin/hdiutil")
+            process.arguments = arguments
+            process.standardOutput = FileHandle.nullDevice
+            process.standardError = FileHandle.nullDevice
+            guard (try? process.run()) != nil else { return false }
+            process.waitUntilExit()
+            return process.terminationStatus == 0
+        }
+        guard hdiutil(["create", "-quiet", "-size", "8m", "-type", "SPARSE", "-fs", "HFS+", "-volname", "BZMount", image]),
+              hdiutil(["attach", "-quiet", "-nobrowse", "-mountpoint", mountpoint.path, image]) else {
+            print("SKIP mount inside a recent_activity folder (hdiutil could not attach an image here)")
+            return
+        }
+        defer { _ = hdiutil(["detach", mountpoint.path, "-force", "-quiet"]) }
+        // The mounted volume's root is as old as an external disk's would be:
+        // only the mount itself can block.
+        try fm.setAttributes([.modificationDate: old], ofItemAtPath: mountpoint.path)
+        let reason = CleanupVerify.blockReason(verify: "recent_activity", path: folder.path)
+        precondition(reason?.english.hasPrefix("Another volume is mounted inside") == true,
+                     "a mount inside blocks: \(String(describing: reason))")
+    }
+
+    // MARK: Session logs
+
+    /// The folder a session worked in is found line by line within a byte
+    /// budget (a first line over 8 KB is common), and logs that cannot be read
+    /// are not read as "no sessions".
+    private static func sessionLogs(fixture: GitFixture, worktree: (String) -> String) throws {
+        let worked = worktree("big-first-line")
+        fixture.backdate(worked)
+        let key = String(String.UnicodeScalarView(worked.unicodeScalars.map {
+            CharacterSet.alphanumerics.contains($0) && $0.isASCII ? $0 : "-"
+        }))
+        let folder = AgentSessions.claude.appendingPathComponent(key)
+        try fm.createDirectory(at: folder, withIntermediateDirectories: true)
+        defer { try? fm.removeItem(at: folder) }
+        let padding = String(repeating: "x", count: 20_000)
+        let big = "{\"type\":\"queue-operation\",\"content\":\"\(padding)\"}\n"
+        let log = folder.appendingPathComponent("\(UUID().uuidString).jsonl")
+        try Data((big + "{\"type\":\"user\",\"cwd\":\"\(worked)/src\"}\n").utf8).write(to: log)
+        precondition(big.utf8.count > 8192, "the fixture's first line is over 8 KB")
+        expectBlocked("cwd on the second line, after a 20 KB queue-operation line", worked, .recentlyUsed(worked),
+                      within: GitWorktree.recentWindow)
+
+        // The reader itself: where it finds the folder and where it gives up.
+        func read(_ text: String, limit: Int = AgentSessions.cwdBudget) -> AgentSessions.CwdResult {
+            let file = folder.appendingPathComponent("probe-\(UUID().uuidString).txt")
+            guard (try? Data(text.utf8).write(to: file)) != nil, let handle = try? FileHandle(forReadingFrom: file) else {
+                fatalError("cannot write the probe log")
+            }
+            defer { try? handle.close(); try? fm.removeItem(at: file) }
+            return AgentSessions.cwd(in: handle, limit: limit)
+        }
+        guard case .found(let escaped, _) = read("{\"a\":1}\n{\"cwd\":\"/tmp/a \\\"q\\\" \\\\ \\/b\"}\n") else {
+            fatalError("an escaped cwd is found")
+        }
+        precondition(escaped == "/tmp/a \"q\" \\ /b", "JSON escapes are decoded: \(escaped)")
+        guard case .found(let unterminated, _) = read("{\"cwd\":\"/tmp/last\"}") else { fatalError("no final newline") }
+        precondition(unterminated == "/tmp/last")
+        precondition(read("{\"a\":1}\n{\"b\":2}\n") == .absent(bytesRead: 16), "a log that names no folder")
+        precondition(read("") == .absent(bytesRead: 0), "an empty log")
+        precondition(read(big + "{\"cwd\":\"/x\"}\n", limit: 4096) == .exhausted(bytesRead: 4096),
+                     "a folder past the budget is not found, and says so")
+        precondition(read("{\"cwd\":\"/xyz", limit: 10) == .exhausted(bytesRead: 10), "an unfinished value is not a folder")
+        let exact = "{\"a\":1}\n"
+        precondition(read(exact, limit: exact.utf8.count) == .absent(bytesRead: exact.utf8.count),
+                     "a log that ends exactly at the budget was read in full")
+        guard case .found(let accents, _) = read("not json \"cwd\":\"\\u00e9\\ud83d\\ude00\"\n") else {
+            fatalError("unicode escapes are found")
+        }
+        precondition(accents == "é😀", "unicode escapes: \(accents)")
+
+        // Past the per-log budget, the log cannot be attributed: unknown, not unused.
+        let huge = folder.appendingPathComponent("huge.jsonl")
+        try Data((big + "{\"cwd\":\"\(worked)\"}\n").utf8).write(to: huge)
+        try fm.removeItem(at: log)
+        let small = AgentSessions.scan(in: AgentSessions.claude, cwdBudget: 4096)
+        precondition(!small.complete && small.folders.isEmpty, "a log whose folder is out of reach makes the scan incomplete")
+        let capped = AgentSessions.scan(in: AgentSessions.claude, scanBudget: 4096)
+        precondition(!capped.complete, "the scan's total budget is bounded too")
+        precondition(AgentSessions.scan(in: AgentSessions.claude).folders[worked] != nil, "within the budgets it is found")
+        try fm.removeItem(at: huge)
+
+        // An unreadable sessions folder blocks; a missing one is no sessions.
+        let clean = worktree("unreadable-sessions")
+        fixture.backdate(clean)
+        _ = expectVerified("no logs", clean, within: GitWorktree.recentWindow)
+        let projects = AgentSessions.claude
+        try fm.setAttributes([.posixPermissions: 0o000], ofItemAtPath: projects.path)
+        defer { try? fm.setAttributes([.posixPermissions: 0o755], ofItemAtPath: projects.path) }
+        expectBlocked("unreadable Claude Code projects folder", clean, .sessionsUnreadable(clean),
+                      within: GitWorktree.recentWindow)
+        precondition(AgentSessions.claudeUsage(in: clean, since: Date().addingTimeInterval(-86400)) == .unknown)
+        try fm.setAttributes([.posixPermissions: 0o755], ofItemAtPath: projects.path)
+        // An unreadable log.
+        let cleanKey = String(String.UnicodeScalarView(clean.unicodeScalars.map {
+            CharacterSet.alphanumerics.contains($0) && $0.isASCII ? $0 : "-"
+        }))
+        let related = projects.appendingPathComponent(cleanKey + "-sub")
+        try fm.createDirectory(at: related, withIntermediateDirectories: true)
+        let sealed = related.appendingPathComponent("sealed.jsonl")
+        try Data("{\"cwd\":\"/elsewhere\"}\n".utf8).write(to: sealed)
+        try fm.setAttributes([.posixPermissions: 0o000], ofItemAtPath: sealed.path)
+        expectBlocked("unreadable session log", clean, .sessionsUnreadable(clean), within: GitWorktree.recentWindow)
+        try fm.setAttributes([.posixPermissions: 0o644], ofItemAtPath: sealed.path)
+        _ = expectVerified("the log readable again", clean, within: GitWorktree.recentWindow)
+        try fm.removeItem(at: related)
+        try fm.removeItem(at: projects)
+        _ = expectVerified("no sessions folder at all is no sessions", clean, within: GitWorktree.recentWindow)
+
+        // A sessions root that is itself a symlink (a dotfiles checkout) is
+        // resolved once; it reads as sessions, not as unknown.
+        let real = projects.deletingLastPathComponent().appendingPathComponent("projects-real")
+        try fm.createDirectory(at: real, withIntermediateDirectories: true)
+        try fm.createSymbolicLink(at: projects, withDestinationURL: real)
+        _ = expectVerified("symlinked sessions root, no sessions", clean, within: GitWorktree.recentWindow)
+        let linkedFolder = real.appendingPathComponent(cleanKey)
+        try fm.createDirectory(at: linkedFolder, withIntermediateDirectories: true)
+        try Data("{\"type\":\"user\",\"cwd\":\"\(clean)\"}\n".utf8)
+            .write(to: linkedFolder.appendingPathComponent("\(UUID().uuidString).jsonl"))
+        expectBlocked("a session found through a symlinked root", clean, .recentlyUsed(clean), within: GitWorktree.recentWindow)
+        try fm.removeItem(at: linkedFolder)
+        // A symlink below the root is not followed, and that is not "no sessions".
+        let target = real.deletingLastPathComponent().appendingPathComponent("linked-logs")
+        try fm.createDirectory(at: target, withIntermediateDirectories: true)
+        try fm.createSymbolicLink(at: real.appendingPathComponent(cleanKey), withDestinationURL: target)
+        expectBlocked("a symlinked project folder below the root", clean, .sessionsUnreadable(clean), within: GitWorktree.recentWindow)
+        try fm.removeItem(at: real.appendingPathComponent(cleanKey))
+        try fm.removeItem(at: target)
+        try fm.removeItem(at: projects)
+        try fm.removeItem(at: real)
+        try fm.createDirectory(at: projects, withIntermediateDirectories: true)
+        // And the same for Codex's root, which is enumerated whole.
+        let codexRoot = AgentSessions.codex
+        let codexReal = codexRoot.deletingLastPathComponent().appendingPathComponent("sessions-real")
+        try fm.moveItem(at: codexRoot, to: codexReal)
+        try fm.createSymbolicLink(at: codexRoot, withDestinationURL: codexReal)
+        try fm.createDirectory(at: codexReal.appendingPathComponent("2026/10/08"), withIntermediateDirectories: true)
+        try Data("{\"payload\":{\"cwd\":\"\(clean)\"}}\n".utf8)
+            .write(to: codexReal.appendingPathComponent("2026/10/08/rollout.jsonl"))
+        expectBlocked("a Codex session found through a symlinked root", clean, .recentlyUsed(clean), within: GitWorktree.recentWindow)
+        try fm.removeItem(at: codexRoot)
+        try fm.moveItem(at: codexReal, to: codexRoot)
+        try fm.removeItem(at: codexRoot.appendingPathComponent("2026"))
+
+        // Codex: a rollout whose first line (session_meta with its instructions) is large.
+        let codexDay = AgentSessions.codex.appendingPathComponent("2026/10/07")
+        try fm.createDirectory(at: codexDay, withIntermediateDirectories: true)
+        let rollout = codexDay.appendingPathComponent("rollout.jsonl")
+        try Data(("{\"type\":\"session_meta\",\"payload\":{\"instructions\":\"\(padding)\",\"cwd\":\"\(clean)\"}}\n").utf8)
+            .write(to: rollout)
+        expectBlocked("Codex session_meta line over 8 KB", clean, .recentlyUsed(clean), within: GitWorktree.recentWindow)
+        try fm.removeItem(at: rollout)
+    }
+
     // MARK: Processes
 
     private static func processes(worktree: (String) -> String) throws {
@@ -278,7 +616,8 @@ enum WorktreeChecks {
         func ready(_ name: String) throws -> (path: String, admin: String, target: CleanupTarget) {
             let path = worktree(name)
             fixture.backdate(path)
-            let target = try CleanupPathSafety.capture(path: path, root: base.path, home: base.path)
+            let target = try CleanupPathSafety.capture(path: path, root: base.path, home: base.path,
+                                                       check: CleanupCheck(verify: "git_worktree", folder: path))
             return (path, fixture.admin(of: path), target)
         }
 

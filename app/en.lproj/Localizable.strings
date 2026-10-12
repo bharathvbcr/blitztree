@@ -310,3 +310,13 @@
 "No key found. Export %@ in your shell profile, or save the key in your Keychain as “%@”." = "No key found. Export %@ in your shell profile, or save the key in your Keychain as “%@”.";
 "Ready: %@" = "Ready: %@";
 "A cloud run sends folder paths and sizes from the scan, never file contents, to that provider. MANVI only plans: BlitzTree starts it read-only, where it can't write files or run commands, and does the cleanup itself." = "A cloud run sends folder paths and sizes from the scan, never file contents, to that provider. MANVI only plans: BlitzTree starts it read-only, where it can't write files or run commands, and does the cleanup itself.";
+"Installation was cancelled. Nothing was downloaded or run." = "Installation was cancelled. Nothing was downloaded or run.";
+"Run the Claude Code installer?" = "Run the Claude Code installer?";
+"BlitzTree will download %@ and run it with bash, as you. It is Anthropic's own installer, but it isn't pinned to a checksum and can change between releases. This is the exact command:\n\n%@" = "BlitzTree will download %@ and run it with bash, as you. It is Anthropic's own installer, but it isn't pinned to a checksum and can change between releases. This is the exact command:\n\n%@";
+"Download and Run" = "Download and Run";
+"Enter a full URL, such as https://gateway.example/v1." = "Enter a full URL, such as https://gateway.example/v1.";
+"The URL needs a host name, such as gateway.example." = "The URL needs a host name, such as gateway.example.";
+"“%@://” isn't supported. Use https://." = "“%@://” isn't supported. Use https://.";
+"“%@” is reached over plain http, so your API key and folder paths would cross the network unencrypted. Use https://. Plain http is allowed only for localhost, 127.0.0.1 and ::1." = "“%@” is reached over plain http, so your API key and folder paths would cross the network unencrypted. Use https://. Plain http is allowed only for localhost, 127.0.0.1 and ::1.";
+"Couldn't save the API key to the Keychain: %@ (%@)." = "Couldn't save the API key to the Keychain: %@ (%@).";
+"The server redirected the request to “%@”, which is a different address, so it was stopped before your API key and folder paths were sent there. Use the final address as the base URL." = "The server redirected the request to “%@”, which is a different address, so it was stopped before your API key and folder paths were sent there. Use the final address as the base URL.";

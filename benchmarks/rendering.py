@@ -132,7 +132,10 @@ if args.real:
     extra = [*app, "-import-objc-header", str(ROOT / "app" / "bz.h"),
              "-L", str(ROOT / "target" / "release"), "-lblitztree"]
 else:
-    extra = []
+    # TreemapView asks CleanupPathSafety which items Clean Up would refuse; it and
+    # what it builds on compile as in the app (the guard checks in run-cleanup.sh).
+    extra = [str(ROOT / "app" / name) for name in
+             ("CleanupSafety.swift", "CleanupVerify.swift", "GitWorktree.swift", "AgentSessions.swift", "Subprocess.swift")]
 subprocess.run(["swiftc", *files, str(runner_path), *extra,
                 "-O", "-parse-as-library", "-swift-version", "6", "-default-isolation", "MainActor",
                 "-target", "arm64-apple-macos14.0",

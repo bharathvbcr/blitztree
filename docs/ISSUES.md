@@ -12,7 +12,7 @@ one issue with acceptance criteria; status mirrors the checklist below.
 | [S4](issues/S4-document-fda-inheritance.md) | Document FDA inheritance to child processes | Low | resolved (docs) |
 | [S5](issues/S5-codex-installer-checksum.md) | Pin checksum for Codex installer | Low | resolved |
 | [S6](issues/S6-command-exact-match.md) | Exact-match commands that take no argument | Low | resolved |
-| [T1](issues/T1-ci-workflow.md) | CI: cargo test + Swift build on every push | — | resolved |
+| [T1](issues/T1-ci-workflow.md) | CI: cargo test + Swift build on every push | — | open (workflow written; has never run on GitHub) |
 | [F1](issues/F1-custom-providers-and-l10n.md) | Custom model providers + multilingual UI | feature | resolved |
 
 ## Where the fixes live after merging with main (v0.5.6)

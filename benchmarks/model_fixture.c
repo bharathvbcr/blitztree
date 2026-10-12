@@ -101,6 +101,27 @@ const char *bz_cleanup_verify(BzScan *h, uint64_t index) {
     (void)h; (void)index; return NULL;
 }
 
+// The hand-off test never searches, removes nodes, lists the largest files or
+// tallies types. Every bz_* in app/bz.h is defined in this file so the link
+// cannot drift; benchmarks/check-fixtures.sh enforces it.
+BzSearch *bz_search(BzScan *h, const char *query, uint32_t limit) { (void)h; (void)query; (void)limit; abort(); }
+uint64_t bz_search_total_matches(BzSearch *s) { (void)s; abort(); }
+uint32_t bz_search_result_count(BzSearch *s) { (void)s; abort(); }
+const uint32_t *bz_search_result_nodes(BzSearch *s) { (void)s; abort(); }
+void bz_search_free(BzSearch *s) { (void)s; abort(); }
+BzScan *bz_remove(BzScan *h, const uint32_t *nodes, uint32_t count) { (void)h; (void)nodes; (void)count; abort(); }
+BzLargest *bz_largest_files(BzScan *h, uint32_t limit, uint64_t min_bytes) { (void)h; (void)limit; (void)min_bytes; abort(); }
+uint32_t bz_largest_count(BzLargest *l) { (void)l; abort(); }
+const uint32_t *bz_largest_nodes(BzLargest *l) { (void)l; abort(); }
+void bz_largest_free(BzLargest *l) { (void)l; abort(); }
+BzTypes *bz_types(BzScan *h, uint32_t root) { (void)h; (void)root; abort(); }
+uint32_t bz_types_count(BzTypes *t) { (void)t; abort(); }
+const uint32_t *bz_types_ext_off(BzTypes *t) { (void)t; abort(); }
+const uint8_t *bz_types_ext_blob(BzTypes *t) { (void)t; abort(); }
+const uint64_t *bz_types_alloc(BzTypes *t) { (void)t; abort(); }
+const uint64_t *bz_types_files(BzTypes *t) { (void)t; abort(); }
+void bz_types_free(BzTypes *t) { (void)t; abort(); }
+
 void bz_free(BzScan *h) {
     if (!h) return;
     free_count += 1;

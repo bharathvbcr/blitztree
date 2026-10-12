@@ -22,43 +22,42 @@ enum CleanupSafetyChecks {
         try fm.createDirectory(at: project.appendingPathComponent(".git"), withIntermediateDirectories: true)
         try Data([1]).write(to: project.appendingPathComponent(".git/config"))
         expectAllowed("artifact inside git project") {
-            _ = try CleanupPathSafety.capture(path: projectArtifact.path, root: home.path, home: home.path)
+            _ = try CleanupPathSafety.capture(path: projectArtifact.path, root: home.path, home: home.path, check: .policyOnly)
         }
         expectRejected("git repository root") {
-            _ = try CleanupPathSafety.capture(path: project.path, root: home.path, home: home.path)
+            _ = try CleanupPathSafety.capture(path: project.path, root: home.path, home: home.path, check: .policyOnly)
         }
         expectRejected("inside .git metadata") {
             _ = try CleanupPathSafety.capture(
                 path: project.appendingPathComponent(".git/config").path,
                 root: home.path,
-                home: home.path
-            )
+                home: home.path, check: .policyOnly)
         }
 
         let credentialsArtifact = home.appendingPathComponent(".ssh/node_modules", isDirectory: true)
         try fm.createDirectory(at: credentialsArtifact, withIntermediateDirectories: true)
         expectRejected("credential root exception") {
-            _ = try CleanupPathSafety.capture(path: credentialsArtifact.path, root: home.path, home: home.path)
+            _ = try CleanupPathSafety.capture(path: credentialsArtifact.path, root: home.path, home: home.path, check: .policyOnly)
         }
         let caseCredentials = home.appendingPathComponent(".SSH/node_modules").path
         if fm.fileExists(atPath: caseCredentials) {
             expectRejected("case variant of credential path") {
-                _ = try CleanupPathSafety.capture(path: caseCredentials, root: home.path, home: home.path)
+                _ = try CleanupPathSafety.capture(path: caseCredentials, root: home.path, home: home.path, check: .policyOnly)
             }
         }
         let appleCache = home.appendingPathComponent("Library/Caches/com.apple.fixture")
         try fm.createDirectory(at: appleCache, withIntermediateDirectories: true)
         expectRejected("macOS managed cache") {
-            _ = try CleanupPathSafety.capture(path: appleCache.path, root: home.path, home: home.path)
+            _ = try CleanupPathSafety.capture(path: appleCache.path, root: home.path, home: home.path, check: .policyOnly)
         }
         let dataAlias = "/System/Volumes/Data" + projectArtifact.path
         if fm.fileExists(atPath: dataAlias) {
             expectAllowed("verified Data volume alias") {
-                _ = try CleanupPathSafety.capture(path: dataAlias, root: home.path, home: home.path)
+                _ = try CleanupPathSafety.capture(path: dataAlias, root: home.path, home: home.path, check: .policyOnly)
             }
             expectRejected("protected path via Data volume alias") {
                 _ = try CleanupPathSafety.capture(path: "/System/Volumes/Data" + credentialsArtifact.path,
-                                                  root: home.path, home: home.path)
+                                                  root: home.path, home: home.path, check: .policyOnly)
             }
         }
 
@@ -68,25 +67,25 @@ enum CleanupSafetyChecks {
             let persistence = home.appendingPathComponent(relative, isDirectory: true)
             try fm.createDirectory(at: persistence, withIntermediateDirectories: true)
             expectRejected("persistence folder \(relative)") {
-                _ = try CleanupPathSafety.capture(path: persistence.path, root: home.path, home: home.path)
+                _ = try CleanupPathSafety.capture(path: persistence.path, root: home.path, home: home.path, check: .policyOnly)
             }
         }
         let namedCache = home.appendingPathComponent("Library/Caches/com.example.tool", isDirectory: true)
         try fm.createDirectory(at: namedCache, withIntermediateDirectories: true)
         expectAllowed("named cache subfolder") {
-            _ = try CleanupPathSafety.capture(path: namedCache.path, root: home.path, home: home.path)
+            _ = try CleanupPathSafety.capture(path: namedCache.path, root: home.path, home: home.path, check: .policyOnly)
         }
 
         let mediaArtifact = home.appendingPathComponent("Pictures/project/node_modules", isDirectory: true)
         try fm.createDirectory(at: mediaArtifact, withIntermediateDirectories: true)
         expectRejected("media protected root") {
-            _ = try CleanupPathSafety.capture(path: mediaArtifact.path, root: home.path, home: home.path)
+            _ = try CleanupPathSafety.capture(path: mediaArtifact.path, root: home.path, home: home.path, check: .policyOnly)
         }
 
         let sibling = base.appendingPathComponent("home-evil/project/node_modules", isDirectory: true)
         try fm.createDirectory(at: sibling, withIntermediateDirectories: true)
         expectRejected("sibling prefix escape") {
-            _ = try CleanupPathSafety.capture(path: sibling.path, root: home.path, home: home.path)
+            _ = try CleanupPathSafety.capture(path: sibling.path, root: home.path, home: home.path, check: .policyOnly)
         }
 
         let outsideArtifact = outside.appendingPathComponent("node_modules", isDirectory: true)
@@ -97,25 +96,23 @@ enum CleanupSafetyChecks {
             _ = try CleanupPathSafety.capture(
                 path: ancestorLink.appendingPathComponent("node_modules").path,
                 root: home.path,
-                home: home.path
-            )
+                home: home.path, check: .policyOnly)
         }
         expectRejected("symlink ancestor hidden by parent traversal") {
             _ = try CleanupPathSafety.capture(
                 path: ancestorLink.appendingPathComponent("../work/node_modules").path,
                 root: home.path,
-                home: home.path
-            )
+                home: home.path, check: .policyOnly)
         }
         let finalLink = home.appendingPathComponent("work/final-link", isDirectory: true)
         try fm.createSymbolicLink(atPath: finalLink.path, withDestinationPath: outsideArtifact.path)
         expectRejected("symlink final component") {
-            _ = try CleanupPathSafety.capture(path: finalLink.path, root: home.path, home: home.path)
+            _ = try CleanupPathSafety.capture(path: finalLink.path, root: home.path, home: home.path, check: .policyOnly)
         }
 
         let replacePath = home.appendingPathComponent("work/replaced", isDirectory: true)
         try fm.createDirectory(at: replacePath, withIntermediateDirectories: true)
-        let captured = try CleanupPathSafety.capture(path: replacePath.path, root: home.path, home: home.path)
+        let captured = try CleanupPathSafety.capture(path: replacePath.path, root: home.path, home: home.path, check: .policyOnly)
         try fm.removeItem(at: replacePath)
         try fm.createDirectory(at: replacePath, withIntermediateDirectories: true)
         expectRejected("replaced target inode") { try captured.validate() }
@@ -124,15 +121,14 @@ enum CleanupSafetyChecks {
         let replaceRootTarget = replaceRoot.appendingPathComponent("node_modules", isDirectory: true)
         try fm.createDirectory(at: replaceRootTarget, withIntermediateDirectories: true)
         let rootCaptured = try CleanupPathSafety.capture(
-            path: replaceRootTarget.path, root: replaceRoot.path, home: home.path
-        )
+            path: replaceRootTarget.path, root: replaceRoot.path, home: home.path, check: .policyOnly)
         try fm.removeItem(at: replaceRoot)
         try fm.createDirectory(at: replaceRootTarget, withIntermediateDirectories: true)
         expectRejected("replaced authorized root") { try rootCaptured.validate() }
 
         let rootAlias = home.appendingPathComponent(".").path
         expectRejected("authorized root itself") {
-            _ = try CleanupPathSafety.capture(path: rootAlias, root: home.path, home: home.path)
+            _ = try CleanupPathSafety.capture(path: rootAlias, root: home.path, home: home.path, check: .policyOnly)
         }
 
         let caseProject = home.appendingPathComponent("Documents/CaseProject", isDirectory: true)
@@ -141,7 +137,7 @@ enum CleanupSafetyChecks {
         let caseVariant = home.appendingPathComponent("documents/caseproject/NODE_MODULES").path
         if fm.fileExists(atPath: caseVariant) {
             expectAllowed("case-insensitive policy") {
-                _ = try CleanupPathSafety.capture(path: caseVariant, root: home.path, home: home.path)
+                _ = try CleanupPathSafety.capture(path: caseVariant, root: home.path, home: home.path, check: .policyOnly)
             }
         }
 
@@ -150,7 +146,7 @@ enum CleanupSafetyChecks {
         try fm.createDirectory(at: outputs, withIntermediateDirectories: true)
         for path in [chat.path, outputs.path] {
             expectAllowed("Codex chat exception") {
-                _ = try CleanupPathSafety.capture(path: path, root: home.path, home: home.path)
+                _ = try CleanupPathSafety.capture(path: path, root: home.path, home: home.path, check: .policyOnly)
             }
             precondition(CleanupPathSafety.codexChat(path, home: home.path) == chat.path)
         }
@@ -159,25 +155,25 @@ enum CleanupSafetyChecks {
             let path = home.appendingPathComponent(relative).path
             try fm.createDirectory(atPath: path, withIntermediateDirectories: true)
             expectRejected("Codex exception must not include its parents or neighboring folders") {
-                _ = try CleanupPathSafety.capture(path: path, root: home.path, home: home.path)
+                _ = try CleanupPathSafety.capture(path: path, root: home.path, home: home.path, check: .policyOnly)
             }
             precondition(CleanupPathSafety.codexChat(path, home: home.path) == nil)
         }
         let chatAlias = "/System/Volumes/Data" + outputs.path
         if fm.fileExists(atPath: chatAlias) {
             expectAllowed("Codex chat via verified Data alias") {
-                _ = try CleanupPathSafety.capture(path: chatAlias, root: home.path, home: home.path)
+                _ = try CleanupPathSafety.capture(path: chatAlias, root: home.path, home: home.path, check: .policyOnly)
             }
             precondition(CleanupPathSafety.codexChat(chatAlias, home: home.path) == chat.path)
         }
         try fm.createDirectory(at: chat.appendingPathComponent(".git"), withIntermediateDirectories: true)
         expectRejected("Codex exception must not override git protection") {
-            _ = try CleanupPathSafety.capture(path: chat.path, root: home.path, home: home.path)
+            _ = try CleanupPathSafety.capture(path: chat.path, root: home.path, home: home.path, check: .policyOnly)
         }
         let chatLink = chat.appendingPathComponent("linked-output")
         try fm.createSymbolicLink(at: chatLink, withDestinationURL: outside)
         expectRejected("Codex exception must not override symlink protection") {
-            _ = try CleanupPathSafety.capture(path: chatLink.path, root: home.path, home: home.path)
+            _ = try CleanupPathSafety.capture(path: chatLink.path, root: home.path, home: home.path, check: .policyOnly)
         }
 
         let cloudArtifact = home.appendingPathComponent("cloud/project/node_modules", isDirectory: true)
@@ -191,16 +187,150 @@ enum CleanupSafetyChecks {
         }
         if markedCloud {
             expectRejected("cloud-only artifact") {
-                _ = try CleanupPathSafety.capture(path: cloudArtifact.path, root: home.path, home: home.path)
+                _ = try CleanupPathSafety.capture(path: cloudArtifact.path, root: home.path, home: home.path, check: .policyOnly)
             }
             _ = cloudArtifact.path.withCString { chflags($0, 0) }
         } else {
             print("SKIP cloud-only flag (filesystem denied chflags)")
         }
 
+        try dotEntryPolicy(home: home)
         try worktreeGuard(home: home, outside: outside)
 
         print("PASS CleanupSafetyChecks")
+    }
+
+    /// Top-level dot entries of a home are not blanket-allowed: credentials and
+    /// settings folders are refused, the folders that mix them with caches
+    /// (`.claude`, `.codex`, `.gradle`...) give up only the children the engine
+    /// names, and global Node installs are refused wherever they live.
+    private static func dotEntryPolicy(home: URL) throws {
+        func make(_ relative: String, file: Bool = false) throws -> String {
+            let url = home.appendingPathComponent(relative)
+            if file {
+                try fm.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+                try Data([1]).write(to: url)
+            } else {
+                try fm.createDirectory(at: url, withIntermediateDirectories: true)
+            }
+            return url.path
+        }
+        func capture(_ path: String) throws {
+            _ = try CleanupPathSafety.capture(path: path, root: home.path, home: home.path, check: .policyOnly)
+        }
+        for relative in [".aws", ".kube", ".docker", ".netrc", ".zshrc"] {
+            let path = try make(relative, file: relative.hasPrefix(".n") || relative.hasPrefix(".z"))
+            expectGitRejection("~/\(relative)", .protectedPath(path)) { try capture(path) }
+        }
+        for relative in [".aws/credentials", ".kube/config", ".docker/config.json"] {
+            let path = try make(relative, file: true)
+            expectGitRejection("~/\(relative)", .protectedPath(path)) { try capture(path) }
+        }
+        for relative in [".claude", ".codex", ".gradle"] {
+            let path = try make(relative)
+            expectGitRejection("~/\(relative) is not a cleanup target", .tooBroad(path)) { try capture(path) }
+        }
+        expectGitRejection("~/.zprofile is not on the allowlist", .tooBroad(try make(".zprofile", file: true))) {
+            try capture(home.path + "/.zprofile")
+        }
+        for relative in [".claude/settings.json", ".codex/auth.json", ".gradle/gradle.properties",
+                         ".cargo/credentials.toml", ".m2/settings.xml", ".ollama/id_ed25519"] {
+            let path = try make(relative, file: true)
+            expectGitRejection("~/\(relative) holds settings or credentials", .protectedPath(path)) { try capture(path) }
+        }
+        let nvm = try make(".nvm/versions/node/v20.0.0/lib/node_modules")
+        for path in [nvm, nvm + "/npm"] {
+            try fm.createDirectory(atPath: path, withIntermediateDirectories: true)
+            expectGitRejection("global Node install under .nvm", .protectedPath(path)) { try capture(path) }
+        }
+        for relative in [".config/op", ".config/gh", ".terraform.d", ".local/share/keyrings", ".gnupg", ".ssh",
+                         ".config/gcloud", ".oci", ".azure", ".password-store"] {
+            let path = try make(relative)
+            expectGitRejection("~/\(relative) is a credentials folder", .protectedPath(path)) { try capture(path) }
+            let inner = try make(relative + "/secret", file: true)
+            expectGitRejection("~/\(relative)/secret", .protectedPath(inner)) { try capture(inner) }
+        }
+        // Claude's saved memory, and Hugging Face tokens beside a cache.
+        for relative in [".claude/projects/-Users-me-work/memory", ".claude/projects/-Users-me-work/memory/MEMORY.md"] {
+            let path = try make(relative, file: relative.hasSuffix(".md"))
+            expectGitRejection("~/\(relative)", .protectedPath(path)) { try capture(path) }
+        }
+        for relative in [".cache/huggingface/token", ".cache/huggingface/stored_tokens"] {
+            let path = try make(relative, file: true)
+            expectGitRejection("~/\(relative)", .protectedPath(path)) { try capture(path) }
+        }
+        let hf = try make(".cache/huggingface")
+        expectGitRejection("a cache folder holding a token directly", .protectedPath(hf)) { try capture(hf) }
+        expectAllowed("a cache folder without one") { try capture(try make(".cache/uv")) }
+        precondition(CleanupPathSafety.isInsideEngineContainer(home.path + "/.claude/projects", home: home.path))
+        precondition(CleanupPathSafety.isInsideEngineContainer(home.path + "/.codex/worktrees/abc", home: home.path))
+        precondition(CleanupPathSafety.isInsideEngineContainer(home.path + "/work/app/.cache/x", home: home.path))
+        precondition(CleanupPathSafety.isInsideEngineContainer(home.path + "/.gradle/caches", home: home.path))
+        precondition(!CleanupPathSafety.isInsideEngineContainer(home.path + "/work/app/node_modules", home: home.path))
+        precondition(!CleanupPathSafety.isInsideEngineContainer(home.path + "/.npm", home: home.path))
+        // What the engine's rules emit under these folders stays allowed.
+        for relative in [".npm", ".claude/projects/-Users-me-work", ".claude/file-history", ".codex/sessions/2026",
+                         ".codex/worktrees/abcd", ".gradle/caches", ".cargo/registry", ".m2/repository",
+                         ".ollama/models", ".rustup/toolchains/stable", ".cache/pip"] {
+            let path = try make(relative)
+            expectAllowed("~/\(relative)") { try capture(path) }
+        }
+
+        // Global package installs, and other users' homes (a whole-disk scan
+        // reaches both), on values: /opt/homebrew cannot be built in a fixture.
+        for path in ["/opt/homebrew/lib/node_modules", "/opt/homebrew/lib/node_modules/npm/bin",
+                     "/usr/local/lib/node_modules", "/System/Volumes/Data/opt/homebrew/lib/node_modules",
+                     "/OPT/Homebrew/Lib/Node_Modules", "/opt/homebrew/Cellar/node/22.1.0/lib/node_modules"] {
+            precondition(CleanupPathSafety.isGlobalPackageFolder(path), "\(path) is a global install")
+        }
+        for path in ["/opt/homebrew/bin", "/opt/homebrew/lib", "/usr/local/lib/python3", "/Users/me/work/node_modules",
+                     "/opt/homebrew", "/opt/homebrewed/lib/node_modules", "/usr/local/src/app/node_modules"] {
+            precondition(!CleanupPathSafety.isGlobalPackageFolder(path), "\(path) is not a global install")
+        }
+        precondition(CleanupPathSafety.isGlobalPackageFolder(fm.temporaryDirectory.path + "/p/lib/node_modules",
+                                                             roots: [fm.temporaryDirectory.path + "/p"]),
+                     "the roots are a parameter")
+        if fm.fileExists(atPath: "/opt/homebrew/lib/node_modules") {
+            expectGitRejection("the machine's global Node install", .protectedPath("/opt/homebrew/lib/node_modules")) {
+                _ = try CleanupPathSafety.capture(path: "/opt/homebrew/lib/node_modules",
+                                                  root: "/System/Volumes/Data", home: home.path, check: .policyOnly)
+            }
+        } else {
+            print("SKIP /opt/homebrew/lib/node_modules capture (not installed here)")
+        }
+        for (path, relative) in [("/Users/other/.aws", ".aws"), ("/System/Volumes/Data/Users/other/Documents/a", "Documents/a"),
+                                 ("/Volumes/Disk/Users/other/.ssh/id", ".ssh/id")] {
+            precondition(CleanupPathSafety.otherHomeRelative(path) == relative, "\(path) is in another home")
+        }
+        precondition(CleanupPathSafety.otherHomeRelative("/Users/other") == "", "another home itself")
+        precondition(CleanupPathSafety.otherHomeRelative("/Volumes/Disk/Users/other") == "", "another home on a disk")
+        for path in ["/Users", "/Applications/Foo.app", "/private/tmp/x/y", "/Volumes/Disk/data/y"] {
+            precondition(CleanupPathSafety.otherHomeRelative(path) == nil, "\(path) is not inside a home")
+        }
+        // At the top of a volume nothing is offered: a planted tag or a
+        // dot entry must not make /Users/<name> or an app bundle a target.
+        for path in ["/Users", "/Users/Shared", "/System/Volumes/Data/Users/other", "/Applications/Foo.app",
+                     "/Volumes/Disk", "/Volumes/Disk/Photos", "/opt/homebrew", "/Volumes/Disk/Users/other"] {
+            precondition(CleanupPathSafety.isShallowOutsideHome(path), "\(path) is at the top of a volume")
+        }
+        for path in ["/Users/Shared/x", "/Applications/Foo.app/Contents", "/Volumes/Disk/Photos/2024/a",
+                     "/private/tmp/claude-501/p/s", "/System/Volumes/Data/Users/other/work/app"] {
+            precondition(!CleanupPathSafety.isShallowOutsideHome(path), "\(path) is deeper")
+        }
+        expectGitRejection("/Users/Shared under a whole-disk scan root", .tooBroad("/Users/Shared")) {
+            _ = try CleanupPathSafety.capture(path: "/Users/Shared", root: "/System/Volumes/Data", home: home.path, check: .policyOnly)
+        }
+        for relative in [".aws", ".aws/credentials", ".zshrc", ".claude", ".gradle", ".claude/settings.json",
+                         "Documents/a", "Desktop", ".ssh/id", "Library/LaunchAgents/x", ".nvm/v/lib/node_modules"] {
+            let path = "/Users/other/" + relative
+            do {
+                try CleanupPathSafety.homePolicy(relative: relative, path: path) { false }
+                fatalError("another user's ~/\(relative) unexpectedly accepted")
+            } catch is CleanupPathError {}
+        }
+        for relative in [".npm", ".claude/projects/x", ".cache/pip", "work/app/node_modules"] {
+            try CleanupPathSafety.homePolicy(relative: relative, path: "/Users/other/" + relative) { false }
+        }
     }
 
     /// A linked worktree is allowed only while it verifies as clean and
@@ -209,7 +339,7 @@ enum CleanupSafetyChecks {
         let fixture = GitFixture(base: home.deletingLastPathComponent())
         let repo = fixture.repository(home.appendingPathComponent("work/gitrepo").path)
         func capture(_ path: String) throws -> CleanupTarget {
-            try CleanupPathSafety.capture(path: path, root: home.path, home: home.path)
+            try CleanupPathSafety.capture(path: path, root: home.path, home: home.path, check: .policyOnly)
         }
 
         let clean = fixture.worktree(of: repo, at: home.appendingPathComponent("work/wt-clean").path)

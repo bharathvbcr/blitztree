@@ -18,21 +18,18 @@ nonisolated struct CleanupItem: Identifiable, Sendable {
     /// which blocks: a missing answer never reads as "no check needed".
     let verify: String?
 
+    /// `verify` has no default: a caller says which check the rule names ("" for
+    /// none, nil when the engine gave no answer), so none is skipped by accident.
+    /// The capture runs it, and so does every later revalidation of `target`.
     init(node: Int, path: String, display: String, kind: String, bytes: UInt64, root: String = NSHomeDirectory(),
-         verify: String? = "") {
+         verify: String?) {
         self.node = node; self.path = path; self.display = display; self.kind = kind; self.bytes = bytes
         self.verify = verify
         do {
-            let target = try CleanupPathSafety.capture(path: path, root: root)
-            if let reason = CleanupItem.verifyReason(verify, path: path) {
-                self.target = nil
-                self.blocked = reason.localized
-                self.englishBlocked = reason.english
-            } else {
-                self.target = target
-                self.blocked = nil
-                self.englishBlocked = nil
-            }
+            self.target = try CleanupPathSafety.capture(
+                path: path, root: root, check: CleanupCheck(verify: verify ?? CleanupVerify.unavailable, folder: path))
+            self.blocked = nil
+            self.englishBlocked = nil
         } catch let error as CleanupPathError {
             self.target = nil
             self.blocked = error.errorDescription
@@ -43,10 +40,29 @@ nonisolated struct CleanupItem: Identifiable, Sendable {
             self.englishBlocked = error.localizedDescription
         }
     }
+}
 
-    /// Runs the rule's verifier; an unknown or missing one blocks.
-    static func verifyReason(_ verify: String?, path: String) -> CleanupVerify.Reason? {
-        CleanupVerify.blockReason(verify: verify ?? "unavailable", path: path)
+extension Tree {
+    /// The check of the innermost folder the engine recognised at or around
+    /// `node` (`indexByNode` is `cleanupIndexByNode()`): a planned path inside
+    /// a recognised folder answers to that folder's check, run on that folder.
+    /// `.policyOnly` when no rule recognised the path or any folder above it, which
+    /// leaves only the path policy; a rule the engine gave no verifier answer
+    /// for blocks. `path` is `node`'s path in the spelling the caller will trash.
+    func cleanupCheck(for node: Int, path: String, indexByNode: [Int: Int]) -> CleanupCheck {
+        let chain = ancestry(node)
+        guard let offset = chain.lastIndex(where: { indexByNode[$0] != nil }),
+              let index = indexByNode[chain[offset]] else { return .policyOnly }
+        let verify = cleanupVerify(index) ?? CleanupVerify.unavailable
+        guard !verify.isEmpty else { return .policyOnly }
+        var folder = path as NSString
+        for _ in 0..<(chain.count - 1 - offset) { folder = folder.deletingLastPathComponent as NSString }
+        return CleanupCheck(verify: verify, folder: folder as String)
+    }
+
+    /// The engine's candidate nodes, each with its index in the candidate list.
+    func cleanupIndexByNode() -> [Int: Int] {
+        Dictionary((0..<cleanupCount).map { (Int(cleanupNodes[$0]), $0) }, uniquingKeysWith: { first, _ in first })
     }
 }
 
@@ -98,10 +114,8 @@ final class CleanupTrashBatch {
                         guard let target = item.target else {
                             throw CleanupOperations.failure("This folder could not be validated; rescan before cleaning")
                         }
-                        // Checked again now: the folder may have been used since the scan.
-                        if let reason = CleanupItem.verifyReason(item.verify, path: target.path) {
-                            throw CleanupOperations.failure(reason.localized)
-                        }
+                        // Revalidating at the boundary checks the folder again
+                        // (it may have been used since the scan), rule check included.
                         _ = try CleanupOperations.trash(target)
                         moved.append(item)
                     } catch {
