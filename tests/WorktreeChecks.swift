@@ -22,6 +22,7 @@ enum WorktreeChecks {
 
         try verification(fixture: fixture, repo: repo, worktree: worktree)
         try ignoredFiles(fixture: fixture, worktree: worktree)
+        try rebuildableFolders(fixture: fixture, worktree: worktree)
         try recency(fixture: fixture, worktree: worktree)
         try sessionLogs(fixture: fixture, worktree: worktree)
         try processes(worktree: worktree)
@@ -59,11 +60,16 @@ enum WorktreeChecks {
         expectBlocked("ignored data folder", env, .ignoredFiles(env))
         try fm.removeItem(atPath: env + "/data")
 
+        // The nested one is build output only beside its own package.json.
+        try fm.createDirectory(atPath: env + "/web", withIntermediateDirectories: true)
+        fixture.write(env + "/web/package.json", "{}\n")
+        fixture.run(["add", "web/package.json"], in: env)
+        fixture.run(["commit", "-q", "-m", "web package"], in: env)
         for path in ["/node_modules/pkg", "/web/node_modules/pkg"] {
             try fm.createDirectory(atPath: env + path, withIntermediateDirectories: true)
             fixture.write(env + path + "/index.js", "x\n")
         }
-        _ = expectVerified("ignored node_modules at the top and nested", env)
+        _ = expectVerified("ignored node_modules at the top and nested, each beside its package.json", env)
         try fm.createDirectory(atPath: env + "/docs", withIntermediateDirectories: true)
         fixture.write(env + "/docs/.env", "SECRET=2\n")
         expectBlocked("ignored .env next to rebuildable folders", env, .ignoredFiles(env))
@@ -96,6 +102,79 @@ enum WorktreeChecks {
             fixture.write(nested + "/" + file, "keep me\n")
             expectBlocked(label, nested, .ignoredFiles(nested))
         }
+    }
+
+    // MARK: Rebuildable ignored folders
+
+    /// An ignored folder passes only where the engine's own rule would call it
+    /// build output: its marker beside it (Cargo.toml, package.json, Podfile) or
+    /// inside it (pyvenv.cfg). The name alone never does, and `.gradle` never.
+    private static func rebuildableFolders(fixture: GitFixture, worktree: (String) -> String) throws {
+        /// A worktree whose `.gitignore` holds `ignore` and which commits `tracked`
+        /// (a nil text removes the file), with `ignored` files made afterwards.
+        func scenario(_ label: String, ignore: String, tracked: [String: String?] = [:],
+                      ignored: [String: String]) throws -> String {
+            let path = worktree("rebuildable")
+            fixture.write(path + "/.gitignore", ignore)
+            for (file, text) in tracked {
+                try fm.createDirectory(atPath: (path + "/" + file as NSString).deletingLastPathComponent,
+                                       withIntermediateDirectories: true)
+                if let text { fixture.write(path + "/" + file, text) } else { try fm.removeItem(atPath: path + "/" + file) }
+            }
+            fixture.run(["add", "-A"], in: path)
+            fixture.run(["commit", "-q", "--allow-empty", "-m", label], in: path)
+            for (file, text) in ignored {
+                try fm.createDirectory(atPath: (path + "/" + file as NSString).deletingLastPathComponent,
+                                       withIntermediateDirectories: true)
+                fixture.write(path + "/" + file, text)
+            }
+            return path
+        }
+        let noManifest: [String: String?] = ["package.json": nil]
+
+        // target/: only beside a Cargo.toml.
+        var path = try scenario("target beside Cargo.toml", ignore: "target/\n", tracked: ["Cargo.toml": "[package]\n"],
+                                ignored: ["target/debug/x": "o\n"])
+        _ = expectVerified("target/ beside its Cargo.toml", path)
+        path = try scenario("target without Cargo.toml", ignore: "target/\n", ignored: ["target/debug/x": "o\n"])
+        expectBlocked("/target with no Cargo.toml beside it", path, .ignoredFiles(path))
+        path = try scenario("nested target", ignore: "target/\n", tracked: ["Cargo.toml": "[package]\n"],
+                            ignored: ["data/target/prod.db": "rows\n"])
+        expectBlocked("data/target/prod.db: Cargo.toml is not beside that target", path, .ignoredFiles(path))
+
+        // node_modules: only beside a package.json.
+        path = try scenario("node_modules without package.json", ignore: "node_modules/\n", tracked: noManifest,
+                            ignored: ["node_modules/.env": "SECRET=1\n"])
+        expectBlocked("node_modules/.env with no package.json beside it", path, .ignoredFiles(path))
+        path = try scenario("node_modules with package.json", ignore: "node_modules/\n",
+                            ignored: ["node_modules/.env": "INSIDE=1\n"])
+        _ = expectVerified("node_modules beside its package.json", path)
+
+        // .venv: only with a pyvenv.cfg inside.
+        path = try scenario("venv without pyvenv.cfg", ignore: ".venv/\n", ignored: [".venv/notes.txt": "mine\n"])
+        expectBlocked(".venv/notes.txt with no pyvenv.cfg", path, .ignoredFiles(path))
+        path = try scenario("venv with pyvenv.cfg", ignore: ".venv/\n",
+                            ignored: [".venv/pyvenv.cfg": "home = /usr/bin\n", ".venv/lib/x": "o\n"])
+        _ = expectVerified("an environment with its pyvenv.cfg", path)
+
+        // Pods: only beside a Podfile.
+        path = try scenario("Pods without Podfile", ignore: "Pods/\n", ignored: ["Pods/keys.plist": "<plist/>\n"])
+        expectBlocked("Pods/keys.plist with no Podfile", path, .ignoredFiles(path))
+        path = try scenario("Pods with Podfile", ignore: "Pods/\n", tracked: ["Podfile": "platform :ios\n"],
+                            ignored: ["Pods/keys.plist": "<plist/>\n"])
+        _ = expectVerified("Pods beside its Podfile", path)
+
+        // .gradle: never, whatever sits beside it.
+        path = try scenario("gradle properties", ignore: ".gradle/\n", tracked: ["build.gradle": "plugins {}\n"],
+                            ignored: [".gradle/gradle.properties": "token=secret\n"])
+        expectBlocked(".gradle/gradle.properties beside a build.gradle", path, .ignoredFiles(path))
+
+        // A marker that is not a regular file is no marker.
+        path = try scenario("symlinked manifest", ignore: "target/\n", ignored: ["target/x": "o\n"])
+        try fm.createSymbolicLink(atPath: path + "/Cargo.toml", withDestinationPath: path + "/a.txt")
+        fixture.run(["add", "Cargo.toml"], in: path)
+        fixture.run(["commit", "-q", "-m", "link"], in: path)
+        expectBlocked("target/ beside a Cargo.toml that is a symlink", path, .ignoredFiles(path))
     }
 
     // MARK: Verification

@@ -208,10 +208,11 @@ nonisolated enum GitWorktree {
             // global gitignores list it: it holds nothing worth keeping.
             if parts.last == ".DS_Store" { continue }
             // `matching` reports a folder that is ignored as a whole with a
-            // trailing slash. Only such a folder named for build output may
-            // stay; a file inside a rebuildable name (`data/target/prod.db`,
-            // `node_modules/secret.db`) or a partly ignored folder is data.
-            if text.hasSuffix("/"), let last = parts.last, CleanupPathSafety.rebuildable.contains(last) { continue }
+            // trailing slash. Only such a folder that the engine would itself
+            // recognise as build output may stay (`rebuildableFolders`): the
+            // name alone is not enough, since `data/target/prod.db` or a
+            // `node_modules/.env` with no package.json beside it is data.
+            if text.hasSuffix("/"), isRebuildableFolder(parts, in: layout.realPath) { continue }
             throw GitWorktreeError.ignoredFiles(path)
         }
 
@@ -469,6 +470,57 @@ nonisolated enum GitWorktree {
             if names.contains(where: { $0 == spelling || $0.hasPrefix(spelling + "/") }) {
                 throw GitWorktreeError.inUse(path)
             }
+        }
+    }
+
+    /// What must sit next to an ignored folder, or inside it, for the engine
+    /// (src/cleanup.rs `rule`) to call it rebuildable build output.
+    private enum FolderMarker {
+        case none
+        case beside([String])
+        case inside([String])
+    }
+
+    /// The ignored folders a worktree may still hold, with the marker the
+    /// engine's own rule for that name requires. `.venv` is held to the same
+    /// `pyvenv.cfg` as `venv`. `.gradle` is never here: it can hold
+    /// `gradle.properties` with credentials. A name the engine has no rule for
+    /// (`DerivedData` outside Xcode's folder) is not here either, except the
+    /// Python tool caches, which hold nothing but what the tool recreates.
+    private static let rebuildableFolders: [String: FolderMarker] = [
+        "node_modules": .beside(["package.json"]),
+        ".venv": .inside(["pyvenv.cfg"]),
+        "venv": .inside(["pyvenv.cfg"]),
+        "target": .beside(["Cargo.toml"]),
+        ".next": .beside(["package.json"]),
+        ".turbo": .beside(["package.json"]),
+        ".nuxt": .beside(["package.json"]),
+        ".svelte-kit": .beside(["package.json"]),
+        ".parcel-cache": .beside(["package.json"]),
+        ".expo": .beside(["package.json"]),
+        "Pods": .beside(["Podfile"]),
+        "__pycache__": .none,
+        ".pytest_cache": .none,
+        ".mypy_cache": .none,
+        ".ruff_cache": .none,
+    ]
+
+    /// Whether `parts` (the components of an ignored folder, relative to the
+    /// worktree) name a rebuildable folder whose marker is a regular file where
+    /// the engine's rule looks for it.
+    private static func isRebuildableFolder(_ parts: [String], in worktree: String) -> Bool {
+        guard let name = parts.last, let marker = rebuildableFolders[name] else { return false }
+        func hasFile(in folder: String, _ names: [String]) -> Bool {
+            names.contains { file in
+                var info = stat()
+                return lstat(folder + "/" + file, &info) == 0 && info.st_mode & S_IFMT == S_IFREG
+            }
+        }
+        let folder = ([worktree] + parts).joined(separator: "/")
+        switch marker {
+        case .none: return true
+        case .inside(let files): return hasFile(in: folder, files)
+        case .beside(let files): return hasFile(in: ([worktree] + parts.dropLast()).joined(separator: "/"), files)
         }
     }
 

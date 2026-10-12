@@ -48,6 +48,8 @@ nonisolated struct GitFixture {
         try! FileManager.default.createDirectory(atPath: path, withIntermediateDirectories: true)
         run(["init", "-q"], in: path)
         write(path + "/a.txt", "tracked\n")
+        // The engine only calls a node_modules build output beside a package.json.
+        write(path + "/package.json", "{}\n")
         write(path + "/.gitignore", "node_modules/\n")
         run(["add", "-A"], in: path)
         run(["commit", "-q", "-m", "init"], in: path)
