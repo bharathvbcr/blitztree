@@ -1,6 +1,7 @@
 import AppKit
 import Foundation
 import Observation
+import os
 import SwiftUI
 
 // "Clean up with Claude Code / Codex / MANVI": the agent runs headless in the
@@ -127,20 +128,25 @@ nonisolated enum AgentLocator {
         }
         // All checks at once; each takes a fraction of a second. MANVI is
         // ready when at least one of its routes is.
-        var signedIn = [Bool](repeating: false, count: found.count)
-        var routes: [Manvi.Route] = []
-        let lock = NSLock()
+        // The probes share one lock-guarded result. The lock is a Sendable
+        // value, so the compiler can see that the concurrent writes are safe.
+        let results = OSAllocatedUnfairLock(
+            initialState: (signedIn: [Bool](repeating: false, count: found.count), routes: [Manvi.Route]()))
         let probe = env
         DispatchQueue.concurrentPerform(iterations: found.count) { i in
             let (kind, path) = found[i]
             let ready = kind == .manvi
                 ? Manvi.readyRoutes(path: path, envPath: probe.path, shell: probe.shell) : []
             let ok = kind == .manvi ? !ready.isEmpty : isSignedIn(kind, path: path, envPath: probe.path)
-            lock.lock(); signedIn[i] = ok; if kind == .manvi { routes = ready }; lock.unlock()
+            results.withLock { state in
+                state.signedIn[i] = ok
+                if kind == .manvi { state.routes = ready }
+            }
         }
-        env.manviRoutes = routes
+        let outcome = results.withLock { $0 }
+        env.manviRoutes = outcome.routes
         env.agents = found.enumerated().map { i, pair in
-            InstalledAgent(kind: pair.0, path: pair.1, signedIn: signedIn[i])
+            InstalledAgent(kind: pair.0, path: pair.1, signedIn: outcome.signedIn[i])
         }
         return env
     }
