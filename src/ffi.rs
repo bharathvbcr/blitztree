@@ -1215,6 +1215,7 @@ mod tests {
             shared_allocated_bytes: 5,
             clone_ids_unavailable_directories: 6,
             complete: false,
+            workers_degraded: true,
         };
         let mut handle = BzScan {
             progress: Arc::new(Progress::default()),
@@ -1274,6 +1275,7 @@ mod tests {
                 complete: true,
                 shared_allocated_bytes: 5,
                 clone_ids_unavailable_directories: 6,
+                workers_degraded: true,
                 ..Default::default()
             }
         );

@@ -24,17 +24,28 @@
 //! shares the cores between the two.
 //!
 //! Entry points call `run` once, at the top. A call made from a worker of
-//! either pool runs inline on that worker, whatever role it asks for: hopping
-//! pools would park the worker while it waits, and the nested passes inside
-//! (the type breakdown recurses into big folders) must never wait on a worker
-//! they are occupying. Nothing run on a pool may block on another job that
-//! needs a free worker.
+//! either pool runs inline on that worker, whatever role it asks for. A hop
+//! to the other pool would not deadlock (rayon's cross-pool `install` lets the
+//! waiting worker steal work from its own pool meanwhile), but it adds a
+//! handoff and leaves that worker running unrelated stolen jobs while its
+//! caller waits; and the type breakdown, which recurses into big folders from
+//! inside the pool, must stay on the worker already running it. Nothing run on
+//! a pool may block on a job that needs a free worker of the same pool.
+//!
+//! If a pool cannot be built (the system refused the threads), callers run on
+//! rayon's global pool: correct, but possibly on the efficiency cores. That is
+//! reported once per outage on stderr and stays readable through `degraded`
+//! (the app reads it in `Coverage`; a GUI never sees stderr). A failed build is
+//! retried no sooner than a doubling delay (2 s, 4 s, ... capped at 60 s)
+//! later, so an outage costs one thread-spawn attempt per interval and not one
+//! per call.
 
 use std::cell::Cell;
 use std::ffi::c_int;
 use std::io::Write;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Mutex, OnceLock, PoisonError};
+use std::time::{Duration, Instant};
 
 use rayon::{ThreadPool, ThreadPoolBuildError, ThreadPoolBuilder};
 
@@ -60,13 +71,78 @@ pub(crate) enum Role {
 
 static SCAN_POOL: OnceLock<ThreadPool> = OnceLock::new();
 static QUERY_POOL: OnceLock<ThreadPool> = OnceLock::new();
-static WARNED: [AtomicBool; 2] = [AtomicBool::new(false), AtomicBool::new(false)];
+static SCAN_OUTAGE: Outage = Outage::new();
+static QUERY_OUTAGE: Outage = Outage::new();
+
+/// How long to wait before trying to build a pool again.
+#[derive(Clone, Copy)]
+struct Backoff {
+    first: Duration,
+    cap: Duration,
+}
+
+const BACKOFF: Backoff = Backoff {
+    first: Duration::from_secs(2),
+    cap: Duration::from_secs(60),
+};
+
+impl Backoff {
+    /// The wait after the `failures`-th failure in a row (1-based): `first`,
+    /// doubling each time, never more than `cap`.
+    fn delay(self, failures: u32) -> Duration {
+        let doublings = failures.saturating_sub(1).min(31);
+        self.first.saturating_mul(1u32 << doublings).min(self.cap)
+    }
+}
+
+/// A role's record of failing to build its pool.
+struct Outage {
+    /// A build failed and none has succeeded since. Cheap to read.
+    degraded: AtomicBool,
+    /// Messages written to stderr, for the life of the process.
+    reports: AtomicUsize,
+    state: Mutex<OutageState>,
+}
+
+struct OutageState {
+    /// Failed builds in a row.
+    failures: u32,
+    /// No attempt before this.
+    retry_at: Option<Instant>,
+}
+
+impl Outage {
+    const fn new() -> Outage {
+        Outage {
+            degraded: AtomicBool::new(false),
+            reports: AtomicUsize::new(0),
+            state: Mutex::new(OutageState {
+                failures: 0,
+                retry_at: None,
+            }),
+        }
+    }
+}
+
+/// Whether a worker pool is unavailable right now, so that work is running on
+/// rayon's global pool (possibly on the efficiency cores). The results are the
+/// same either way.
+pub(crate) fn degraded() -> bool {
+    SCAN_OUTAGE.degraded.load(Ordering::Relaxed) || QUERY_OUTAGE.degraded.load(Ordering::Relaxed)
+}
 
 impl Role {
     fn cell(self) -> &'static OnceLock<ThreadPool> {
         match self {
             Role::Scan => &SCAN_POOL,
             Role::Query => &QUERY_POOL,
+        }
+    }
+
+    fn outage(self) -> &'static Outage {
+        match self {
+            Role::Scan => &SCAN_OUTAGE,
+            Role::Query => &QUERY_OUTAGE,
         }
     }
 
@@ -95,29 +171,44 @@ fn build(role: Role) -> Result<ThreadPool, ThreadPoolBuildError> {
     Ok(pool)
 }
 
-/// The pool in `cell`, built by `build` on first use. If it cannot be built
-/// (the system refused the threads) the answer is None, a message is written
-/// to stderr (once per `warned` flag), and the next call tries again: callers
-/// then run on rayon's global pool, which is correct but may land on the
-/// efficiency cores.
+/// The pool in `cell`, built by `build` on first use. One build at a time (the
+/// outage's lock), so racing first callers never make two pools.
+///
+/// If it cannot be built the answer is None and the outage is recorded: a
+/// message goes to stderr for the first failure of an outage only, and no new
+/// attempt is made before `backoff` has passed (by `now`, which tests supply).
+/// A later success ends the outage, so the next one is reported again.
 fn get_or_build<'a>(
     cell: &'a OnceLock<ThreadPool>,
-    warned: &AtomicBool,
+    outage: &Outage,
+    backoff: Backoff,
+    now: Instant,
     build: impl FnOnce() -> Result<ThreadPool, ThreadPoolBuildError>,
 ) -> Option<&'a ThreadPool> {
     if let Some(pool) = cell.get() {
         return Some(pool);
     }
-    // One build at a time, so racing first callers never make two pools.
-    static BUILDING: Mutex<()> = Mutex::new(());
-    let _building = BUILDING.lock().unwrap_or_else(PoisonError::into_inner);
+    let mut state = outage.state.lock().unwrap_or_else(PoisonError::into_inner);
     if let Some(pool) = cell.get() {
         return Some(pool);
     }
+    if state.retry_at.is_some_and(|at| now < at) {
+        return None;
+    }
     match build() {
-        Ok(pool) => Some(cell.get_or_init(|| pool)),
+        Ok(pool) => {
+            *state = OutageState {
+                failures: 0,
+                retry_at: None,
+            };
+            outage.degraded.store(false, Ordering::Relaxed);
+            Some(cell.get_or_init(|| pool))
+        }
         Err(error) => {
-            if !warned.swap(true, Ordering::Relaxed) {
+            state.failures = state.failures.saturating_add(1);
+            state.retry_at = Some(now + backoff.delay(state.failures));
+            if !outage.degraded.swap(true, Ordering::Relaxed) {
+                outage.reports.fetch_add(1, Ordering::Relaxed);
                 // Not eprintln!: it panics when stderr is closed.
                 let _ = writeln!(
                     std::io::stderr(),
@@ -149,8 +240,7 @@ pub(crate) fn run<R: Send>(role: Role, work: impl FnOnce() -> R + Send) -> R {
     if ON_OUR_WORKER.with(Cell::get) {
         return work();
     }
-    let warned = &WARNED[role as usize];
-    let pool = get_or_build(role.cell(), warned, || {
+    let pool = get_or_build(role.cell(), role.outage(), BACKOFF, Instant::now(), || {
         let pool = build(role);
         // Only the process's own pools count; tests build others on the side.
         #[cfg(test)]
@@ -433,18 +523,16 @@ mod tests {
 
     #[test]
     fn a_pool_that_cannot_be_built_falls_back_to_the_caller_and_is_retried() {
-        let cell = OnceLock::new();
-        let warned = AtomicBool::new(false);
-        let refused = || {
-            ThreadPoolBuilder::new()
-                .spawn_handler(|_| Err(std::io::Error::other("injected: no threads")))
-                .build()
-        };
+        let (cell, outage) = (OnceLock::new(), Outage::new());
+        let t0 = Instant::now();
         assert!(
-            get_or_build(&cell, &warned, refused).is_none(),
+            get_or_build(&cell, &outage, BACKOFF, t0, refused).is_none(),
             "the failure is not hidden as a pool"
         );
-        assert!(warned.load(Ordering::Relaxed), "the failure is reported");
+        assert!(
+            outage.degraded.load(Ordering::Relaxed),
+            "the failure is readable"
+        );
         assert!(cell.get().is_none(), "a failed build is not remembered");
         let caller = std::thread::current().id();
         assert_eq!(
@@ -452,10 +540,112 @@ mod tests {
             caller,
             "the fallback runs the work"
         );
-        let pool =
-            get_or_build(&cell, &warned, || build(Role::Query)).expect("the retry builds the pool");
-        let again = get_or_build(&cell, &warned, || panic!("a built pool is not rebuilt")).unwrap();
+        let later = t0 + BACKOFF.first;
+        let pool = get_or_build(&cell, &outage, BACKOFF, later, || build(Role::Query))
+            .expect("the retry builds the pool");
+        assert!(
+            !outage.degraded.load(Ordering::Relaxed),
+            "a build ends the outage"
+        );
+        let again = get_or_build(&cell, &outage, BACKOFF, later, || {
+            panic!("a built pool is not rebuilt")
+        })
+        .unwrap();
         assert!(std::ptr::eq(pool, again));
+    }
+
+    fn refused() -> Result<ThreadPool, ThreadPoolBuildError> {
+        ThreadPoolBuilder::new()
+            .spawn_handler(|_| Err(std::io::Error::other("injected: no threads")))
+            .build()
+    }
+
+    #[test]
+    fn an_outage_is_reported_once_and_retried_no_faster_than_the_backoff() {
+        let (cell, outage) = (OnceLock::new(), Outage::new());
+        let attempts = AtomicUsize::new(0);
+        let attempt = || {
+            attempts.fetch_add(1, Ordering::SeqCst);
+            refused()
+        };
+        let backoff = Backoff {
+            first: Duration::from_secs(2),
+            cap: Duration::from_secs(10),
+        };
+        let t0 = Instant::now();
+        let at = |secs: u64| t0 + Duration::from_secs(secs);
+
+        // A burst of calls (a search per keystroke): one attempt, one report.
+        for _ in 0..500 {
+            assert!(get_or_build(&cell, &outage, backoff, at(0), attempt).is_none());
+        }
+        assert_eq!(
+            attempts.load(Ordering::SeqCst),
+            1,
+            "one attempt for the whole burst"
+        );
+        assert_eq!(outage.reports.load(Ordering::SeqCst), 1);
+        // Still inside the 2 s window.
+        for _ in 0..500 {
+            assert!(get_or_build(&cell, &outage, backoff, at(1), attempt).is_none());
+        }
+        assert_eq!(
+            attempts.load(Ordering::SeqCst),
+            1,
+            "no retry before the backoff"
+        );
+        // The window passes: exactly one more attempt, and the next wait doubles to 4 s.
+        for _ in 0..500 {
+            assert!(get_or_build(&cell, &outage, backoff, at(2), attempt).is_none());
+        }
+        assert_eq!(attempts.load(Ordering::SeqCst), 2);
+        get_or_build(&cell, &outage, backoff, at(5), attempt);
+        assert_eq!(
+            attempts.load(Ordering::SeqCst),
+            2,
+            "4 s after the second failure, not 3"
+        );
+        get_or_build(&cell, &outage, backoff, at(6), attempt);
+        assert_eq!(attempts.load(Ordering::SeqCst), 3);
+        assert_eq!(
+            outage.reports.load(Ordering::SeqCst),
+            1,
+            "the same outage is not reported again"
+        );
+        assert!(outage.degraded.load(Ordering::Relaxed));
+
+        // The pool comes back: the outage is over, and the next one is reported anew.
+        let pool = get_or_build(&cell, &outage, backoff, at(14), || build(Role::Query));
+        assert!(pool.is_some());
+        assert!(!outage.degraded.load(Ordering::Relaxed));
+        let (next_cell, mut now) = (OnceLock::new(), at(100));
+        assert!(get_or_build(&next_cell, &outage, backoff, now, refused).is_none());
+        assert_eq!(
+            outage.reports.load(Ordering::SeqCst),
+            2,
+            "a new outage is reported once"
+        );
+        now += Duration::from_secs(1);
+        assert!(get_or_build(&next_cell, &outage, backoff, now, refused).is_none());
+        assert_eq!(outage.reports.load(Ordering::SeqCst), 2);
+    }
+
+    #[test]
+    fn the_backoff_doubles_to_its_cap() {
+        let secs = |failures| BACKOFF.delay(failures).as_secs();
+        assert_eq!(
+            (1..=8).map(secs).collect::<Vec<_>>(),
+            [2, 4, 8, 16, 32, 60, 60, 60]
+        );
+        assert_eq!(secs(0), 2, "no failures yet waits the first interval");
+        assert_eq!(secs(u32::MAX), 60, "a huge count does not overflow");
+    }
+
+    #[test]
+    fn the_process_pools_are_not_degraded_when_they_build() {
+        run(Role::Scan, || ());
+        run(Role::Query, || ());
+        assert!(!degraded());
     }
 
     #[test]
@@ -579,8 +769,35 @@ mod tests {
         }
     }
 
+    /// Runs the jam test in a process of its own: it parks every scan worker,
+    /// and in this binary's shared pool that would stall the scans of the tests
+    /// running beside it (and be a flake source for their timing checks).
     #[test]
     fn queries_finish_while_every_scan_worker_is_blocked() {
+        let out = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--ignored",
+                "--exact",
+                "pool::tests::jam_the_scan_pool_and_query",
+                "--test-threads=1",
+            ])
+            .output()
+            .expect("start the child test process");
+        let text = String::from_utf8_lossy(&out.stdout).into_owned()
+            + &String::from_utf8_lossy(&out.stderr);
+        assert!(
+            out.status.success() && text.contains("1 passed"),
+            "the child process did not pass:\n{text}"
+        );
+    }
+
+    /// Every scan worker parked on a latch; a search and a type breakdown must
+    /// still finish. No timing threshold: the watchdog only turns a hang into
+    /// a failure. Ignored so that only the parent test above runs it, alone in
+    /// its own process.
+    #[test]
+    #[ignore = "jams the scan pool; run by queries_finish_while_every_scan_worker_is_blocked in a child process"]
+    fn jam_the_scan_pool_and_query() {
         let tree = std::sync::Arc::new(flat_tree(50_000));
         let (expected_search, expected_types) = (tree.search("file4", 10), tree.types(0));
         let workers = threads();
@@ -637,11 +854,29 @@ mod tests {
 
     #[test]
     fn a_search_issued_while_a_scan_runs_still_finishes_with_the_right_answer() {
+        use crate::tests::{HOLD, HOLD_MARKER};
+        /// Lets the held walk go even if an assertion fails first.
+        struct Release;
+        impl Drop for Release {
+            fn drop(&mut self) {
+                HOLD.release();
+            }
+        }
+
         let tree = std::sync::Arc::new(flat_tree(120_000));
         let expected = tree.search("file7", 10);
-        let root = fixture("during-scan", 150, 40);
+        let root = fixture("during-scan", 20, 10);
+        std::fs::create_dir(root.join(format!("{HOLD_MARKER}-dir"))).unwrap();
+        HOLD.arm();
+        let _release = Release;
         let progress = std::sync::Arc::new(Progress::default());
         let h = ffi::start_scan(root.clone(), progress);
+        // The walk has reached the held folder and stays there: the scan is
+        // running, by construction, for every search below.
+        assert!(
+            HOLD.wait_arrival(Duration::from_secs(120)),
+            "the scan never reached the held folder"
+        );
         let searched = within(120, "search during a scan", {
             let tree = tree.clone();
             move || {
@@ -651,6 +886,12 @@ mod tests {
             }
         });
         assert!(searched.iter().all(|r| *r == expected));
+        assert_eq!(
+            unsafe { ffi::bz_scan_status(h) },
+            0,
+            "the scan was still running when the searches finished"
+        );
+        HOLD.release();
         while unsafe { ffi::bz_scan_status(h) } == 0 {
             std::thread::sleep(Duration::from_millis(1));
         }

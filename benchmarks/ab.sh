@@ -10,6 +10,9 @@
 #           from round to round, so no arm always runs first or last.
 #   ARGS    passed to every binary unchanged.
 #
+# A run that exits non-zero, or prints nothing a metric matches, is reported per arm
+# and makes the script exit 1 (the summary is then incomplete).
+#
 # Raw samples go to OUT.tsv as `metric<TAB>arm<TAB>round<TAB>value`; the summary
 # (min, median, max per metric and arm) is printed. Run it with the machine as quiet
 # as it gets and state the load average next to the numbers (uptime).
@@ -23,15 +26,29 @@ shift
 args=("$@")
 : > "$out"
 n=${#arms[@]}
+typeset -A crashed missed
+failed=0
 for ((r = 0; r < rounds; r++)); do
   for ((k = 0; k < n; k++)); do
     arm=${arms[$(( (r + k) % n + 1 ))]}
     label=${arm%%=*}; bin=${arm#*=}
     text=$("$bin" "${args[@]}" 2>&1)
+    rc=$?
+    if [[ $rc -ne 0 ]]; then
+      # A crashed arm contributes no sample; say so, and fail at the end.
+      crashed[$label]=$(( ${crashed[$label]:-0} + 1 )); failed=1
+      print -u2 -- "ab.sh: round $r arm $label exited $rc"
+      continue
+    fi
     for m in "${metrics[@]}"; do
       name=${m%%:*}; re=${m#*:}
       v=$(print -r -- "$text" | sed -n -E "s/${re}/\1/p" | head -1)
-      [[ -n $v ]] && print -r -- "$name"$'\t'"$label"$'\t'"$r"$'\t'"$v" >> "$out"
+      if [[ -n $v ]]; then
+        print -r -- "$name"$'\t'"$label"$'\t'"$r"$'\t'"$v" >> "$out"
+      else
+        missed[$name/$label]=$(( ${missed[$name/$label]:-0} + 1 )); failed=1
+        print -u2 -- "ab.sh: round $r arm $label printed nothing matching metric $name"
+      fi
     done
   done
 done
@@ -46,3 +63,10 @@ awk -F'\t' '
       printf "%-28s n=%-3d min %-12.6g median %-12.6g max %-12.6g\n", key, m, a[1], med, a[m]
     }
   }' "$out" | sort
+
+if [[ $failed -ne 0 ]]; then
+  print -u2 -- "ab.sh: SAMPLES ARE MISSING - the summary above is not a complete A/B"
+  for key val in "${(@kv)crashed}"; do print -u2 -- "  crashed runs, arm ${key}: ${val}"; done
+  for key val in "${(@kv)missed}"; do print -u2 -- "  metric misses, ${key}: ${val}"; done
+  exit 1
+fi

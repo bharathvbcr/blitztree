@@ -175,10 +175,12 @@ Method: M5 Pro, 18 cores, macOS 27, release builds of `4286e7e` (base) and the
 change, three arms per round (`base`, `two` = the final two-pool build, and
 `base2` = the base binary again as the A/A control), run interleaved with the
 starting arm rotated each round (`benchmarks/ab.sh`), min and median over the
-rounds. **The machine was not quiet: the load average was 165-185 for the table
-below and up to 490 for the earlier single-pool and arena-lock runs (other
-agents' builds and tests), so absolute times are inflated and only same-round
-comparisons mean anything.** Raw samples:
+rounds. **The machine was not quiet (other agents' builds and tests), so
+absolute times are inflated and only same-round comparisons mean anything.**
+The one-minute load average read by `uptime` after each run: 165-185 for the
+table below, 165-215 for the search-during-scan and pool-size runs, 260-490 for
+the earlier single-pool runs, and about 150 and 280 for the two arena-lock
+instrumentation runs. Raw samples:
 [benchmarks/results/2026-10-12-shared-pool](benchmarks/results/2026-10-12-shared-pool)
 (files with `two-pools` in the name are this table).
 
@@ -197,7 +199,7 @@ comparisons mean anything.** Raw samples:
 What this shows, and what it does not:
 
 - **No measurable change in the CLI for search, types or a large scan.** Every
-  `new` figure sits inside the spread between the two identical base arms
+  "two pools" figure sits inside the spread between the two identical base arms
   (the `types` base and A/A minimums differ by 2x at this load, so that row
   cannot resolve anything). The workers run at the same speed they ran before;
   the CLI is not where default-QoS threads hurt.
@@ -210,7 +212,7 @@ What this shows, and what it does not:
   not drive the app's GUI here, so "search/types were running on efficiency
   cores in the app" stays inferred (from the scan-thread measurement above) and
   the in-app before/after timing is **unverified**. The tests do prove the
-  mechanism: work run through the pool executes on `bz-worker-N` threads whose
+  mechanism: work run through the pool executes on `bz-scan-N` or `bz-query-N` threads (by role) whose
   QoS reads back as USER_INITIATED, and the coordinator thread reads back
   USER_INITIATED where it read USER_INTERACTIVE.
 - **A single shared pool was worse, so there are two.** The first version of

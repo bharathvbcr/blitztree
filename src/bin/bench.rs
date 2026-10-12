@@ -353,7 +353,7 @@ fn main() {
                 let t0 = Instant::now();
                 let tree = scan(&path, &Progress::default());
                 times.push(t0.elapsed());
-                assert!(tree.len() > 0);
+                assert!(!tree.is_empty());
             }
             let first = times[0];
             times.sort();

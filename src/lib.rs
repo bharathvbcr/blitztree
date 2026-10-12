@@ -274,6 +274,11 @@ pub struct Coverage {
     pub clone_ids_unavailable_directories: u64,
     /// Every directory was read in full: nothing unreadable or skipped.
     pub complete: bool,
+    /// A worker pool could not be started when this was built, so work ran on
+    /// rayon's global pool and may have been slower (the engine reports it on
+    /// stderr too, which a GUI never sees). The results are the same:
+    /// `complete` does not depend on it.
+    pub workers_degraded: bool,
 }
 
 impl Coverage {
@@ -289,6 +294,7 @@ impl Coverage {
             shared_allocated_bytes: count(&progress.shared_bytes),
             clone_ids_unavailable_directories: count(&progress.clone_ids_unavailable_dirs),
             complete: tree.complete.first().copied().unwrap_or(false),
+            workers_degraded: pool::degraded(),
         }
     }
 
@@ -307,6 +313,7 @@ impl Coverage {
                 shared_allocated_bytes: self.shared_allocated_bytes,
                 clone_ids_unavailable_directories: self.clone_ids_unavailable_directories,
                 complete: true,
+                workers_degraded: self.workers_degraded,
                 ..Coverage::default()
             }
         } else {
@@ -1244,7 +1251,9 @@ fn scan_at(
                 .map_err(|_| "The scan root contains a NUL byte".to_string())
         });
         match target {
-            Ok(path) => pool::run(pool::Role::Scan, || rayon::scope(|s| walk(s, &shared, path, 0))),
+            Ok(path) => pool::run(pool::Role::Scan, || {
+                rayon::scope(|s| walk(s, &shared, path, 0))
+            }),
             Err(reason) => {
                 progress.errors.fetch_add(1, Ordering::Relaxed);
                 shared.mark_incomplete(0);
@@ -2197,9 +2206,74 @@ mod tests {
     pub(crate) const PANIC_MARKER: &str = "bz-inject-panic";
 
     pub(super) fn inject_scan_fault(path: &CStr) {
-        let marker = PANIC_MARKER.as_bytes();
-        if path.to_bytes().windows(marker.len()).any(|w| w == marker) {
+        let has = |marker: &str| {
+            path.to_bytes()
+                .windows(marker.len())
+                .any(|w| w == marker.as_bytes())
+        };
+        if has(PANIC_MARKER) {
             panic!("injected scan fault");
+        }
+        if has(HOLD_MARKER) {
+            HOLD.pass();
+        }
+    }
+
+    /// Fault injection: a walk that reaches a path containing this parks its
+    /// worker in `HOLD` until the test opens it, so a test can have a scan
+    /// that is deterministically still running. One test at a time may use it.
+    pub(crate) const HOLD_MARKER: &str = "bz-inject-hold";
+
+    pub(crate) static HOLD: Hold = Hold::new();
+
+    pub(crate) struct Hold {
+        state: Mutex<(usize, bool)>,
+        changed: std::sync::Condvar,
+    }
+
+    impl Hold {
+        const fn new() -> Hold {
+            Hold {
+                state: Mutex::new((0, false)),
+                changed: std::sync::Condvar::new(),
+            }
+        }
+
+        /// Close the latch and forget earlier arrivals.
+        pub(crate) fn arm(&self) {
+            *self.state.lock().unwrap_or_else(|e| e.into_inner()) = (0, false);
+        }
+
+        /// Open the latch: parked walks continue.
+        pub(crate) fn release(&self) {
+            self.state.lock().unwrap_or_else(|e| e.into_inner()).1 = true;
+            self.changed.notify_all();
+        }
+
+        /// Block until a walk has arrived (true), or `timeout` passes (false).
+        pub(crate) fn wait_arrival(&self, timeout: std::time::Duration) -> bool {
+            let deadline = std::time::Instant::now() + timeout;
+            let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
+            while state.0 == 0 {
+                let Some(left) = deadline.checked_duration_since(std::time::Instant::now()) else {
+                    return false;
+                };
+                state = self
+                    .changed
+                    .wait_timeout(state, left)
+                    .unwrap_or_else(|e| e.into_inner())
+                    .0;
+            }
+            true
+        }
+
+        fn pass(&self) {
+            let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
+            state.0 += 1;
+            self.changed.notify_all();
+            while !state.1 {
+                state = self.changed.wait(state).unwrap_or_else(|e| e.into_inner());
+            }
         }
     }
 
