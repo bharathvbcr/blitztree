@@ -86,4 +86,22 @@ for _ in {1..100}; do [[ -s "$CLEANUP_TEST_TMP/ports.json" ]] && break; sleep 0.
 # The string tables: same keys and format specifiers in all 7 languages, and a
 # key for every literal app/ localizes. Offline; also runnable alone.
 tests/check-l10n.sh
+# The maps' geometry: squarified treemap (areas, overlap, containment, pixel
+# coverage), the leaf index and the rings' angles, on random input and a scan.
+swiftc "${SOURCES[@]}" tests/LayoutChecks.swift "${FLAGS[@]}" \
+  -import-objc-header app/bz.h -L target/release -lblitztree \
+  -framework AppKit -framework SwiftUI -o "$CLEANUP_TEST_TMP/layout"
+"$CLEANUP_TEST_TMP/layout"
+# PartialPlanParser and PlanJSON on recorded stream shapes, in every chunking. No server.
+swiftc app/PlanParsing.swift tests/PlanParsingChecks.swift "${FLAGS[@]}" -o "$CLEANUP_TEST_TMP/plan-parsing"
+"$CLEANUP_TEST_TMP/plan-parsing"
+# The engine on non-APFS volumes (HFS+, ExFAT, FAT32 disk images) and a volume
+# mounted inside the scanned tree. Ignored by plain `cargo test`, so they run
+# here; without hdiutil they are reported as skipped, never as passed.
+if [[ -x /usr/bin/hdiutil ]]; then
+  cargo test --locked --release --lib volume_tests -- --ignored --test-threads=1 2>&1 | tee "$CLEANUP_TEST_TMP/volume-tests.log"
+  grep -q "test result: ok. 2 passed" "$CLEANUP_TEST_TMP/volume-tests.log"
+else
+  echo "SKIPPED: engine tests on disk images (no /usr/bin/hdiutil); nothing was checked"
+fi
 

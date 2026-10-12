@@ -679,6 +679,11 @@ unsafe fn bulk_syscall(fd: c_int, attrlist: &mut AttrList, buf: *mut c_void, opt
         *libc::__error() = libc::EINTR;
         return -1;
     }
+    #[cfg(test)]
+    if let Some(errno) = volume_tests::injected_failure(options) {
+        *libc::__error() = errno;
+        return -1;
+    }
     getattrlistbulk(fd, attrlist, buf, BUF_SIZE, options)
 }
 
@@ -2825,3 +2830,6 @@ mod tests {
         let _ = std::fs::remove_dir_all(&root);
     }
 }
+
+#[cfg(test)]
+mod volume_tests;
