@@ -10,7 +10,7 @@ MIN_MACOS=14.0
 export MACOSX_DEPLOYMENT_TARGET=$MIN_MACOS
 
 echo "==> Rust engine"
-cargo build --release
+cargo build --locked --release
 
 # Sparkle (auto-updates), pinned by checksum and cached outside git.
 SPARKLE_VERSION=2.10.0
@@ -80,9 +80,22 @@ echo -n 'APPL????' > "$APP/Contents/PkgInfo"
 # Icon Composer source → Assets.car (Liquid Glass, macOS 26+) plus a flat
 # AppIcon.icns that older systems use. Regenerate the source with
 # `python3 assets/gen_icon.py`.
+# actool refuses to compile an app icon unless it is told where to write the
+# partial Info.plist ("Compiling app icons requires passing
+# --output-partial-info-plist"), so it gets a scratch file. The bundle's own
+# Info.plist already carries the same keys; they are compared below.
+ICON_TMP=$(mktemp -d)
+trap 'rm -rf "$ICON_TMP"' EXIT
 xcrun actool "$PWD/assets/AppIcon.icon" --compile "$PWD/$APP/Contents/Resources" \
     --platform macosx --target-device mac --minimum-deployment-target $MIN_MACOS \
-    --app-icon AppIcon --output-partial-info-plist "$PWD/build/icon-partial.plist" >/dev/null
+    --app-icon AppIcon --output-partial-info-plist "$ICON_TMP/icon-partial.plist" >/dev/null
+for ICON_FILE in Assets.car AppIcon.icns; do
+    [[ -f "$APP/Contents/Resources/$ICON_FILE" ]] || { echo "error: actool did not produce $ICON_FILE" >&2; exit 1; }
+done
+for KEY in CFBundleIconFile CFBundleIconName; do
+    [[ "$(plutil -extract $KEY raw "$ICON_TMP/icon-partial.plist")" == "$(plutil -extract $KEY raw "$APP/Contents/Info.plist")" ]] ||
+        { echo "error: actool's $KEY disagrees with Info.plist" >&2; exit 1; }
+done
 
 # Classic .lproj Localizable.strings tables (swiftc, no Xcode build system).
 for LPROJ in app/*.lproj; do
@@ -97,7 +110,21 @@ done
 SIGN_KC="$HOME/Library/Keychains/blitztree-signing.keychain-db"
 SIGN_PASS="$HOME/.config/blitztree-signing/keychain.pass"
 if [[ -f "$SIGN_KC" && -f "$SIGN_PASS" ]]; then
-    security unlock-keychain -p "$(<"$SIGN_PASS")" "$SIGN_KC"
+    # `unlock-keychain -p` would put the password in the argv of a process any
+    # local user can list with ps. `security -i` reads its commands from stdin
+    # instead ("security will enter interactive mode and allow the user to
+    # enter multiple commands on stdin", man security), and `print` is a shell
+    # builtin, so no process ever carries the password in its arguments.
+    # Interactive mode splits the line itself, so refuse anything that would
+    # need quoting rather than guess how it parses.
+    KC_PASS=$(<"$SIGN_PASS")
+    if [[ -z "$KC_PASS" || ! "$KC_PASS" =~ '^[A-Za-z0-9+/=._@%:-]+$' || "$SIGN_KC" == *[\'\\]* ]]; then
+        echo "error: $SIGN_PASS must hold one password of letters, digits and + / = . _ @ % : -," >&2
+        echo "       and the keychain path must not contain quotes or backslashes." >&2
+        exit 1
+    fi
+    print -r -- "unlock-keychain -p '$KC_PASS' '$SIGN_KC'" | security -i
+    unset KC_PASS
 fi
 IDS=$(security find-identity -v -p codesigning 2>/dev/null)
 IDENTITY=$(awk -F'"' '/Developer ID Application/{print $2; exit}' <<<"$IDS")
