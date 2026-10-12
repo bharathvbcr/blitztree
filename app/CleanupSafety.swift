@@ -35,6 +35,8 @@ nonisolated enum CleanupPathError: Error, LocalizedError, Equatable, Sendable {
     /// Inside a Claude Code session's temp folder, and whether that session
     /// still runs could not be read.
     case sessionUnverified(String)
+    /// The check the engine's rule names for this folder did not pass.
+    case checkFailed(localized: String, english: String)
 
     var errorDescription: String? {
         switch self {
@@ -53,6 +55,7 @@ nonisolated enum CleanupPathError: Error, LocalizedError, Equatable, Sendable {
         case .gitWorktree(let error): return error.errorDescription
         case .sessionRunning(let path): return String(localized: "A Claude Code session that is still running uses this: \(path)")
         case .sessionUnverified(let path): return String(localized: "Couldn't check whether the Claude Code session using this has ended: \(path)")
+        case .checkFailed(let localized, _): return localized
         }
     }
 
@@ -73,6 +76,7 @@ nonisolated enum CleanupPathError: Error, LocalizedError, Equatable, Sendable {
         case .gitWorktree(let error): return error.englishDescription
         case .sessionRunning(let path): return "A Claude Code session that is still running uses this: \(path)"
         case .sessionUnverified(let path): return "Couldn't check whether the Claude Code session using this has ended: \(path)"
+        case .checkFailed(_, let english): return english
         }
     }
 }
@@ -94,6 +98,21 @@ nonisolated struct ClaudeTemp: Sendable, Equatable {
     var inScratchpad: Bool { (scratchDepth ?? 0) >= 1 }
 }
 
+/// The check the engine's rule names for a path (`bz_cleanup_verify`), kept
+/// with the target so the one boundary every trash passes can run it. `folder`
+/// is the folder the rule recognised: the target itself or the innermost
+/// recognised folder around it, which is where the cache tag, the activity or
+/// the worktree lives. Callers get it from `Tree.cleanupCheck`; `capture` has
+/// no default for it, so each caller says which it has.
+nonisolated struct CleanupCheck: Sendable, Equatable {
+    /// "" none, else a `CleanupVerify` id.
+    let verify: String
+    let folder: String
+
+    /// The engine recognised no rule around the path: only the path policy applies.
+    static let policyOnly = CleanupCheck(verify: "", folder: "")
+}
+
 /// A captured path plus the roots and identity against which it can be
 /// revalidated immediately before an operation.  Capturing and validating
 /// perform metadata reads only; this type never moves, removes, or opens files.
@@ -102,6 +121,8 @@ nonisolated struct CleanupTarget: Sendable, Equatable {
     let root: String
     let home: String
     let identity: CleanupIdentity
+    /// Every capture and validation runs it when it names a verifier.
+    let check: CleanupCheck
 
     // These are intentionally kept with the target so replacing an authorized
     // root or home directory also invalidates an old plan.
@@ -131,6 +152,8 @@ nonisolated enum CleanupPathSafety {
 
     private static let protectedRelative = [
         "Documents", "Desktop", "Pictures", "Movies", "Music", ".ssh", ".gnupg", ".Trash",
+        ".aws", ".kube", ".docker", ".azure", ".oci", ".netrc", ".zshrc", ".password-store",
+        ".config/gcloud", ".config/gh", ".config/op", ".terraform.d", ".local/share/keyrings",
         "Library/Mobile Documents", "Library/Mail", "Library/Messages", "Library/Keychains",
         "Library/Photos", "Library/CloudStorage",
     ]
@@ -161,7 +184,8 @@ nonisolated enum CleanupPathSafety {
     static func capture(
         path: String,
         root: String = NSHomeDirectory(),
-        home: String = NSHomeDirectory()
+        home: String = NSHomeDirectory(),
+        check: CleanupCheck
     ) throws -> CleanupTarget {
         let p = try normalize(path)
         let r = try normalize(root)
@@ -170,7 +194,7 @@ nonisolated enum CleanupPathSafety {
         let homeObserved = try inspect(h, requireDirectory: true)
         let targetObserved = try inspect(p, requireDirectory: false)
         let target = CleanupTarget(
-            path: p, root: r, home: h, identity: targetObserved.identity,
+            path: p, root: r, home: h, identity: targetObserved.identity, check: check,
             rootIdentity: rootObserved.identity, homeIdentity: homeObserved.identity
         )
         _ = try enforce(target, targetObserved: targetObserved, rootObserved: rootObserved,
@@ -322,10 +346,29 @@ nonisolated enum CleanupPathSafety {
             throw CleanupPathError.outsideRoot(target.path)
         }
         _ = homeObserved // The identity check is part of the root policy below.
-        try protectedPolicy(path: target.path, identity: targetObserved.identity,
-                            home: target.home, homeIdentity: homeObserved.identity)
+        try protectedPolicy(path: target.path, home: target.home, homeIdentity: homeObserved.identity)
         try claudeTempPolicy(target.path)
-        return try rejectGitPaths(target.path)
+        let worktree = try rejectGitPaths(target.path)
+        try enforceCheck(target, worktree: worktree)
+        return worktree
+    }
+
+    /// Runs the check the engine's rule names for the target. This is the one
+    /// place it runs, so the panel, the agent and any later caller get it from
+    /// the same capture and revalidation. A worktree the git policy above just
+    /// verified is not verified a second time.
+    private static func enforceCheck(_ target: CleanupTarget, worktree: WorktreeInfo?) throws {
+        let check = target.check
+        guard !check.verify.isEmpty else { return }
+        guard isPath(target.path, under: check.folder) else {
+            throw CleanupPathError.checkFailed(
+                localized: String(localized: "The check does not belong to this folder: \(target.path)"),
+                english: "The check does not belong to this folder: \(target.path)")
+        }
+        if check.verify == "git_worktree", check.folder == target.path, worktree != nil { return }
+        if let reason = CleanupVerify.blockReason(verify: check.verify, path: check.folder) {
+            throw CleanupPathError.checkFailed(localized: reason.localized, english: reason.english)
+        }
     }
 
     /// Parses a Claude Code temp path for the current user. Component names
@@ -405,9 +448,31 @@ nonisolated enum CleanupPathSafety {
         return firstIdentity == secondIdentity && first != second
     }
 
-    private static func protectedPolicy(
-        path: String, identity: CleanupIdentity, home: String, homeIdentity: CleanupIdentity
-    ) throws {
+    /// Why Clean Up would refuse `path`, judged on the path alone: the
+    /// protected-folder policy and the `.git` rules, with no git run, no
+    /// process check and no rule check. For a warning where no cleanup runs
+    /// (the manual Move to Trash). Nil when the path would pass these, or
+    /// cannot be judged; a `.git` file (maybe a linked worktree) is not judged.
+    static func refusal(of path: String, home: String = NSHomeDirectory()) -> CleanupPathError? {
+        guard let p = try? normalize(path), let h = try? normalize(home),
+              let homeIdentity = try? identity(of: h) else { return nil }
+        do {
+            try protectedPolicy(path: p, home: h, homeIdentity: homeIdentity, refuseShallow: false)
+            try rejectGitComponents(p)
+            if let marker = try? readStat((p as NSString).appendingPathComponent(".git")),
+               UInt16(truncatingIfNeeded: marker.st_mode) & modeMask != modeRegular {
+                return .gitPath((p as NSString).appendingPathComponent(".git"))
+            }
+        } catch let error as CleanupPathError {
+            return error
+        } catch {
+            return nil
+        }
+        return nil
+    }
+
+    private static func protectedPolicy(path: String, home: String, homeIdentity: CleanupIdentity,
+                                        refuseShallow: Bool = true) throws {
         // Retain the released app's exclusion for caches and containers
         // managed by macOS, including the Data-volume spelling.
         let lower = path.lowercased()
@@ -416,9 +481,137 @@ nonisolated enum CleanupPathSafety {
             || lower.contains("/library/group containers/group.com.apple.") {
             throw CleanupPathError.protectedPath(path)
         }
-        guard let homePath = homeAlias(path, home: home, homeIdentity: homeIdentity),
-              let relative = relativePath(homePath, under: home) else { return }
-        if relative.isEmpty || (relative.split(separator: "/").count < 2 && !relative.hasPrefix(".")) {
+        try globalPackagePolicy(path)
+        try cacheTokenPolicy(path)
+        if let homePath = homeAlias(path, home: home, homeIdentity: homeIdentity),
+           let relative = relativePath(homePath, under: home) {
+            try homePolicy(relative: relative, path: path) { codexChat(homePath, home: home) != nil }
+        } else if let relative = otherHomeRelative(path) {
+            // A scan root wider than the home (the whole Data volume, an
+            // external disk) reaches other users' homes: the same policy
+            // applies there, without the Codex chat exception.
+            try homePolicy(relative: relative, path: path) { false }
+        } else if refuseShallow, isShallowOutsideHome(path) {
+            throw CleanupPathError.tooBroad(path)
+        }
+    }
+
+    /// Top-level dot entries a home may offer for cleaning by themselves. Any
+    /// other one (`.aws`, `.zshrc`, `.claude`, `.gradle`...) holds
+    /// credentials or settings and is refused; what lies inside the folders in
+    /// `dotFolderChildren` is allowed only where the engine names a cache.
+    private static let topLevelDotCaches: Set<String> = [".npm", ".venv", ".tox", ".nox", ".stack-work"]
+
+    /// Folders that mix settings or credentials with caches: only these
+    /// children, the ones the engine's rules emit, may be cleaned.
+    private static let dotFolderChildren: [String: Set<String>] = [
+        ".claude": ["projects", "file-history", "debug"],
+        ".codex": ["sessions", "archived_sessions", "worktrees"],
+        ".gradle": ["caches", "wrapper", "daemon", "jdks", "workers", "kotlin-profile", "build-scan-data"],
+        ".cargo": ["registry", "git"],
+        ".m2": ["repository"],
+        ".ollama": ["models"],
+        ".rustup": ["toolchains", "downloads", "tmp"],
+    ]
+
+    /// Where package managers keep globally installed tools. A `lib/node_modules`
+    /// under one of these is the CLIs the user runs, not a project's packages.
+    static let systemPackageRoots = ["/opt/homebrew", "/usr/local"]
+
+    /// Whether `path` is, or is inside, a global `lib/node_modules` below one
+    /// of `roots`, in either volume spelling and any letter case.
+    static func isGlobalPackageFolder(_ path: String, roots: [String] = systemPackageRoots) -> Bool {
+        let components = componentsBelowDataRoot(path)
+        return roots.contains { root in
+            let prefix = Array((root as NSString).pathComponents.dropFirst())
+            guard components.count > prefix.count,
+                  zip(components, prefix).allSatisfy({ $0.caseInsensitiveCompare($1) == .orderedSame }) else { return false }
+            return containsLibNodeModules(components.dropFirst(prefix.count))
+        }
+    }
+
+    private static func containsLibNodeModules(_ components: ArraySlice<String>) -> Bool {
+        zip(components, components.dropFirst()).contains {
+            $0.caseInsensitiveCompare("lib") == .orderedSame && $1.caseInsensitiveCompare("node_modules") == .orderedSame
+        }
+    }
+
+    private static func globalPackagePolicy(_ path: String) throws {
+        if isGlobalPackageFolder(path) { throw CleanupPathError.protectedPath(path) }
+    }
+
+    /// Tool logins live in files named `token` or `stored_tokens` (Hugging Face
+    /// keeps them beside its cache). Under any `.cache`, a path that is one, is
+    /// inside one, or is a folder holding one directly is refused, whatever
+    /// the engine's rules said about it.
+    private static let tokenNames = ["token", "stored_tokens"]
+
+    private static func cacheTokenPolicy(_ path: String) throws {
+        let components = (path as NSString).pathComponents.dropFirst()
+        guard let cache = components.firstIndex(where: { $0.caseInsensitiveCompare(".cache") == .orderedSame }) else { return }
+        if components.dropFirst(cache - components.startIndex + 1).contains(where: { name in
+            tokenNames.contains { $0.caseInsensitiveCompare(name) == .orderedSame }
+        }) { throw CleanupPathError.protectedPath(path) }
+        for name in tokenNames {
+            var info = stat()
+            if lstat((path as NSString).appendingPathComponent(name), &info) == 0 {
+                throw CleanupPathError.protectedPath(path)
+            }
+        }
+    }
+
+    /// Whether `path` is in a folder whose contents the engine sorts one by
+    /// one instead of offering whole: any `.cache`, and the home's `.claude`,
+    /// `.codex`, `.gradle`, `.cargo`, `.m2`, `.ollama` and `.rustup`. A plan
+    /// naming such a path is honoured only inside a folder the scan recognised.
+    static func isInsideEngineContainer(_ path: String, home: String = NSHomeDirectory()) -> Bool {
+        let components = Array((path as NSString).pathComponents.dropFirst())
+        if components.contains(where: { $0.caseInsensitiveCompare(".cache") == .orderedSame }) { return true }
+        guard let h = try? normalize(home), let homeIdentity = try? identity(of: h),
+              let p = try? normalize(path),
+              let homePath = homeAlias(p, home: h, homeIdentity: homeIdentity),
+              let relative = relativePath(homePath, under: h),
+              let first = relative.split(separator: "/").first else { return false }
+        return dotFolderChildren.keys.contains { $0.caseInsensitiveCompare(String(first)) == .orderedSame }
+    }
+
+    /// The components of an absolute path, minus the `/System/Volumes/Data` prefix.
+    private static func componentsBelowDataRoot(_ path: String) -> [String] {
+        var components = Array((path as NSString).pathComponents.dropFirst())
+        let data = Array((dataRoot as NSString).pathComponents.dropFirst())
+        if components.count > data.count,
+           zip(components, data).allSatisfy({ $0.caseInsensitiveCompare($1) == .orderedSame }) {
+            components.removeFirst(data.count)
+        }
+        return components
+    }
+
+    /// `rest` of `/Users/<name>/rest` or `/Volumes/<disk>/Users/<name>/rest`
+    /// (either on the Data volume spelling): a home other than the user's.
+    /// "" for the home folder itself.
+    static func otherHomeRelative(_ path: String) -> String? {
+        var components = componentsBelowDataRoot(path)
+        if components.count >= 3, components[0].caseInsensitiveCompare("Volumes") == .orderedSame {
+            components.removeFirst(2)
+        }
+        guard components.count >= 2, components[0].caseInsensitiveCompare("Users") == .orderedSame else { return nil }
+        return components.dropFirst(2).joined(separator: "/")
+    }
+
+    /// A path at the top of a volume (`/Users/Shared`, `/Applications/Foo.app`,
+    /// `/Volumes/Disk/Photos`, `/opt/homebrew`): nothing a cleanup offers lives
+    /// there, outside the user's own home.
+    static func isShallowOutsideHome(_ path: String) -> Bool {
+        let components = componentsBelowDataRoot(path)
+        let stripped = components.count >= 3 && components[0].caseInsensitiveCompare("Volumes") == .orderedSame
+            ? Array(components.dropFirst(2)) : components
+        return stripped.count <= 2
+    }
+
+    /// The policy for a path inside a home, as the part below that home.
+    static func homePolicy(relative: String, path: String, isCodexChat: () -> Bool) throws {
+        let parts = relative.split(separator: "/").map(String.init)
+        if relative.isEmpty || (parts.count < 2 && !relative.hasPrefix(".")) {
             throw CleanupPathError.tooBroad(path)
         }
         if broadRelative.contains(where: { $0.caseInsensitiveCompare(relative) == .orderedSame }) {
@@ -436,7 +629,7 @@ nonisolated enum CleanupPathSafety {
             guard protectedMatch else { continue }
             let suffix = relative.caseInsensitiveCompare(protected) == .orderedSame
                 ? [] : relative.dropFirst(protected.count + 1).split(separator: "/")
-            if protected == "Documents", codexChat(homePath, home: home) != nil { continue }
+            if protected == "Documents", isCodexChat() { continue }
             if protected.caseInsensitiveCompare("Documents") == .orderedSame
                 || protected.caseInsensitiveCompare("Desktop") == .orderedSame {
                 guard suffix.count >= 2,
@@ -445,6 +638,25 @@ nonisolated enum CleanupPathSafety {
                 }
             } else {
                 throw CleanupPathError.protectedPath(path)
+            }
+        }
+        if let first = parts.first {
+            if parts.count >= 2,
+               let children = dotFolderChildren.first(where: { $0.key.caseInsensitiveCompare(first) == .orderedSame })?.value,
+               !children.contains(where: { $0.caseInsensitiveCompare(parts[1]) == .orderedSame }) {
+                throw CleanupPathError.protectedPath(path)
+            }
+            // Claude Code keeps its saved memory beside the transcripts.
+            if first.caseInsensitiveCompare(".claude") == .orderedSame,
+               parts.dropFirst().contains(where: { $0.caseInsensitiveCompare("memory") == .orderedSame }) {
+                throw CleanupPathError.protectedPath(path)
+            }
+            if first.caseInsensitiveCompare(".nvm") == .orderedSame, containsLibNodeModules(parts.dropFirst()) {
+                throw CleanupPathError.protectedPath(path)
+            }
+            if parts.count == 1, first.hasPrefix("."),
+               !topLevelDotCaches.contains(where: { $0.caseInsensitiveCompare(first) == .orderedSame }) {
+                throw CleanupPathError.tooBroad(path)
             }
         }
     }
@@ -471,16 +683,19 @@ nonisolated enum CleanupPathSafety {
     /// unused linked worktree. That verification runs at capture and again at
     /// every validation, so a worktree changed after planning is refused.
     private static func rejectGitPaths(_ path: String) throws -> WorktreeInfo? {
-        let components = (path as NSString).pathComponents
+        try rejectGitComponents(path)
+        let marker = (path as NSString).appendingPathComponent(".git")
+        return try rejectGitMarker(marker, worktree: path)
+    }
+
+    private static func rejectGitComponents(_ path: String) throws {
         var current = "/"
-        for component in components.dropFirst() {
+        for component in (path as NSString).pathComponents.dropFirst() {
             current = (current as NSString).appendingPathComponent(component)
             if component.caseInsensitiveCompare(".git") == .orderedSame {
                 throw CleanupPathError.gitPath(current)
             }
         }
-        let marker = (path as NSString).appendingPathComponent(".git")
-        return try rejectGitMarker(marker, worktree: path)
     }
 
     private static func rejectGitMarker(_ marker: String, worktree: String) throws -> WorktreeInfo? {

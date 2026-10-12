@@ -69,7 +69,16 @@ nonisolated enum AgentLocator {
     /// what its PATH is, falls back to the usual install locations, then
     /// checks each one is signed in.
     static func find() async -> AgentEnvironment {
-        await Task.detached(priority: .userInitiated) { locate() }.value
+        await onBackgroundThread { locate() }
+    }
+
+    /// Runs blocking work (a probe that waits on a child) on a dispatch
+    /// thread. A Task.detached would park one of the few cooperative
+    /// threads that search, types and Clean Up discovery share.
+    static func onBackgroundThread<T: Sendable>(_ work: @escaping @Sendable () -> T) async -> T {
+        await withCheckedContinuation { continuation in
+            DispatchQueue.global(qos: .userInitiated).async { continuation.resume(returning: work()) }
+        }
     }
 
     private static func locate() -> AgentEnvironment {
@@ -151,49 +160,17 @@ nonisolated enum AgentLocator {
     }
 
     /// `environment` replaces the whole environment; `envPath` only PATH.
+    /// For the synchronous probes (shell lookups, `security`, `simctl`). A
+    /// slow shell profile shouldn't hold the panel up, so a run that hit its
+    /// limit (or never started) reports nothing; a descendant that keeps the
+    /// pipe open costs at most the helper's drain grace and no thread.
     static func run(_ exe: String, _ args: [String], envPath: String? = nil,
                     environment: [String: String]? = nil, directory: URL? = nil, input: Data? = nil,
                     timeout: TimeInterval = 5) -> (out: String, status: Int32) {
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: exe)
-        process.arguments = args
-        if let environment {
-            process.environment = environment
-        } else if let envPath {
-            var environment = ProcessInfo.processInfo.environment
-            environment["PATH"] = envPath
-            process.environment = environment
-        }
-        if let directory { process.currentDirectoryURL = directory }
-        let out = Pipe()
-        process.standardOutput = out
-        process.standardError = FileHandle.nullDevice
-        let stdin = input.map { _ in Pipe() }
-        process.standardInput = stdin ?? FileHandle.nullDevice
-        guard (try? process.run()) != nil else { return ("", -1) }
-        if let stdin, let input {
-            // Closing stdin is what tells a stdio server to finish.
-            let writer = stdin.fileHandleForWriting
-            DispatchQueue.global(qos: .userInitiated).async {
-                try? writer.write(contentsOf: input)
-                try? writer.close()
-            }
-        }
-        // Read while it runs: output past the pipe's 64 KB would stall it.
-        let text = OutputText()
-        let read = DispatchGroup()
-        read.enter()
-        DispatchQueue.global(qos: .userInitiated).async {
-            text.set(out.fileHandleForReading.readDataToEndOfFile())
-            read.leave()
-        }
-        // A slow shell profile shouldn't hold the panel up.
-        let deadline = Date().addingTimeInterval(timeout)
-        while process.isRunning, Date() < deadline { usleep(20_000) }
-        if process.isRunning { process.terminate(); return ("", -1) }
-        // Something the shell left running may hold the pipe open; don't wait on it.
-        _ = read.wait(timeout: .now() + 1)
-        return (text.value, process.terminationStatus)
+        let spec = Subprocess.Spec(exe, args, environment: environment ?? envPath.map(Subprocess.environment(path:)),
+                                   directory: directory?.path, input: input.map { .data($0) } ?? .none)
+        let outcome = Subprocess.runBlocking(spec, stdout: .capture(cap: 8 << 20), timeout: timeout)
+        return outcome.finished ? (outcome.output, outcome.status) : ("", -1)
     }
 }
 
@@ -213,36 +190,59 @@ nonisolated final class OutputText: @unchecked Sendable {
 final class AgentSetup {
     enum Step: Equatable { case installing, signingIn, failed(String) }
 
+    /// What an install downloads and runs. An install that is not pinned to
+    /// a checksum is shown to the user, URL and exact command, and only runs
+    /// after they agree (`needsConfirmation`).
+    nonisolated struct InstallPlan: Sendable, Equatable {
+        let source: String
+        let script: String
+        let needsConfirmation: Bool
+    }
+
+    /// Anthropic's installer. It changes between releases, so no hash can be
+    /// pinned here; the URL is the only thing that is.
+    nonisolated static let claudeInstallerURL = "https://claude.ai/install.sh"
+
     let kind: AgentKind
     private(set) var step: Step
-    private var process: Process?
+    private var task: Task<Void, Never>?
     private var cancelled = false
 
+    /// `confirm` is asked before an unpinned installer runs; the default is
+    /// an alert (`installAlert`). Returning false installs nothing.
     init(kind: AgentKind, installed: InstalledAgent?, envPath: String,
+         confirm: @escaping @MainActor (InstallPlan) -> Bool = AgentSetup.askToInstall,
          done: @escaping (AgentEnvironment) -> Void) {
         self.kind = kind
-        guard let script = Self.installScript(kind) else {
+        guard let plan = Self.installPlan(kind) else {
             // ScanModel.setUp sends MANVI to Settings instead; never reached.
             step = .failed(String(localized: "Choose a model for MANVI in Settings → Model Providers."))
             return
         }
         step = installed == nil ? .installing : .signingIn
-        Task {
+        task = Task {
             var path = installed?.path
             if path == nil {
                 let target = NSHomeDirectory() + "/.local/bin/" + kind.rawValue
-                if let error = await shell(script) {
+                if plan.needsConfirmation, !confirm(plan) {
+                    step = .failed(String(localized: "Installation was cancelled. Nothing was downloaded or run."))
+                    return
+                }
+                if let error = await Self.runInstall(plan.script) {
                     if !cancelled { step = .failed("Couldn't install \(kind.name): \(error)") }
                     return
                 }
                 path = target
             }
             guard let path, !cancelled else { return }
-            if !AgentLocator.isSignedIn(kind, path: path, envPath: envPath) {
+            // The probe waits on the CLI for seconds; keep it off the main actor.
+            if await !AgentLocator.onBackgroundThread({ AgentLocator.isSignedIn(kind, path: path, envPath: envPath) }) {
+                guard !cancelled else { return }
                 step = .signingIn
                 // The CLI prints the authorize URL and opens a browser only when
                 // its stdout is a terminal. Read that URL and open it here; the
-                // CLI stays up until the sign-in comes back.
+                // CLI stays up until the sign-in comes back. Cancelling this
+                // task terminates the CLI.
                 let outcome = await AgentLogin.run(
                     executable: path,
                     arguments: kind == .claude ? ["auth", "login"] : ["login"],
@@ -250,11 +250,9 @@ final class AgentSetup {
                     currentDirectory: NSHomeDirectory(),
                     open: { url in
                         Task { @MainActor in NSWorkspace.shared.open(url) }
-                    },
-                    onStart: { self.process = $0 })
-                self.process = nil
+                    })
                 guard !cancelled else { return }
-                if !AgentLocator.isSignedIn(kind, path: path, envPath: envPath) {
+                if await !AgentLocator.onBackgroundThread({ AgentLocator.isSignedIn(kind, path: path, envPath: envPath) }) {
                     if let detail = outcome.detail {
                         step = .failed("Sign-in didn't finish (\(detail)). Try again.")
                     } else {
@@ -263,23 +261,24 @@ final class AgentSetup {
                     return
                 }
             }
+            guard !cancelled else { return }
             done(await AgentLocator.find())
         }
     }
 
     func cancel() {
         cancelled = true
-        process?.terminate()
+        task?.cancel()
     }
 
     /// Nil for an agent BlitzTree does not install (`installable`).
-    private static func installScript(_ kind: AgentKind) -> String? {
+    nonisolated static func installPlan(_ kind: AgentKind) -> InstallPlan? {
         switch kind {
         case .manvi:
             return nil
         case .claude:
-            // Anthropic's own installer: everything under ~/.local, no sudo.
-            return "curl -fsSL https://claude.ai/install.sh | bash"
+            return InstallPlan(source: claudeInstallerURL, script: claudeInstallScript(url: claudeInstallerURL),
+                               needsConfirmation: true)
         case .codex:
             // OpenAI's standalone build: no Node needed. The version and its
             // SHA-256 are pinned so a new upstream release cannot change what
@@ -287,7 +286,7 @@ final class AgentSetup {
             // wanted release tag (github.com/openai/codex/releases), download
             // the codex-aarch64-apple-darwin.tar.gz of that release once,
             // run `shasum -a 256` on it, and paste the hash below.
-            return """
+            let script = """
             set -e; t=$(mktemp -d); mkdir -p "$HOME/.local/bin"
             VER="0.157.1"
             URL="https://github.com/openai/codex/releases/download/rust-v$VER/codex-aarch64-apple-darwin.tar.gz"
@@ -297,38 +296,53 @@ final class AgentSetup {
             tar -xzf "$t/codex.tar.gz" -C "$t"
             mv "$t/codex-aarch64-apple-darwin" "$HOME/.local/bin/codex"; rm -rf "$t"
             """
+            return InstallPlan(source: "https://github.com/openai/codex/releases", script: script,
+                               needsConfirmation: false)
         }
     }
 
-    /// Runs a script; returns the last error line on failure.
-    private func shell(_ script: String) async -> String? {
-        await exec("/bin/bash", ["-c", script], envPath: "/usr/bin:/bin:/usr/sbin:/sbin")
+    /// Anthropic's own installer (everything under ~/.local, no sudo),
+    /// downloaded to a temporary file first and run only if the download
+    /// succeeded. Piping curl into bash would run whatever prefix of a
+    /// broken download arrived and report the shell's exit status, not curl's.
+    nonisolated static func claudeInstallScript(url: String) -> String {
+        """
+        set -e; t=$(mktemp -d); trap 'rm -rf "$t"' EXIT
+        curl -fsSL "\(url)" -o "$t/install.sh"
+        [ -s "$t/install.sh" ] || { echo "The installer download was empty; nothing was run." >&2; exit 1; }
+        bash "$t/install.sh"
+        """
     }
 
-    private func exec(_ exe: String, _ args: [String], envPath: String) async -> String? {
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: exe)
-        process.arguments = args
-        var environment = ProcessInfo.processInfo.environment
-        environment["PATH"] = envPath
-        process.environment = environment
-        process.currentDirectoryURL = URL(fileURLWithPath: NSHomeDirectory())
-        process.standardInput = FileHandle.nullDevice
-        process.standardOutput = FileHandle.nullDevice
-        let err = Pipe()
-        process.standardError = err
+    /// The question asked before an unpinned installer runs. Cancel is the
+    /// default button.
+    static func installAlert(_ plan: InstallPlan) -> NSAlert {
+        let alert = NSAlert()
+        alert.alertStyle = .warning
+        alert.messageText = String(localized: "Run the Claude Code installer?")
+        alert.informativeText = String(localized: "BlitzTree will download \(plan.source) and run it with bash, as you. It is Anthropic's own installer, but it isn't pinned to a checksum and can change between releases. This is the exact command:\n\n\(plan.script)")
+        alert.addButton(withTitle: String(localized: "Cancel"))
+        alert.addButton(withTitle: String(localized: "Download and Run"))
+        return alert
+    }
+
+    static func askToInstall(_ plan: InstallPlan) -> Bool {
+        installAlert(plan).runModal() == .alertSecondButtonReturn
+    }
+
+    /// Runs an install script; returns the last error line on failure. Bounded
+    /// (a stalled download is cut off) and cancellable with the calling task.
+    nonisolated static func runInstall(_ script: String, timeout: TimeInterval = 600) async -> String? {
         let tail = ErrTail()
-        err.fileHandleForReading.readabilityHandler = { handle in
-            let data = handle.availableData
-            if data.isEmpty { handle.readabilityHandler = nil } else { tail.feed(data) }
-        }
-        do { try process.run() } catch { return error.localizedDescription }
-        self.process = process
-        await withCheckedContinuation { (c: CheckedContinuation<Void, Never>) in
-            DispatchQueue.global().async { process.waitUntilExit(); c.resume() }
-        }
-        self.process = nil
-        return process.terminationStatus == 0 ? nil : (tail.last.isEmpty ? "exit \(process.terminationStatus)" : tail.last)
+        let spec = Subprocess.Spec("/bin/bash", ["-c", script],
+                                   environment: Subprocess.environment(path: "/usr/bin:/bin:/usr/sbin:/sbin"),
+                                   directory: NSHomeDirectory())
+        let outcome = await Subprocess.run(spec, stdout: .discard, stderr: .stream { tail.feed($0) }, timeout: timeout)
+        if let error = outcome.launchError { return error }
+        if outcome.cancelled { return "cancelled" }
+        if outcome.timedOut { return "timed out after \(Int(timeout)) seconds" }
+        guard outcome.status != 0 else { return nil }
+        return tail.last.isEmpty ? "exit \(outcome.status)" : tail.last
     }
 }
 
@@ -366,7 +380,7 @@ nonisolated struct AgentFocus: Sendable, Equatable {
         } else {
             do {
                 let root = CleanupPathSafety.plannerRoot(for: tree.path(node), home: home)
-                _ = try CleanupPathSafety.capture(path: tree.path(node), root: root, home: home)
+                _ = try CleanupPathSafety.capture(path: tree.path(node), root: root, home: home, check: .policyOnly)
                 // A scratchpad's session check ran in the capture above.
                 let recent = root == home && CleanupGuard.recentlyUsed(path)
                 local = recent ? "In a project used in the last 2 days" : nil
@@ -433,9 +447,9 @@ final class PlanItem: Identifiable {
                     // cannot redirect a cache command into arbitrary deletion.
                     if asked.isEmpty { asked = [expected] }
                     do {
-                        let target = try CleanupPathSafety.capture(path: expected, root: home, home: home)
+                        let target = try CleanupPathSafety.capture(path: expected, root: home, home: home, check: .policyOnly)
                         let supplied = try asked.map {
-                            try CleanupPathSafety.capture(path: $0, root: home, home: home).identity
+                            try CleanupPathSafety.capture(path: $0, root: home, home: home, check: .policyOnly).identity
                         }
                         guard Set(supplied) == [target.identity] else {
                             throw CleanupOperations.failure(String(localized: "The supplied paths do not match this tool's cache"))
@@ -550,7 +564,7 @@ final class AgentRun {
     /// The route the MANVI process running now uses.
     var route: Manvi.Route? { routes.indices.contains(routeIndex) ? routes[routeIndex] : nil }
 
-    private var process: Process?
+    private var job: Subprocess.Job?
     private let scanRoot: String
     private let tree: Tree
     private let onFinish: () -> Void
@@ -579,10 +593,11 @@ final class AgentRun {
             .compactMap { app in app.localizedName.map { "\($0) (\(app.bundleIdentifier ?? "?"))" } }
         preparationTask = Task { [weak self] in
             guard !Task.isCancelled else { return }
-            let input = await Task.detached(priority: .userInitiated) {
+            // appData waits on `simctl`; a dispatch thread, not a cooperative one.
+            let input = await AgentLocator.onBackgroundThread {
                 AgentPrompt.build(tree: tree, scanRoot: scanRoot, known: known, running: running, focus: focus)
                 + AgentPrompt.appData(tree: tree, focus: focus?.path)
-            }.value
+            }
             // Closing or replacing a run while its prompt was being built
             // must not launch an agent after cancellation.
             guard !Task.isCancelled, let self else { return }
@@ -633,8 +648,8 @@ final class AgentRun {
         launch += 1
         preparationTask?.cancel()
         preparationTask = nil
-        process?.terminate()
-        process = nil
+        job?.terminate()
+        job = nil
         planClient?.cancel()
         planClient = nil
     }
@@ -662,17 +677,14 @@ final class AgentRun {
             .appendingPathComponent("BlitzTree", isDirectory: true)
         try? FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
 
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: agent.path)
         // An empty working folder: no project settings, hooks or memory load.
-        process.currentDirectoryURL = folder
-        var environment = ProcessInfo.processInfo.environment
-        environment["PATH"] = env.path
-        process.environment = environment
+        var directory = folder
+        var environment = Subprocess.environment(path: env.path)
+        let arguments: [String]
 
         switch agent.kind {
         case .claude:
-            process.arguments = [
+            arguments = [
                 "-p", "--setting-sources", "project", "--output-format", "stream-json", "--verbose",
                 "--include-partial-messages", "--model", Self.claudeModel, "--effort", "low",
                 "--tools", "Bash,Read", "--permission-mode", "dontAsk", "--no-session-persistence",
@@ -683,29 +695,32 @@ final class AgentRun {
         case .codex:
             // The app server, not `codex exec`: only it streams the answer as
             // it is written, so cards can appear one by one.
-            process.arguments = ["app-server"]
+            arguments = ["app-server"]
         case .manvi:
             // `manvi serve` never calls a model; `run --json` streams the
             // turn as NDJSON events. Strict posture, empty folder, pinned
             // environment: see Manvi.environment.
             guard let route else { return }
-            process.arguments = Manvi.runArguments(fallbackAfter: routeIndex + 1 < routes.count)
-            process.currentDirectoryURL = Manvi.prepared().work
-            process.environment = Manvi.environment(base: ProcessInfo.processInfo.environment,
-                                                    path: env.path, shell: env.shell, route: route)
+            arguments = Manvi.runArguments(fallbackAfter: routeIndex + 1 < routes.count)
+            directory = Manvi.prepared().work
+            environment = Manvi.environment(base: ProcessInfo.processInfo.environment,
+                                            path: env.path, shell: env.shell, route: route)
             Manvi.pruneSessions()
         }
 
-        let stdin = Pipe(), stdout = Pipe(), stderr = Pipe()
-        process.standardInput = stdin
-        process.standardOutput = stdout
-        process.standardError = stderr
+        // Codex is spoken to over stdin for the whole run; the others get the
+        // prompt once and then end of input.
+        let prompt = Data((agent.kind == .manvi ? input + Manvi.promptSuffix : input).utf8)
+        let spec = Subprocess.Spec(agent.path, arguments, environment: environment, directory: directory.path,
+                                   input: agent.kind == .codex ? .open : .data(prompt))
 
+        // The reader writes back through the job it is read from.
+        let jobRef = JobRef()
+        let errTail = ErrTail()
         // Main queue, not Tasks: events must land in the order they were read.
-        let writer = stdin.fileHandleForWriting
         let reader = AgentStreamReader(kind: agent.kind, prompt: input, folder: folder.path,
-                                       write: { data in try? writer.write(contentsOf: data) },
-                                       done: { [weak process] in process?.terminate() }) { [weak self] event in
+                                       write: { jobRef.job?.write($0) },
+                                       done: { jobRef.job?.terminate() }) { [weak self] event in
             DispatchQueue.main.async {
                 MainActor.assumeIsolated {
                     guard let self, self.launch == generation else { return }
@@ -714,47 +729,30 @@ final class AgentRun {
             }
         }
         // The run ends once the process has exited and all its output is read.
-        let ended = DispatchGroup()
-        ended.enter(); ended.enter()
-        stdout.fileHandleForReading.readabilityHandler = { handle in
-            let data = handle.availableData
-            if data.isEmpty {
-                handle.readabilityHandler = nil
-                ended.leave()
-            } else {
-                reader.feed(data)
-            }
-        }
-        let errTail = ErrTail()
-        stderr.fileHandleForReading.readabilityHandler = { handle in
-            let data = handle.availableData
-            if data.isEmpty { handle.readabilityHandler = nil } else { errTail.feed(data) }
-        }
-        process.terminationHandler = { _ in ended.leave() }
-        ended.notify(queue: .main) { [weak self] in
-            let status = process.terminationStatus
+        let job = Subprocess.Job(spec, stdout: .stream { reader.feed($0) }, stderr: .stream { errTail.feed($0) })
+        jobRef.job = job
+        job.onFinish = { [weak self] outcome in
             let tail = errTail.last
-            MainActor.assumeIsolated {
-                guard let self, self.launch == generation else { return }
-                self.processEnded(status: status, stderr: tail)
+            DispatchQueue.main.async {
+                MainActor.assumeIsolated {
+                    guard let self, self.launch == generation else { return }
+                    self.processEnded(status: outcome.status, stderr: tail)
+                }
             }
         }
         do {
-            try process.run()
+            try job.start()
         } catch {
-            phase = .failed("Couldn't start \(displayName): \(error.localizedDescription)")
+            phase = .failed("Couldn't start \(displayName): \(job.failure(error).launchError ?? error.localizedDescription)")
             return
         }
-        self.process = process
-        if agent.kind != .codex {
-            let data = Data((agent.kind == .manvi ? input + Manvi.promptSuffix : input).utf8)
-            DispatchQueue.global(qos: .userInitiated).async {
-                try? writer.write(contentsOf: data)
-                try? writer.close()
-            }
-        } else {
-            reader.begin()
-        }
+        self.job = job
+        if agent.kind == .codex { reader.begin() }
+    }
+
+    /// Lets the stream reader reach the job it feeds from.
+    private nonisolated final class JobRef: @unchecked Sendable {
+        weak var job: Subprocess.Job?
     }
 
     /// Custom provider: stream the plan over HTTP. No process, no PATH, no
@@ -827,7 +825,7 @@ final class AgentRun {
     }
 
     private func processEnded(status: Int32, stderr: String) {
-        process = nil
+        job = nil
         guard phase == .thinking, !cancelled else { return }
         if !items.isEmpty {
             finishPlanning()
@@ -975,47 +973,35 @@ final class AgentRun {
     }
 
     /// Runs a vetted cleanup command; returns an error message on failure.
-    nonisolated static func runCommand(_ command: String, path: String) async -> String? {
-        await Task.detached(priority: .userInitiated) {
-            guard let vetted = CleanupCommand.parse(command) else { return "Command or arguments not allowed" }
-            let executable = path.split(separator: ":", omittingEmptySubsequences: false)
-                .filter { $0.hasPrefix("/") }
-                .map { URL(fileURLWithPath: String($0)).appendingPathComponent(vetted.executable) }
-                .first { FileManager.default.isExecutableFile(atPath: $0.path) }
-            guard let executable else { return "Cleanup tool not found in an absolute PATH directory" }
-            let process = Process()
-            process.executableURL = executable
-            process.arguments = vetted.arguments
-            var environment = ProcessInfo.processInfo.environment
-            environment["PATH"] = path
-            process.environment = environment
-            // Some tools only run inside a project (`bun pm cache rm` wants a
-            // package.json), so they run in an empty stand-in one.
-            let folder = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
-                .appendingPathComponent("BlitzTree/tools", isDirectory: true)
-            try? FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
-            let manifest = folder.appendingPathComponent("package.json")
-            if !FileManager.default.fileExists(atPath: manifest.path) {
-                try? #"{"name":"blitztree-cleanup","private":true}"#.write(to: manifest, atomically: true, encoding: .utf8)
-            }
-            process.currentDirectoryURL = folder
-            process.standardInput = FileHandle.nullDevice
-            // Read as it comes: a chatty tool must never fill the pipe and stall.
-            let err = Pipe()
-            let tail = ErrTail()
-            err.fileHandleForReading.readabilityHandler = { handle in
-                let data = handle.availableData
-                if data.isEmpty { handle.readabilityHandler = nil } else { tail.feed(data) }
-            }
-            process.standardError = err
-            process.standardOutput = FileHandle.nullDevice
-            do { try process.run() } catch { return error.localizedDescription }
-            let deadline = Date().addingTimeInterval(600)
-            while process.isRunning, Date() < deadline { usleep(50_000) }
-            if process.isRunning { process.terminate(); return "Took too long" }
-            guard process.terminationStatus != 0 else { return nil }
-            return tail.last.isEmpty ? "Exited with \(process.terminationStatus)" : tail.last
-        }.value
+    /// Waits without holding a thread (so a dozen of them at once cannot
+    /// use up the concurrency pool), gives up after `timeout`, and when the
+    /// calling task is cancelled terminates the tool and waits for it to exit.
+    nonisolated static func runCommand(_ command: String, path: String, timeout: TimeInterval = 600) async -> String? {
+        guard let vetted = CleanupCommand.parse(command) else { return "Command or arguments not allowed" }
+        let executable = path.split(separator: ":", omittingEmptySubsequences: false)
+            .filter { $0.hasPrefix("/") }
+            .map { URL(fileURLWithPath: String($0)).appendingPathComponent(vetted.executable) }
+            .first { FileManager.default.isExecutableFile(atPath: $0.path) }
+        guard let executable else { return "Cleanup tool not found in an absolute PATH directory" }
+        // Some tools only run inside a project (`bun pm cache rm` wants a
+        // package.json), so they run in an empty stand-in one.
+        let folder = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent("BlitzTree/tools", isDirectory: true)
+        try? FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        let manifest = folder.appendingPathComponent("package.json")
+        if !FileManager.default.fileExists(atPath: manifest.path) {
+            try? #"{"name":"blitztree-cleanup","private":true}"#.write(to: manifest, atomically: true, encoding: .utf8)
+        }
+        // Read as it comes: a chatty tool must never fill the pipe and stall.
+        let tail = ErrTail()
+        let spec = Subprocess.Spec(executable.path, vetted.arguments, environment: Subprocess.environment(path: path),
+                                   directory: folder.path)
+        let outcome = await Subprocess.run(spec, stdout: .discard, stderr: .stream { tail.feed($0) }, timeout: timeout)
+        if let error = outcome.launchError { return error }
+        if outcome.timedOut { return "Took too long" }
+        if outcome.cancelled { return "Cancelled" }
+        guard outcome.status != 0 else { return nil }
+        return tail.last.isEmpty ? "Exited with \(outcome.status)" : tail.last
     }
 }
 

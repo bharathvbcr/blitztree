@@ -346,7 +346,7 @@ struct AgentPerformance {
         model.tree = tree
         model.agentEnv = AgentEnvironment(agents: [agent], loaded: true)
         let batch = model.cleanupTrash
-        var selected = (0..<10).map { CleanupItem(node: $0, path: "/offline/\($0)", display: "item-\($0)", kind: "fixture", bytes: 1) }
+        var selected = (0..<10).map { CleanupItem(node: $0, path: "/offline/\($0)", display: "item-\($0)", kind: "fixture", bytes: 1, verify: "") }
         var completions = 0
         var failures: [String] = []
         AgentBenchmarkGate.shared.arm()
@@ -377,7 +377,7 @@ struct AgentPerformance {
         await Task.yield()
         let retainedFailures = ["item-2: injected failure", "item-7: injected failure"]
         check(model.cleanupTrash.failures == retainedFailures, "Closing the panel lost cleanup failures")
-        let successfulTask = batch.start([CleanupItem(node: 10, path: "/offline/10", display: "item-10", kind: "fixture", bytes: 1)]) { _, result in
+        let successfulTask = batch.start([CleanupItem(node: 10, path: "/offline/10", display: "item-10", kind: "fixture", bytes: 1, verify: "")]) { _, result in
             check(result.isEmpty, "A successful batch inherited an earlier batch's callback failures")
         }!
         await successfulTask.value

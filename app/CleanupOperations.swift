@@ -39,6 +39,9 @@ nonisolated enum CleanupOperations {
     }
 
     /// Both manual and agent cleanup use this boundary, immediately before I/O.
+    /// Revalidating the target runs the path policy and the check the engine's
+    /// rule names for it (cache tag, recent activity, worktree...), so no caller
+    /// can skip either.
     static func trash(_ target: CleanupTarget,
                       move: (URL) throws -> URL = systemTrash) throws -> CleanupReceipt {
         // A linked worktree is re-verified here (clean, unused, nothing

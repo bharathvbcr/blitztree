@@ -1,11 +1,20 @@
 //! C ABI for the Swift UI. A scan runs on background threads; the UI polls
 //! progress counters, then receives the finished tree as flat arrays
 //! (zero-copy: Swift reads the buffers in place until bz_free).
+//!
+//! Nothing here may unwind into C: a panic inside an `extern "C"` fn aborts
+//! the process. Entry points that compute (`guarded`) catch it and return
+//! their NULL/zero answer; the rest only null-check and read. Locks tolerate
+//! poisoning, and a scan that panicked still finishes, with no tree.
 
-use std::ffi::{c_char, c_int, CStr, CString};
-use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
+use std::any::Any;
+use std::ffi::{c_char, c_int, CStr, CString, OsStr};
+use std::io::Write;
+use std::os::unix::ffi::OsStrExt;
+use std::panic::{catch_unwind, AssertUnwindSafe};
+use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
 use crate::types::Breakdown;
 use crate::{cleanup, ranking, scan, Progress, Tree};
@@ -13,7 +22,8 @@ use crate::{cleanup, ranking, scan, Progress, Tree};
 pub struct BzScan {
     progress: Arc<Progress>,
     done: Arc<AtomicBool>,
-    result: Arc<std::sync::Mutex<Option<Flat>>>,
+    /// The scan thread's outcome: the tree, or why there is none (a panic).
+    result: Arc<Mutex<Option<Result<Flat, String>>>>,
     // Kept alive for the lifetime of the handle; Swift holds raw pointers in.
     flat: Option<Box<Flat>>,
 }
@@ -39,46 +49,97 @@ fn with_cleanup(tree: Tree, anchors: &cleanup::Anchors) -> Flat {
     }
 }
 
-/// Start a scan on background threads. Returns a handle immediately.
-#[no_mangle]
-pub extern "C" fn bz_scan_start(path: *const c_char) -> *mut BzScan {
-    let path = unsafe { CStr::from_ptr(path) };
-    let path = PathBuf::from(String::from_utf8_lossy(path.to_bytes()).into_owned());
-
-    let progress = Arc::new(Progress::default());
-    let done = Arc::new(AtomicBool::new(false));
-    let result = Arc::new(std::sync::Mutex::new(None));
-
-    {
-        let progress = progress.clone();
-        let done = done.clone();
-        let result = result.clone();
-        std::thread::spawn(move || {
-            unsafe { crate::set_thread_qos_user_interactive() };
-            let t0 = std::time::Instant::now();
-            let tree = scan(&path, &progress);
-            let t1 = std::time::Instant::now();
-            let flat = with_cleanup(tree, &cleanup::Anchors::from_env());
-            if std::env::var_os("BZ_TIMING").is_some() {
-                eprintln!(
-                    "[bz] scan {:.3}s  cleanup {:.1}ms",
-                    (t1 - t0).as_secs_f64(),
-                    t1.elapsed().as_secs_f64() * 1e3
-                );
-            }
-            *result.lock().unwrap() = Some(flat);
-            done.store(true, Ordering::Release);
-        });
-    }
-
-    Box::into_raw(Box::new(BzScan {
-        progress,
-        done,
-        result,
-        flat: None,
-    }))
+/// A lock that a panicked holder left poisoned is still taken: every value
+/// behind one here is replaced or read whole, never left half-built.
+fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
+    m.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
+fn panic_message(payload: &(dyn Any + Send)) -> String {
+    payload
+        .downcast_ref::<&str>()
+        .map(|s| s.to_string())
+        .or_else(|| payload.downcast_ref::<String>().cloned())
+        .unwrap_or_else(|| "unknown panic".into())
+}
+
+/// Run an entry point's work so that a panic returns `fallback` instead of
+/// unwinding into C.
+fn guarded<T>(fallback: T, work: impl FnOnce() -> T) -> T {
+    catch_unwind(AssertUnwindSafe(work)).unwrap_or_else(|payload| {
+        // Not eprintln!: it panics when stderr is closed, and this runs
+        // outside the catch.
+        let _ = writeln!(std::io::stderr(), "[bz] internal error: {}", panic_message(&*payload));
+        fallback
+    })
+}
+
+/// The path a scan reads: the caller's bytes exactly (not necessarily UTF-8).
+/// None for an empty path.
+fn scan_path(bytes: &[u8]) -> Option<PathBuf> {
+    (!bytes.is_empty()).then(|| PathBuf::from(OsStr::from_bytes(bytes)))
+}
+
+/// What the scan thread runs: the walk, then Clean Up's candidates.
+fn run_scan(path: &Path, progress: &Progress) -> Flat {
+    let t0 = std::time::Instant::now();
+    let tree = scan(path, progress);
+    let t1 = std::time::Instant::now();
+    let flat = with_cleanup(tree, &cleanup::Anchors::from_env());
+    if std::env::var_os("BZ_TIMING").is_some() {
+        eprintln!(
+            "[bz] scan {:.3}s  cleanup {:.1}ms",
+            (t1 - t0).as_secs_f64(),
+            t1.elapsed().as_secs_f64() * 1e3
+        );
+    }
+    flat
+}
+
+/// Start a scan on background threads. Returns a handle immediately; the
+/// scan always ends with `done` set, and with no tree if it panicked. NULL
+/// for a NULL or empty path, or when the thread cannot be started.
+#[no_mangle]
+pub extern "C" fn bz_scan_start(path: *const c_char) -> *mut BzScan {
+    guarded(std::ptr::null_mut(), || {
+        if path.is_null() {
+            return std::ptr::null_mut();
+        }
+        let Some(path) = scan_path(unsafe { CStr::from_ptr(path) }.to_bytes()) else {
+            return std::ptr::null_mut();
+        };
+
+        let progress = Arc::new(Progress::default());
+        let done = Arc::new(AtomicBool::new(false));
+        let result = Arc::new(Mutex::new(None));
+
+        let spawned = {
+            let progress = progress.clone();
+            let done = done.clone();
+            let result = result.clone();
+            std::thread::Builder::new().spawn(move || {
+                unsafe { crate::set_thread_qos_user_interactive() };
+                let outcome = catch_unwind(AssertUnwindSafe(|| run_scan(&path, &progress)))
+                    .map_err(|payload| panic_message(&*payload));
+                *lock(&result) = Some(outcome);
+                done.store(true, Ordering::Release);
+            })
+        };
+        if spawned.is_err() {
+            return std::ptr::null_mut();
+        }
+
+        Box::into_raw(Box::new(BzScan {
+            progress,
+            done,
+            result,
+            flat: None,
+        }))
+    })
+}
+
+/// A NULL handle reports done with zero counters, so a poller stops. A NULL
+/// output pointer is skipped.
 #[no_mangle]
 pub extern "C" fn bz_progress(
     h: *mut BzScan,
@@ -87,34 +148,49 @@ pub extern "C" fn bz_progress(
     bytes: *mut u64,
     done: *mut c_int,
 ) {
-    let h = unsafe { &mut *h };
+    let h = unsafe { h.as_ref() };
+    let count = |pick: fn(&Progress) -> &AtomicU64| h.map_or(0, |h| pick(&h.progress).load(Ordering::Relaxed));
     unsafe {
-        *files = h.progress.files.load(Ordering::Relaxed);
-        *dirs = h.progress.dirs.load(Ordering::Relaxed);
-        *bytes = h.progress.bytes.load(Ordering::Relaxed);
-        *done = h.done.load(Ordering::Acquire) as c_int;
+        if let Some(files) = files.as_mut() {
+            *files = count(|p| &p.files);
+        }
+        if let Some(dirs) = dirs.as_mut() {
+            *dirs = count(|p| &p.dirs);
+        }
+        if let Some(bytes) = bytes.as_mut() {
+            *bytes = count(|p| &p.bytes);
+        }
+        if let Some(done) = done.as_mut() {
+            *done = h.is_none_or(|h| h.done.load(Ordering::Acquire)) as c_int;
+        }
     }
 }
 
-/// After done: materialize the flat tree in the handle. Returns node count.
+/// After done: materialize the flat tree in the handle. Returns node count;
+/// 0 for a NULL handle, a scan not yet done, or a scan that failed.
 #[no_mangle]
 pub extern "C" fn bz_take_tree(h: *mut BzScan) -> u64 {
-    let h = unsafe { &mut *h };
-    if h.flat.is_none() {
-        if let Some(f) = h.result.lock().unwrap().take() {
-            h.flat = Some(Box::new(f));
+    guarded(0, || {
+        let Some(h) = (unsafe { h.as_mut() }) else {
+            return 0;
+        };
+        if h.flat.is_none() {
+            match lock(&h.result).take() {
+                Some(Ok(f)) => h.flat = Some(Box::new(f)),
+                Some(Err(why)) => eprintln!("[bz] scan failed: {why}"),
+                None => {}
+            }
         }
-    }
-    h.flat.as_ref().map_or(0, |f| f.tree.len() as u64)
+        h.flat.as_ref().map_or(0, |f| f.tree.len() as u64)
+    })
 }
 
 macro_rules! getter {
     ($name:ident, $field:ident, $ty:ty) => {
         #[no_mangle]
         pub extern "C" fn $name(h: *mut BzScan) -> *const $ty {
-            let h = unsafe { &*h };
-            h.flat
-                .as_ref()
+            unsafe { h.as_ref() }
+                .and_then(|h| h.flat.as_ref())
                 .map_or(std::ptr::null(), |f| f.tree.$field.as_ptr())
         }
     };
@@ -130,35 +206,37 @@ getter!(bz_children, children, u32);
 getter!(bz_name_off, name_off, u32);
 getter!(bz_name_blob, name_blob, u8);
 
+/// The taken tree of a handle; None for a NULL handle or before `bz_take_tree`.
+///
 /// # Safety
-/// `h` must be a live scan handle, with no concurrent mutation or free.
-#[no_mangle]
-pub unsafe extern "C" fn bz_cleanup_count(h: *mut BzScan) -> u64 {
-    let h = unsafe { &*h };
-    h.flat.as_ref().map_or(0, |f| f.cleanup_nodes.len() as u64)
+/// `h` must be NULL or a live scan handle, with no concurrent mutation or free.
+unsafe fn flat_of<'a>(h: *mut BzScan) -> Option<&'a Flat> {
+    unsafe { h.as_ref() }?.flat.as_deref()
 }
 
 /// # Safety
-/// `h` must be a live scan handle, with no concurrent mutation or free.
+/// `h` must be NULL or a live scan handle, with no concurrent mutation or free.
+#[no_mangle]
+pub unsafe extern "C" fn bz_cleanup_count(h: *mut BzScan) -> u64 {
+    unsafe { flat_of(h) }.map_or(0, |f| f.cleanup_nodes.len() as u64)
+}
+
+/// # Safety
+/// `h` must be NULL or a live scan handle, with no concurrent mutation or free.
 /// Read at most `bz_cleanup_count(h)` elements, before `bz_free(h)`.
 #[no_mangle]
 pub unsafe extern "C" fn bz_cleanup_nodes(h: *mut BzScan) -> *const u32 {
-    let h = unsafe { &*h };
-    h.flat
-        .as_ref()
-        .map_or(std::ptr::null(), |f| f.cleanup_nodes.as_ptr())
+    unsafe { flat_of(h) }.map_or(std::ptr::null(), |f| f.cleanup_nodes.as_ptr())
 }
 
 /// Label at a candidate-list index (not a tree node index), valid until bz_free.
 ///
 /// # Safety
-/// `h` must be a live scan handle, with no concurrent mutation or free.
+/// `h` must be NULL or a live scan handle, with no concurrent mutation or free.
 #[no_mangle]
 pub unsafe extern "C" fn bz_cleanup_description(h: *mut BzScan, index: u64) -> *const c_char {
-    let h = unsafe { &*h };
-    h.flat
-        .as_ref()
-        .and_then(|f| f.cleanup_descriptions.get(index as usize))
+    unsafe { flat_of(h) }
+        .and_then(|f| f.cleanup_descriptions.get(usize::try_from(index).ok()?))
         .map_or(std::ptr::null(), |s| s.as_ptr())
 }
 
@@ -171,18 +249,16 @@ pub struct BzLargest {
 /// Returns NULL without a finished scan.
 #[no_mangle]
 pub extern "C" fn bz_largest_files(h: *mut BzScan, limit: u32, min_bytes: u64) -> *mut BzLargest {
-    if h.is_null() {
-        return std::ptr::null_mut();
-    }
-    let h = unsafe { &*h };
-    let Some(flat) = h.flat.as_ref() else {
-        return std::ptr::null_mut();
-    };
-    let nodes = ranking::largest_files(&flat.tree, min_bytes, limit as usize)
-        .into_iter()
-        .map(|i| i as u32)
-        .collect();
-    Box::into_raw(Box::new(BzLargest { nodes }))
+    guarded(std::ptr::null_mut(), || {
+        let Some(flat) = (unsafe { flat_of(h) }) else {
+            return std::ptr::null_mut();
+        };
+        let nodes = ranking::largest_files(&flat.tree, min_bytes, limit as usize)
+            .into_iter()
+            .map(|i| i as u32)
+            .collect();
+        Box::into_raw(Box::new(BzLargest { nodes }))
+    })
 }
 
 #[no_mangle]
@@ -219,29 +295,29 @@ pub extern "C" fn bz_largest_free(l: *mut BzLargest) {
 /// to `count` readable `u32`s (or be NULL with a zero count).
 #[no_mangle]
 pub unsafe extern "C" fn bz_remove(h: *mut BzScan, nodes: *const u32, count: u32) -> *mut BzScan {
-    if h.is_null() || (nodes.is_null() && count > 0) {
-        return std::ptr::null_mut();
-    }
-    let h = unsafe { &*h };
-    let Some(flat) = h.flat.as_ref() else {
-        return std::ptr::null_mut();
-    };
-    let nodes = if count == 0 { &[][..] } else { unsafe { std::slice::from_raw_parts(nodes, count as usize) } };
-    Box::into_raw(Box::new(BzScan {
-        // Its own counters, all zero: no walk ran for it, and sharing the
-        // scan's would report the totals from before the removal.
-        progress: Arc::new(Progress::default()),
-        done: Arc::new(AtomicBool::new(true)),
-        result: Arc::new(std::sync::Mutex::new(None)),
-        flat: Some(Box::new(with_cleanup(flat.tree.without(nodes), &cleanup::Anchors::from_env()))),
-    }))
+    guarded(std::ptr::null_mut(), || {
+        if nodes.is_null() && count > 0 {
+            return std::ptr::null_mut();
+        }
+        let Some(flat) = (unsafe { flat_of(h) }) else {
+            return std::ptr::null_mut();
+        };
+        let nodes = if count == 0 { &[][..] } else { unsafe { std::slice::from_raw_parts(nodes, count as usize) } };
+        Box::into_raw(Box::new(BzScan {
+            // Its own counters, all zero: no walk ran for it, and sharing the
+            // scan's would report the totals from before the removal.
+            progress: Arc::new(Progress::default()),
+            done: Arc::new(AtomicBool::new(true)),
+            result: Arc::new(Mutex::new(None)),
+            flat: Some(Box::new(with_cleanup(flat.tree.without(nodes), &cleanup::Anchors::from_env()))),
+        }))
+    })
 }
 
 /// # Safety
 /// `h` must be NULL or a live scan handle, with no concurrent mutation or free.
 unsafe fn cleanup_kind(h: *mut BzScan, index: u64) -> Option<cleanup::Kind> {
-    let h = unsafe { h.as_ref() }?;
-    h.flat.as_ref()?.cleanup_kinds.get(usize::try_from(index).ok()?).copied()
+    unsafe { flat_of(h) }?.cleanup_kinds.get(usize::try_from(index).ok()?).copied()
 }
 
 /// Stable rule id (the CLI's `category`) at a candidate-list index; static,
@@ -285,8 +361,7 @@ pub unsafe extern "C" fn bz_cleanup_verify(h: *mut BzScan, index: u64) -> *const
 
 #[no_mangle]
 pub extern "C" fn bz_errors(h: *mut BzScan) -> u64 {
-    let h = unsafe { &*h };
-    h.flat.as_ref().map_or(0, |f| f.tree.errors)
+    unsafe { flat_of(h) }.map_or(0, |f| f.tree.errors)
 }
 
 #[no_mangle]
@@ -303,24 +378,25 @@ pub struct BzSearch {
 
 #[no_mangle]
 pub extern "C" fn bz_search(h: *mut BzScan, query: *const c_char, limit: u32) -> *mut BzSearch {
-    if h.is_null() || query.is_null() {
-        return std::ptr::null_mut();
-    }
-    let h = unsafe { &*h };
-    let Some(flat) = h.flat.as_ref() else {
-        return std::ptr::null_mut();
-    };
-    let query_str = unsafe {
-        match CStr::from_ptr(query).to_str() {
-            Ok(s) => s,
-            Err(_) => return std::ptr::null_mut(),
+    guarded(std::ptr::null_mut(), || {
+        if query.is_null() {
+            return std::ptr::null_mut();
         }
-    };
-    let (total_matches, nodes) = flat.tree.search(query_str, limit as usize);
-    Box::into_raw(Box::new(BzSearch {
-        total_matches,
-        nodes,
-    }))
+        let Some(flat) = (unsafe { flat_of(h) }) else {
+            return std::ptr::null_mut();
+        };
+        let query_str = unsafe {
+            match CStr::from_ptr(query).to_str() {
+                Ok(s) => s,
+                Err(_) => return std::ptr::null_mut(),
+            }
+        };
+        let (total_matches, nodes) = flat.tree.search(query_str, limit as usize);
+        Box::into_raw(Box::new(BzSearch {
+            total_matches,
+            nodes,
+        }))
+    })
 }
 
 #[no_mangle]
@@ -361,14 +437,10 @@ pub extern "C" fn bz_search_free(s: *mut BzSearch) {
 /// for a node outside it.
 #[no_mangle]
 pub extern "C" fn bz_types(h: *mut BzScan, root: u32) -> *mut Breakdown {
-    if h.is_null() {
-        return std::ptr::null_mut();
-    }
-    let h = unsafe { &*h };
-    match h.flat.as_ref() {
+    guarded(std::ptr::null_mut(), || match unsafe { flat_of(h) } {
         Some(flat) if (root as usize) < flat.tree.len() => Box::into_raw(Box::new(flat.tree.types(root as usize))),
         _ => std::ptr::null_mut(),
-    }
+    })
 }
 
 #[no_mangle]
@@ -455,7 +527,8 @@ mod tests {
         tree.alloc[0] = 50;
         tree.link_children();
         let anchors = cleanup::Anchors::default();
-        let expected = cleanup::find(&tree, 1, &anchors);
+        // The tree is synthetic, so no `.git` file can be read: say it names a worktree.
+        let expected = cleanup::find_with(&tree, 1, &anchors, &|_| cleanup::GitFile::Worktree);
         let kinds: Vec<_> = expected.iter().map(|c| c.kind).collect();
         assert_eq!(
             kinds,
@@ -651,5 +724,213 @@ mod tests {
         assert!(bz_types(std::ptr::null_mut(), 0).is_null());
         assert_eq!(bz_types_count(std::ptr::null_mut()), 0);
     }
-}
 
+    use crate::tests::PANIC_MARKER;
+    use std::time::{Duration, Instant};
+
+    fn temp_root(name: &str) -> PathBuf {
+        let root = std::env::temp_dir().join(format!("{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(root.join("d")).unwrap();
+        std::fs::write(root.join("d/f"), b"x").unwrap();
+        root
+    }
+
+    fn c_path(p: &Path) -> CString {
+        CString::new(p.as_os_str().as_bytes()).unwrap()
+    }
+
+    /// Polls until the scan reports done; a scan that never does fails the
+    /// test instead of hanging it.
+    fn wait_done(h: *mut BzScan) {
+        let deadline = Instant::now() + Duration::from_secs(10);
+        loop {
+            let (mut f, mut d, mut b, mut done) = (0, 0, 0, 0);
+            bz_progress(h, &mut f, &mut d, &mut b, &mut done);
+            if done != 0 {
+                return;
+            }
+            assert!(Instant::now() < deadline, "the scan never reported done");
+            std::thread::sleep(Duration::from_millis(1));
+        }
+    }
+
+    #[test]
+    fn a_panicking_scan_finishes_with_no_tree_and_the_next_scan_is_allowed() {
+        let root = temp_root(&format!("{PANIC_MARKER}-ffi"));
+        let h = bz_scan_start(c_path(&root).as_ptr());
+        assert!(!h.is_null());
+        wait_done(h);
+        assert_eq!(bz_take_tree(h), 0, "no tree from a scan that panicked");
+        assert_eq!(bz_take_tree(h), 0, "and again");
+        assert!(bz_parents(h).is_null() && bz_name_blob(h).is_null());
+        assert_eq!(bz_errors(h), 0);
+        assert!(bz_search(h, c"x".as_ptr(), 5).is_null());
+        assert!(bz_largest_files(h, 5, 0).is_null());
+        assert!(bz_types(h, 0).is_null());
+        bz_free(h);
+
+        let ok = temp_root("bz-test-ffi-after-panic");
+        let h = bz_scan_start(c_path(&ok).as_ptr());
+        wait_done(h);
+        assert_eq!(bz_take_tree(h), 3);
+        bz_free(h);
+        let _ = std::fs::remove_dir_all(&root);
+        let _ = std::fs::remove_dir_all(&ok);
+    }
+
+    #[test]
+    fn a_poisoned_result_lock_does_not_abort_the_process() {
+        let mut tree = Tree::with_root("/root");
+        tree.push("a", 0, 1, 1, false);
+        crate::finish(&mut tree);
+        let result = Arc::new(Mutex::new(Some(Ok(with_cleanup(tree, &cleanup::Anchors::default())))));
+        let holder = result.clone();
+        let _ = std::thread::spawn(move || {
+            let _held = holder.lock().unwrap();
+            panic!("poison the lock");
+        })
+        .join();
+        assert!(result.is_poisoned());
+        let handle = Box::into_raw(Box::new(BzScan {
+            progress: Arc::new(Progress::default()),
+            done: Arc::new(AtomicBool::new(true)),
+            result,
+            flat: None,
+        }));
+        assert_eq!(bz_take_tree(handle), 2, "the lock is taken despite the poison");
+        bz_free(handle);
+    }
+
+    #[test]
+    fn work_that_panics_returns_the_fallback_instead_of_unwinding() {
+        assert_eq!(guarded(7, || -> i32 { panic!("inside an entry point") }), 7);
+        assert_eq!(guarded(7, || 8), 8);
+    }
+
+    #[test]
+    fn every_entry_point_tolerates_a_null_handle_and_null_outputs() {
+        let null: *mut BzScan = std::ptr::null_mut();
+        let (mut files, mut dirs, mut bytes, mut done) = (9, 9, 9, 0);
+        bz_progress(null, &mut files, &mut dirs, &mut bytes, &mut done);
+        assert_eq!((files, dirs, bytes, done), (0, 0, 0, 1), "a poller on no handle stops");
+        bz_progress(null, std::ptr::null_mut(), std::ptr::null_mut(), std::ptr::null_mut(), std::ptr::null_mut());
+        let live = Box::into_raw(Box::new(BzScan {
+            progress: Arc::new(Progress::default()),
+            done: Arc::new(AtomicBool::new(false)),
+            result: Arc::new(Mutex::new(None)),
+            flat: None,
+        }));
+        bz_progress(live, std::ptr::null_mut(), std::ptr::null_mut(), std::ptr::null_mut(), std::ptr::null_mut());
+        bz_free(live);
+
+        assert_eq!(bz_take_tree(null), 0);
+        for getter in [bz_parents as extern "C" fn(*mut BzScan) -> *const u32, bz_nfiles, bz_child_off, bz_children, bz_name_off] {
+            assert!(getter(null).is_null());
+        }
+        assert!(bz_alloc(null).is_null() && bz_logical(null).is_null());
+        assert!(bz_flags(null).is_null() && bz_name_blob(null).is_null());
+        assert_eq!(bz_errors(null), 0);
+        unsafe {
+            assert_eq!(bz_cleanup_count(null), 0);
+            assert!(bz_cleanup_nodes(null).is_null());
+            assert!(bz_cleanup_description(null, 0).is_null());
+        }
+        assert!(bz_search(null, c"x".as_ptr(), 1).is_null());
+        assert!(bz_types(null, 0).is_null());
+        assert!(bz_largest_files(null, 1, 0).is_null());
+        bz_free(null);
+    }
+
+    #[test]
+    fn scan_start_takes_the_path_bytes_exactly_and_refuses_no_path() {
+        assert!(bz_scan_start(std::ptr::null()).is_null());
+        assert!(bz_scan_start(c"".as_ptr()).is_null(), "an empty path is not the current directory");
+
+        let raw: &[u8] = b"/tmp/bz-\xff\xfe-not-utf8/\xc3(x";
+        assert_eq!(scan_path(raw).unwrap().as_os_str().as_bytes(), raw, "no lossy conversion");
+        assert_eq!(scan_path(b"/a").unwrap(), PathBuf::from("/a"));
+        assert!(scan_path(b"").is_none());
+
+        // APFS cannot hold such a name, so the walk fails on the exact bytes it was given.
+        let h = bz_scan_start(CString::new(raw).unwrap().as_ptr());
+        assert!(!h.is_null());
+        wait_done(h);
+        assert_eq!(bz_take_tree(h), 1);
+        assert_eq!(bz_errors(h), 1);
+        bz_free(h);
+    }
+
+    #[test]
+    fn a_symlink_to_a_folder_is_scanned_through_the_bridge() {
+        let base = temp_root("bz-test-ffi-link");
+        let link = base.with_file_name(format!("bz-test-ffi-link-to-{}", std::process::id()));
+        let _ = std::fs::remove_file(&link);
+        std::os::unix::fs::symlink(&base, &link).unwrap();
+        let h = bz_scan_start(c_path(&link).as_ptr());
+        wait_done(h);
+        assert_eq!(bz_take_tree(h), 3, "root, d, f");
+        assert_eq!(bz_errors(h), 0);
+        bz_free(h);
+        let _ = std::fs::remove_file(&link);
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    #[ignore = "stress: run explicitly in release"]
+    fn stress_panicking_scans_with_searches_running_against_the_handle() {
+        let bad = temp_root(&format!("{PANIC_MARKER}-stress"));
+        let good = temp_root("bz-test-ffi-stress");
+        let (bad_path, good_path) = (c_path(&bad), c_path(&good));
+        for round in 0..200 {
+            let h = bz_scan_start(bad_path.as_ptr());
+            assert!(!h.is_null());
+            let (stop, addr) = (Arc::new(AtomicBool::new(false)), h as usize);
+            let searchers: Vec<_> = (0..2)
+                .map(|_| {
+                    let stop = stop.clone();
+                    std::thread::spawn(move || {
+                        let h = addr as *mut BzScan;
+                        let mut searches = 0u32;
+                        while !stop.load(Ordering::Acquire) {
+                            // Before bz_take_tree there is no tree to search.
+                            assert!(bz_search(h, c"f".as_ptr(), 5).is_null());
+                            bz_progress(h, std::ptr::null_mut(), std::ptr::null_mut(), std::ptr::null_mut(), std::ptr::null_mut());
+                            searches += 1;
+                        }
+                        searches
+                    })
+                })
+                .collect();
+            wait_done(h);
+            stop.store(true, Ordering::Release);
+            for s in searchers {
+                s.join().unwrap();
+            }
+            assert_eq!(bz_take_tree(h), 0, "round {round}");
+            bz_free(h);
+
+            // A good scan between the bad ones, searched from two threads at once.
+            let h = bz_scan_start(good_path.as_ptr());
+            wait_done(h);
+            assert_eq!(bz_take_tree(h), 3, "round {round}");
+            let addr = h as usize;
+            let readers: Vec<_> = (0..2)
+                .map(|_| {
+                    std::thread::spawn(move || {
+                        let s = bz_search(addr as *mut BzScan, c"f".as_ptr(), 5);
+                        assert!(!s.is_null());
+                        assert_eq!(bz_search_total_matches(s), 1);
+                        bz_search_free(s);
+                    })
+                })
+                .collect();
+            for r in readers {
+                r.join().unwrap();
+            }
+            bz_free(h);
+        }
+        let _ = std::fs::remove_dir_all(&bad);
+        let _ = std::fs::remove_dir_all(&good);
+    }
+}

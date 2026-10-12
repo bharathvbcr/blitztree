@@ -46,6 +46,10 @@ nonisolated enum GitWorktreeError: Error, LocalizedError, Equatable, Sendable {
     case recentlyUsed(String)
     case inUse(String)
     case processCheckFailed(String)
+    /// Ignored files git status leaves out that a build would not recreate.
+    case ignoredFiles(String)
+    /// The agents' session logs could not all be read, so use cannot be ruled out.
+    case sessionsUnreadable(String)
 
     var errorDescription: String? {
         switch self {
@@ -61,6 +65,8 @@ nonisolated enum GitWorktreeError: Error, LocalizedError, Equatable, Sendable {
         case .recentlyUsed(let path): return String(localized: "Git worktree used in the last 2 days: \(path)")
         case .inUse(let path): return String(localized: "A running process is working in this git worktree: \(path)")
         case .processCheckFailed(let path): return String(localized: "Could not check for processes using this git worktree: \(path)")
+        case .ignoredFiles(let path): return String(localized: "Git worktree has ignored files that a build would not recreate (such as .env): \(path)")
+        case .sessionsUnreadable(let path): return String(localized: "Could not read the coding agents' session logs to check whether this git worktree is in use: \(path)")
         }
     }
 
@@ -78,6 +84,8 @@ nonisolated enum GitWorktreeError: Error, LocalizedError, Equatable, Sendable {
         case .recentlyUsed(let path): return "Git worktree used in the last 2 days: \(path)"
         case .inUse(let path): return "A running process is working in this git worktree: \(path)"
         case .processCheckFailed(let path): return "Could not check for processes using this git worktree: \(path)"
+        case .ignoredFiles(let path): return "Git worktree has ignored files that a build would not recreate (such as .env): \(path)"
+        case .sessionsUnreadable(let path): return "Could not read the coding agents' session logs to check whether this git worktree is in use: \(path)"
         }
     }
 }
@@ -141,19 +149,48 @@ nonisolated enum GitWorktree {
         guard let lastUsed = dates.max() else { throw GitWorktreeError.notWorktree(path) }
         let cutoff = now.addingTimeInterval(-recentWithin)
         if lastUsed > cutoff { throw GitWorktreeError.recentlyUsed(path) }
+        // A session found anywhere is use; logs that could not be read leave the
+        // question open, which blocks with its own reason, not as "unused".
+        var unreadable = false
+        let reads: [(String) -> AgentSessions.Usage] = [
+            { AgentSessions.claudeUsage(in: $0, since: cutoff) },
+            { AgentSessions.usage(in: $0, root: AgentSessions.codex, since: cutoff) },
+        ]
         for spelling in spellings(of: path, real: layout.realPath) {
-            if AgentSessions.claudeWorked(in: spelling, since: cutoff)
-                || AgentSessions.worked(in: spelling, root: AgentSessions.codex, since: cutoff) {
-                throw GitWorktreeError.recentlyUsed(path)
+            for read in reads {
+                switch read(spelling) {
+                case .used: throw GitWorktreeError.recentlyUsed(path)
+                case .unknown: unreadable = true
+                case .unused: break
+                }
             }
         }
+        if unreadable { throw GitWorktreeError.sessionsUnreadable(path) }
 
         guard let git = locateGit(lookup ?? self.lookup) else { throw GitWorktreeError.gitMissing(path) }
         let runner = GitRunner(git: git, layout: layout, deadline: Date().addingTimeInterval(gitBudget))
 
+        // Ignored files count too: git status leaves them out, yet `.env` files,
+        // local databases and data kept under an ignored path are not recreated
+        // by a build. Only what a build recreates (an ignored `node_modules`...)
+        // may be there.
         let status = try runner.run(["status", "--porcelain=v1", "-z", "--untracked-files=all",
-                                     "--ignore-submodules=none", "--no-renames"], cap: statusCap)
-        if status.overflow || !status.stdout.isEmpty { throw GitWorktreeError.changes(path) }
+                                     "--ignore-submodules=none", "--no-renames", "--ignored=matching"], cap: statusCap)
+        if status.overflow { throw GitWorktreeError.changes(path) }
+        for entry in status.stdout.split(separator: 0, omittingEmptySubsequences: true) {
+            guard entry.count > 3, entry.starts(with: Array("!! ".utf8)) else { throw GitWorktreeError.changes(path) }
+            let text = String(decoding: entry.dropFirst(3), as: UTF8.self)
+            let parts = text.split(separator: "/").map(String.init)
+            // Finder writes .DS_Store into every folder it opens, and most
+            // global gitignores list it: it holds nothing worth keeping.
+            if parts.last == ".DS_Store" { continue }
+            // `matching` reports a folder that is ignored as a whole with a
+            // trailing slash. Only such a folder named for build output may
+            // stay; a file inside a rebuildable name (`data/target/prod.db`,
+            // `node_modules/secret.db`) or a partly ignored folder is data.
+            if text.hasSuffix("/"), let last = parts.last, CleanupPathSafety.rebuildable.contains(last) { continue }
+            throw GitWorktreeError.ignoredFiles(path)
+        }
 
         // Assume-unchanged (lowercase tag) and skip-worktree ("S") entries are
         // invisible to status, so only plain tracked entries ("H") pass.
@@ -516,85 +553,19 @@ nonisolated enum BoundedProcess {
         }
     }
 
-    /// Nil when the program could not be started.
+    /// Nil when the program could not be started. The synchronous face of
+    /// `Subprocess`: callers here are themselves synchronous (the guard's
+    /// git checks), so the thread waits, bounded by `timeout`, and the helper
+    /// does the spawning, draining and killing.
     static func run(_ executable: String, _ arguments: [String], environment: [String: String],
                     timeout: TimeInterval, cap: Int) -> Outcome? {
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: executable)
-        process.arguments = arguments
-        process.environment = environment
-        process.currentDirectoryURL = URL(fileURLWithPath: "/")
-        process.standardInput = FileHandle.nullDevice
-        let out = Pipe(), err = Pipe()
-        process.standardOutput = out
-        process.standardError = err
-        let outBuffer = Capped(cap: cap), errBuffer = Capped(cap: 64 * 1024)
-        let drained = DispatchGroup()
-        for (pipe, buffer) in [(out, outBuffer), (err, errBuffer)] {
-            drained.enter()
-            pipe.fileHandleForReading.readabilityHandler = { handle in
-                let data = handle.availableData
-                if data.isEmpty {
-                    handle.readabilityHandler = nil
-                    if buffer.finish() { drained.leave() }
-                } else {
-                    buffer.append(data)
-                }
-            }
-        }
-        let exited = DispatchSemaphore(value: 0)
-        process.terminationHandler = { _ in exited.signal() }
-        do {
-            try process.run()
-        } catch {
-            out.fileHandleForReading.readabilityHandler = nil
-            err.fileHandleForReading.readabilityHandler = nil
-            return nil
-        }
-        var timedOut = false
-        if exited.wait(timeout: .now() + max(0, timeout)) == .timedOut {
-            timedOut = true
-            process.terminate()
-            if exited.wait(timeout: .now() + 1) == .timedOut {
-                kill(process.processIdentifier, SIGKILL)
-                _ = exited.wait(timeout: .now() + 1)
-            }
-        }
-        // A descendant left running can hold the pipes open; do not wait on it.
-        if drained.wait(timeout: .now() + 2) == .timedOut {
-            timedOut = true
-            out.fileHandleForReading.readabilityHandler = nil
-            err.fileHandleForReading.readabilityHandler = nil
-        }
-        let status = process.isRunning ? -1 : process.terminationStatus
-        return Outcome(status: status, stdout: outBuffer.data, stderr: errBuffer.data,
-                       timedOut: timedOut, overflow: outBuffer.overflow)
-    }
-
-    private final class Capped: @unchecked Sendable {
-        private let lock = NSLock()
-        private let cap: Int
-        private var stored = Data()
-        private var over = false
-        private var done = false
-        init(cap: Int) { self.cap = cap }
-
-        func append(_ chunk: Data) {
-            lock.lock(); defer { lock.unlock() }
-            let room = cap - stored.count
-            if chunk.count > room { over = true }
-            if room > 0 { stored.append(chunk.prefix(room)) }
-        }
-
-        /// True exactly once, on the first end of file.
-        func finish() -> Bool {
-            lock.lock(); defer { lock.unlock() }
-            if done { return false }
-            done = true
-            return true
-        }
-
-        var data: Data { lock.lock(); defer { lock.unlock() }; return stored }
-        var overflow: Bool { lock.lock(); defer { lock.unlock() }; return over }
+        let spec = Subprocess.Spec(executable, arguments, environment: environment, directory: "/")
+        let outcome = Subprocess.runBlocking(spec, stdout: .capture(cap: cap), stderr: .capture(cap: 64 * 1024),
+                                             timeout: timeout)
+        guard outcome.started else { return nil }
+        // A descendant left running can hold the pipes open (`leaked`): the
+        // output may be cut short, which callers treat like a timeout.
+        return Outcome(status: outcome.status, stdout: outcome.stdout, stderr: outcome.stderr,
+                       timedOut: outcome.timedOut || outcome.leaked, overflow: outcome.overflow)
     }
 }

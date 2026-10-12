@@ -309,11 +309,24 @@ struct ContentView: View {
 
     private var idleOverlay: some View {
         VStack(spacing: 10) {
-            Image(systemName: "internaldrive")
-                .font(.system(size: 40))
-                .foregroundStyle(.secondary)
-            Text("Pick a target and scan")
-                .foregroundStyle(.secondary)
+            if model.scanFailed {
+                Image(systemName: "exclamationmark.triangle")
+                    .font(.system(size: 40))
+                    .foregroundStyle(.secondary)
+                Text("The scan failed")
+                    .foregroundStyle(.secondary)
+                Text("BlitzTree could not scan \(model.scanRoot)")
+                    .font(.caption)
+                    .foregroundStyle(.tertiary)
+                    .textSelection(.enabled)
+                Button("Rescan") { model.startScan() }
+            } else {
+                Image(systemName: "internaldrive")
+                    .font(.system(size: 40))
+                    .foregroundStyle(.secondary)
+                Text("Pick a target and scan")
+                    .foregroundStyle(.secondary)
+            }
         }
     }
 
