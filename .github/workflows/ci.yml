@@ -94,3 +94,4 @@ jobs:
       - run: benchmarks/run-ui.sh --check-only
       - run: benchmarks/run-agent.sh --check-only
       - run: python3 benchmarks/rendering.py --baseline bf3b1fc --check-only
+      - run: python3 benchmarks/model-handoff.py

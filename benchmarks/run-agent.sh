@@ -34,10 +34,8 @@ p=Path(sys.argv[2]); source=p.read_text()
 old='''                        guard let target = item.target else {
                             throw CleanupOperations.failure("This folder could not be validated; rescan before cleaning")
                         }
-                        // Checked again now: the folder may have been used since the scan.
-                        if let reason = CleanupItem.verifyReason(item.verify, path: target.path) {
-                            throw CleanupOperations.failure(reason.localized)
-                        }
+                        // Revalidating at the boundary checks the folder again
+                        // (it may have been used since the scan), rule check included.
                         _ = try CleanupOperations.trash(target)'''
 p.write_text(hook(source, old, '                        try AgentBenchmarkTrash.move(item)', p, 'manual Trash operation'))
 p=Path(sys.argv[3]); source=p.read_text()
