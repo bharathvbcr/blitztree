@@ -53,12 +53,22 @@ fn synthetic_tree(n: usize, ties: bool) -> blitztree::Tree {
     tree.name_blob.extend_from_slice(root_name);
     tree.name_off.push(tree.name_blob.len() as u32);
 
-    let extensions = ["png", "jpg", "pdf", "rs", "swift", "txt", "dylib", "json", "log", "münchen", "東京"];
+    let extensions = [
+        "png", "jpg", "pdf", "rs", "swift", "txt", "dylib", "json", "log", "münchen", "東京",
+    ];
     for i in 1..n {
         let ext = extensions[i % extensions.len()];
-        let name = format!("entry_{i:07}_{}.{}", if i % 10 == 0 { "photo" } else { "file" }, ext);
+        let name = format!(
+            "entry_{i:07}_{}.{}",
+            if i % 10 == 0 { "photo" } else { "file" },
+            ext
+        );
         tree.parents.push(0);
-        let bytes = if ties { 4096 } else { (i as u64 * 1024) % 1_000_000_000 };
+        let bytes = if ties {
+            4096
+        } else {
+            (i as u64 * 1024) % 1_000_000_000
+        };
         tree.alloc.push(bytes);
         tree.logical.push(bytes);
         tree.flags.push(if i % 8 == 0 { 1 } else { 0 });
@@ -76,8 +86,10 @@ fn main() {
     if let Some(t) = args.get(3) {
         let threads: usize = t.parse().expect("threads must be a positive integer");
         assert!(threads > 0, "threads must be positive");
-        // scan() creates its own QoS-configured pool. Configuring only the
-        // global pool silently left bulk scans at the default thread count.
+        // The shared worker pool (src/pool.rs) is built on first use with rayon's
+        // default size, which reads this variable, so it must be set before any
+        // scan, search or breakdown runs. Configuring only rayon's global pool
+        // would leave the shared pool at the default thread count.
         std::env::set_var("RAYON_NUM_THREADS", threads.to_string());
     }
 
@@ -293,7 +305,10 @@ fn main() {
             // Searches a synthetic tree (BZ_SYNTH_COUNT, 1M) back to back while a
             // scan of `path` runs on its own threads, then the same searches idle.
             // Shows what a search costs when a scan holds the workers.
-            let n: usize = std::env::var("BZ_SYNTH_COUNT").ok().and_then(|s| s.parse().ok()).unwrap_or(1_000_000);
+            let n: usize = std::env::var("BZ_SYNTH_COUNT")
+                .ok()
+                .and_then(|s| s.parse().ok())
+                .unwrap_or(1_000_000);
             let tree = synthetic_tree(n, false);
             let timed = || {
                 let t0 = Instant::now();
@@ -329,7 +344,10 @@ fn main() {
         "scan-repeat" => {
             // BZ_RUNS (11) scans of the same folder in one process: what the app does
             // when it scans again. On a small folder the per-scan setup is most of it.
-            let runs: usize = std::env::var("BZ_RUNS").ok().and_then(|s| s.parse().ok()).unwrap_or(11);
+            let runs: usize = std::env::var("BZ_RUNS")
+                .ok()
+                .and_then(|s| s.parse().ok())
+                .unwrap_or(11);
             let mut times = Vec::with_capacity(runs);
             for _ in 0..runs {
                 let t0 = Instant::now();
@@ -349,14 +367,19 @@ fn main() {
         }
         "hardlink-fixture" => {
             let env = |key: &str, default: usize| {
-                std::env::var(key).ok().and_then(|s| s.parse().ok()).unwrap_or(default)
+                std::env::var(key)
+                    .ok()
+                    .and_then(|s| s.parse().ok())
+                    .unwrap_or(default)
             };
             let (projects, files) = (env("BZ_HL_PROJECTS", 200), env("BZ_HL_FILES", 500));
             let unique = std::env::var_os("BZ_HL_UNIQUE").is_some();
             // `path` must not exist yet; every project is a deep folder of `files` files.
             std::fs::create_dir(&path).expect("the fixture directory must be new");
             let folder = |project: usize| {
-                path.join(format!("project-{project:04}/packages/linked/node_modules/package"))
+                path.join(format!(
+                    "project-{project:04}/packages/linked/node_modules/package"
+                ))
             };
             for project in 0..projects {
                 let dir = folder(project);
@@ -372,7 +395,11 @@ fn main() {
             }
             println!(
                 "{projects} projects x {files} files: {} ({} data streams)",
-                if unique { "independent files" } else { "hard links to project 0's files" },
+                if unique {
+                    "independent files"
+                } else {
+                    "hard links to project 0's files"
+                },
                 if unique { projects * files } else { files }
             );
             return;
