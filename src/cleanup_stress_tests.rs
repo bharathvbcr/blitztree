@@ -211,12 +211,23 @@ fn check(seed: u64) -> Vec<Kind> {
                 assert!(path != cache && *path != hf,"{ctx}: {path} ({:?}) holds {p}", c.kind);
             }
         }
-        // A Hugging Face home anywhere (HF_HOME=~/.cache/hf) is never a whole cache.
+        // No tool cache is offered whole with a token file anywhere inside it
+        // (HF_HOME=~/.cache/hf keeps `token` beside `hub`, `datasets`, `xet`...).
         if c.kind == Kind::ToolCaches {
-            assert!(
-                !(contains(&t, n, &["token", "stored_tokens"]) && contains(&t, n, &["hub"])),
-                "{ctx}: Hugging Face home {path} is a candidate"
-            );
+            let mut pending = vec![n];
+            while let Some(d) = pending.pop() {
+                for &kid in t.kids(d) {
+                    let kid = kid as usize;
+                    assert!(
+                        t.is_dir(kid) || !matches!(t.name(kid), "token" | "stored_tokens"),
+                        "{ctx}: tool cache {path} holds the credential {}",
+                        rel(&t, kid as u32)
+                    );
+                    if t.is_dir(kid) {
+                        pending.push(kid);
+                    }
+                }
+            }
         }
         for p in &protected {
             assert!(
@@ -388,6 +399,84 @@ fn a_non_utf8_folder_name_does_not_panic_or_become_a_worktree() {
     let found = find_with(&t, MIN_BYTES, &Anchors::default(), &|_| GitFile::Worktree);
     assert_eq!(found.len(), 1, "the classifier alone says worktree");
     assert_eq!(t.path(bad as usize), Path::new("/w/"));
+}
+
+fn mkfifo(path: &Path) {
+    use std::os::unix::ffi::OsStrExt;
+    let c = std::ffi::CString::new(path.as_os_str().as_bytes()).unwrap();
+    assert_eq!(unsafe { libc::mkfifo(c.as_ptr(), 0o600) }, 0);
+}
+
+/// A `.git` that is replaced by a pipe between the probe's checks and its open
+/// must not block it: opening a FIFO for reading waits for a writer. A hang
+/// shows up as a probe that does not finish.
+#[test]
+fn a_git_file_swapped_for_a_pipe_never_blocks_the_probe() {
+    use super::tests::Scratch;
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::{mpsc, Arc};
+    use std::time::{Duration, Instant};
+
+    let s = Scratch::new("swap");
+    let admin = s.admin("main", "w");
+    s.gitdir_file("wt", &admin.display().to_string());
+    let (folder, git, stage) = (s.path("wt"), s.path("wt/.git"), s.path("wt/.stage"));
+    let content = std::fs::read(&git).unwrap();
+    let stop = Arc::new(AtomicBool::new(false));
+    let flipper = {
+        let (stop, git, stage) = (stop.clone(), git.clone(), stage.clone());
+        std::thread::spawn(move || {
+            while !stop.load(Ordering::Relaxed) {
+                std::fs::write(&stage, &content).unwrap();
+                std::fs::rename(&stage, &git).unwrap();
+                mkfifo(&stage);
+                std::fs::rename(&stage, &git).unwrap();
+            }
+        })
+    };
+    let (done, finished) = mpsc::channel();
+    let worker = std::thread::spawn(move || {
+        let end = Instant::now() + Duration::from_millis(1500);
+        let mut probes = 0u64;
+        while Instant::now() < end {
+            let kind = probe_git_file(&folder);
+            assert!(matches!(kind, GitFile::Worktree | GitFile::Other));
+            probes += 1;
+        }
+        done.send(probes).unwrap();
+    });
+    let outcome = finished.recv_timeout(Duration::from_secs(20));
+    stop.store(true, Ordering::Relaxed);
+    flipper.join().unwrap();
+    let probes = outcome.expect("probe_git_file blocked on a .git replaced by a pipe");
+    worker.join().unwrap();
+    assert!(probes > 0);
+}
+
+/// A pipe, a link and a device-less oddity at `.git`, `commondir` or `gitdir`
+/// classify without blocking.
+#[test]
+fn pipes_where_the_probe_reads_classify_as_other_without_blocking() {
+    use super::tests::Scratch;
+    let s = Scratch::new("pipes");
+    let admin = s.admin("main", "w");
+    for name in ["commondir", "gitdir"] {
+        s.gitdir_file(&format!("by-{name}"), &admin.display().to_string());
+    }
+    // Both folders share one admin dir; replace its files with pipes in turn.
+    let by_commondir = s.path("by-commondir");
+    std::fs::remove_file(admin.join("commondir")).unwrap();
+    mkfifo(&admin.join("commondir"));
+    assert_eq!(probe_git_file(&by_commondir), GitFile::Other);
+    std::fs::remove_file(admin.join("commondir")).unwrap();
+    std::fs::write(admin.join("commondir"), "../..\n").unwrap();
+    std::fs::remove_file(admin.join("gitdir")).unwrap();
+    mkfifo(&admin.join("gitdir"));
+    assert_eq!(probe_git_file(&by_commondir), GitFile::Other);
+    // And a pipe at .git itself.
+    std::fs::remove_file(s.path("by-gitdir/.git")).unwrap();
+    mkfifo(&s.path("by-gitdir/.git"));
+    assert_eq!(probe_git_file(&s.path("by-gitdir")), GitFile::Other);
 }
 
 /// A Codex worktrees folder with a hostile entry beside a genuine one: the

@@ -455,7 +455,8 @@ mod tests {
         tree.alloc[0] = 50;
         tree.link_children();
         let anchors = cleanup::Anchors::default();
-        let expected = cleanup::find(&tree, 1, &anchors);
+        // The tree is synthetic, so no `.git` file can be read: say it names a worktree.
+        let expected = cleanup::find_with(&tree, 1, &anchors, &|_| cleanup::GitFile::Worktree);
         let kinds: Vec<_> = expected.iter().map(|c| c.kind).collect();
         assert_eq!(
             kinds,

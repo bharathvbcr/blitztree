@@ -456,36 +456,37 @@ struct Markers {
 /// `git_worktree` candidate.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum GitFile {
-    /// Names `<common dir>/worktrees/<name>`, which holds a `commondir` file.
+    /// Names `<common dir>/worktrees/<name>`, an admin directory whose
+    /// `commondir` leads to that common dir and whose `gitdir` names this file.
     Worktree,
     /// Names `<parent>/.git/modules/<name>`.
     Submodule,
-    /// A `--separate-git-dir` repository, or a file that is missing, a link,
-    /// unreadable, larger than `GIT_FILE_MAX`, not UTF-8, not exactly one
-    /// `gitdir: <path>` line, or naming a worktree whose admin directory is
-    /// not there. Never a candidate: whatever the file claims is unproven.
+    /// A `--separate-git-dir` repository, a copy of a worktree, or a file that
+    /// is missing, a link, a pipe, unreadable, larger than `GIT_FILE_MAX`, not
+    /// UTF-8, not exactly one `gitdir: <path>` line, or naming an admin
+    /// directory that does not check out. Never a candidate: whatever the file
+    /// claims is unproven.
     Other,
 }
 
 /// Git's own `.git` files are one short line; anything longer is not one.
 const GIT_FILE_MAX: usize = 4096;
 
-/// The directory a `.git` file's bytes name (relative paths resolve against
-/// `folder`, lexically) and what that directory's path says it is. Names only:
-/// the caller checks the directory.
-fn parse_git_file(content: &[u8], folder: &Path) -> Option<(GitFile, PathBuf)> {
-    if content.len() > GIT_FILE_MAX {
+/// Exactly one line: an optional single trailing newline, no other control
+/// bytes, valid UTF-8 (as Swift's `GitWorktree.singleLine`).
+fn single_line(bytes: &[u8]) -> Option<&str> {
+    let bytes = bytes.strip_suffix(b"\n").unwrap_or(bytes);
+    if bytes.iter().any(|&b| b < 0x20 || b == 0x7f) {
         return None;
     }
-    let text = std::str::from_utf8(content).ok()?;
-    let line = text.strip_suffix('\n').unwrap_or(text);
-    let line = line.strip_suffix('\r').unwrap_or(line);
-    let target = line.strip_prefix("gitdir: ")?;
-    if target.is_empty() || target.contains(['\n', '\r', '\0']) {
-        return None;
-    }
-    let target = Path::new(target);
-    let joined = if target.is_absolute() { target.to_path_buf() } else { folder.join(target) };
+    std::str::from_utf8(bytes).ok()
+}
+
+/// `reference` (absolute, or relative to `base`) with `.` and `..` folded away
+/// lexically; `None` when `..` climbs above the root.
+fn resolve(base: &Path, reference: &str) -> Option<PathBuf> {
+    let reference = Path::new(reference);
+    let joined = if reference.is_absolute() { reference.to_path_buf() } else { base.join(reference) };
     let mut dir = PathBuf::new();
     for component in joined.components() {
         match component {
@@ -498,6 +499,21 @@ fn parse_git_file(content: &[u8], folder: &Path) -> Option<(GitFile, PathBuf)> {
             other => dir.push(other.as_os_str()),
         }
     }
+    Some(dir)
+}
+
+/// The directory a `.git` file's bytes name (relative paths resolve against
+/// `folder`, lexically) and what that directory's path says it is. Names only:
+/// the caller checks the directory.
+fn parse_git_file(content: &[u8], folder: &Path) -> Option<(GitFile, PathBuf)> {
+    if content.len() > GIT_FILE_MAX {
+        return None;
+    }
+    let target = single_line(content)?.strip_prefix("gitdir: ")?;
+    if target.is_empty() {
+        return None;
+    }
+    let dir = resolve(folder, target)?;
     let names: Vec<_> = dir
         .components()
         .filter_map(|c| match c {
@@ -515,25 +531,71 @@ fn parse_git_file(content: &[u8], folder: &Path) -> Option<(GitFile, PathBuf)> {
     Some((kind, dir))
 }
 
-/// Read `folder/.git` and say what it is. Reads one regular file of at most
-/// `GIT_FILE_MAX` bytes (a link or a pipe is never opened) and looks for the
-/// worktree's `commondir`, which a `--separate-git-dir` repository named
-/// `.../worktrees/x` does not have. Every failure is `Other`.
-fn probe_git_file(folder: &Path) -> GitFile {
+/// A small regular file and what it held, read as Swift's
+/// `GitWorktree.readMarker` does: `lstat` first (a link, a pipe, a device, an
+/// empty or oversized file, or a dataless cloud placeholder, which opening would
+/// download, is refused unopened); then `open` without following a link and
+/// without blocking, accepted only when the opened file is the one `lstat` saw
+/// (so a swap in between cannot make us wait on a pipe or read another file);
+/// then at most `GIT_FILE_MAX` bytes. Its metadata is returned for identity checks.
+fn read_marker(path: &Path) -> Option<(Vec<u8>, std::fs::Metadata)> {
     use std::io::Read;
-    let path = folder.join(".git");
-    if !std::fs::symlink_metadata(&path).is_ok_and(|m| m.file_type().is_file()) {
-        return GitFile::Other;
+    use std::os::macos::fs::MetadataExt as _;
+    use std::os::unix::fs::{MetadataExt as _, OpenOptionsExt as _};
+    let seen = std::fs::symlink_metadata(path).ok()?;
+    if !seen.file_type().is_file()
+        || seen.st_flags() & crate::SF_DATALESS != 0
+        || seen.len() == 0
+        || seen.len() > GIT_FILE_MAX as u64
+    {
+        return None;
+    }
+    let file = std::fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK | libc::O_CLOEXEC)
+        .open(path)
+        .ok()?;
+    let opened = file.metadata().ok()?;
+    if !opened.file_type().is_file() || opened.dev() != seen.dev() || opened.ino() != seen.ino() {
+        return None;
     }
     let mut content = Vec::new();
-    let read = std::fs::File::open(&path)
-        .and_then(|file| file.take(GIT_FILE_MAX as u64 + 1).read_to_end(&mut content));
-    match read.ok().and_then(|_| parse_git_file(&content, folder)) {
-        Some((GitFile::Worktree, admin))
-            if !std::fs::metadata(admin.join("commondir")).is_ok_and(|m| m.is_file()) =>
-        {
-            GitFile::Other
-        }
+    file.take(GIT_FILE_MAX as u64 + 1).read_to_end(&mut content).ok()?;
+    (!content.is_empty() && content.len() <= GIT_FILE_MAX).then_some((content, opened))
+}
+
+fn same_file(a: &std::fs::Metadata, b: &std::fs::Metadata) -> bool {
+    use std::os::unix::fs::MetadataExt as _;
+    a.dev() == b.dev() && a.ino() == b.ino()
+}
+
+/// Whether `admin` is a linked worktree's administrative directory for the
+/// folder whose `.git` file is `git` (Swift's `GitWorktree.layout`, structural
+/// part): `commondir` names a directory whose `worktrees` is `admin`'s parent,
+/// and `gitdir` names back this very `.git` file.
+fn is_linked_admin(admin: &Path, git: &std::fs::Metadata) -> bool {
+    let line_of = |name: &str| {
+        let (raw, _) = read_marker(&admin.join(name))?;
+        single_line(&raw).filter(|line| !line.is_empty()).and_then(|line| resolve(admin, line))
+    };
+    let Some(common) = line_of("commondir") else { return false };
+    let linked = || {
+        let admin_dir = std::fs::metadata(admin).ok().filter(|m| m.is_dir())?;
+        std::fs::metadata(&common).ok().filter(|m| m.is_dir())?;
+        let listed = std::fs::metadata(admin.parent()?).ok()?;
+        let worktrees = std::fs::metadata(common.join("worktrees")).ok()?;
+        let back = std::fs::symlink_metadata(line_of("gitdir")?).ok()?;
+        (same_file(&listed, &worktrees) && same_file(&back, git)).then_some(admin_dir)
+    };
+    linked().is_some()
+}
+
+/// Read `folder/.git` and say what it is (see `GitFile`). Every failure,
+/// including a file that changes underneath us, is `Other`.
+fn probe_git_file(folder: &Path) -> GitFile {
+    let Some((content, git)) = read_marker(&folder.join(".git")) else { return GitFile::Other };
+    match parse_git_file(&content, folder) {
+        Some((GitFile::Worktree, admin)) if !is_linked_admin(&admin, &git) => GitFile::Other,
         Some((kind, _)) => kind,
         None => GitFile::Other,
     }
@@ -565,11 +627,42 @@ fn is_year(name: &str) -> bool {
 /// unknown, so only a folder that is all transcripts is a candidate. Candidates
 /// are directories, so the transcripts can only be offered with their folder.
 fn only_transcripts(t: &Tree, project: usize) -> bool {
+    // A session folder is trusted only for the entries Claude Code puts there.
+    let session = |folder: usize| {
+        t.kids(folder).iter().all(|&kid| {
+            let kid = kid as usize;
+            let name = t.name(kid);
+            match t.is_dir(kid) {
+                true => matches!(name, "subagents" | "tool-results" | "workflows"),
+                false => matches!(name, "custom-title.json" | ".DS_Store") || name.ends_with(".jsonl"),
+            }
+        })
+    };
     t.kids(project).iter().all(|&kid| {
         let kid = kid as usize;
         let name = t.name(kid);
-        if t.is_dir(kid) { is_uuid(name) } else { name.ends_with(".jsonl") }
+        match t.is_dir(kid) {
+            true => is_uuid(name) && session(kid),
+            false => name == ".DS_Store" || name.ends_with(".jsonl"),
+        }
     })
+}
+
+/// Whether a file named `token` or `stored_tokens` (Hugging Face's login)
+/// lies anywhere under `directory`.
+fn holds_token(t: &Tree, directory: usize) -> bool {
+    let mut pending = vec![directory];
+    while let Some(d) = pending.pop() {
+        for &kid in t.kids(d) {
+            let kid = kid as usize;
+            if t.is_dir(kid) {
+                pending.push(kid);
+            } else if matches!(t.name(kid), "token" | "stored_tokens") {
+                return true;
+            }
+        }
+    }
+    false
 }
 
 /// Rules for a child `i` of a container, or `None` for a plain parent.
@@ -830,11 +923,10 @@ pub(crate) fn find_with(
                 Outcome::Emit(kind) if !kind.descends() && contains(t, c, GRADLE_CONFIG) => {
                     Outcome::Descend(Container::GradleHome)
                 }
-                // Likewise a Hugging Face home anywhere (HF_HOME=~/.cache/hf):
-                // `token` and `stored_tokens` sit beside `hub`.
-                Outcome::Emit(Kind::ToolCaches)
-                    if contains(t, c, &["token", "stored_tokens"]) && contains(t, c, &["hub"]) =>
-                {
+                // Likewise a Hugging Face home under any name (HF_HOME=~/.cache/hf)
+                // or any tool cache with a login token anywhere in it: only
+                // `hub` entries are offered, never the folder.
+                Outcome::Emit(Kind::ToolCaches) if holds_token(t, c) => {
                     Outcome::Descend(Container::HuggingFace)
                 }
                 outcome => outcome,
@@ -1051,6 +1143,16 @@ mod tests {
             format!(".claude/projects/clean/{A}.jsonl"),
             format!(".claude/projects/clean/{B}.jsonl"),
             format!(".claude/projects/clean/{A}/subagents/agent-1.jsonl"),
+            format!(".claude/projects/clean/{B}/custom-title.json"),
+            format!(".claude/projects/clean/{B}/tool-results/r"),
+            format!(".claude/projects/clean/{B}/workflows/w"),
+            format!(".claude/projects/clean/{B}/{A}.jsonl"),
+            ".claude/projects/clean/.DS_Store".to_string(),
+            format!(".claude/projects/clean/{A}/.DS_Store"),
+            // A session folder is trusted only for the names Claude Code gives it.
+            format!(".claude/projects/uuid-memory/{A}.jsonl"),
+            format!(".claude/projects/uuid-memory/{A}/memory/MEMORY.md"),
+            format!(".claude/projects/uuid-notes/{A}/notes.md"),
             // Claude Code's persistent memory sits beside the transcripts.
             format!(".claude/projects/with-memory/{A}.jsonl"),
             ".claude/projects/with-memory/memory/MEMORY.md".to_string(),
@@ -1093,6 +1195,14 @@ mod tests {
             // HF_HOME=~/.cache/hf: a Hugging Face home under another name.
             "Users/other/.cache/hf/token",
             "Users/other/.cache/hf/hub/models--b/x",
+            // The same without a hub, or with only datasets, xet or nothing else.
+            "Users/other/.cache/hf2/token",
+            "Users/other/.cache/hf2/datasets/d/x",
+            "Users/other/.cache/hf3/stored_tokens",
+            "Users/other/.cache/hf3/xet/x",
+            // A credential file anywhere below a tool cache keeps it from being offered whole.
+            "Users/other/.cache/deep/a/b/token",
+            "Users/other/.cache/deep/a/b/blob",
         ];
         let t = build("/", &paths);
         let expected = expect(&[
@@ -1258,7 +1368,6 @@ mod tests {
         // Absolute and relative links to a linked worktree's admin directory.
         assert_eq!(check(b"gitdir: /r/.git/worktrees/x\n"), worktree("/r/.git/worktrees/x"));
         assert_eq!(check(b"gitdir: /r/.git/worktrees/x"), worktree("/r/.git/worktrees/x"));
-        assert_eq!(check(b"gitdir: /r/.git/worktrees/x\r\n"), worktree("/r/.git/worktrees/x"));
         assert_eq!(
             check(b"gitdir: ../../.git/worktrees/x\n"),
             worktree("/Users/u/Code/repo/.git/worktrees/x")
@@ -1297,6 +1406,8 @@ mod tests {
             b"gitdir: /r/.git/worktrees/x\ngitdir: /r/.git/worktrees/y\n",
             b"gitdir: /r/.git/worktrees/x\n\n",
             b"gitdir: /r/.git/worktrees/x\0\n",
+            b"gitdir: /r/.git/worktrees/x\r\n",
+            b"gitdir: /r/.git/worktrees/x\x7f\n",
             b"gitdir: /r/.git/worktrees/\xff\n",
             b"\xef\xbb\xbfgitdir: /r/.git/worktrees/x\n",
             b"gitdir: ../../../../../../../../../../.git/worktrees/x\n",
@@ -1349,9 +1460,15 @@ mod tests {
         }
 
         /// A folder whose `.git` file names `target`.
+        /// When `target` is an existing worktree admin directory, its `gitdir`
+        /// is pointed back at this folder's `.git`, as `git worktree add` does.
         pub(super) fn gitdir_file(&self, folder: &str, target: &str) {
             self.file(&format!("{folder}/.git"), format!("gitdir: {target}\n").as_bytes());
             self.file(&format!("{folder}/payload"), b"x");
+            let admin = self.path(folder).join(target);
+            if admin.join("commondir").is_file() {
+                std::fs::write(admin.join("gitdir"), format!("{}\n", self.path(folder).join(".git").display())).unwrap();
+            }
         }
 
         /// Candidates of a scan of `root` (relative to the scratch dir) as
@@ -1406,6 +1523,38 @@ mod tests {
             s.found("", None),
             expect(&[("main/feature-wt", "git_worktree")])
         );
+    }
+
+    #[test]
+    fn a_copied_worktree_or_a_garbage_admin_dir_is_not_a_linked_worktree() {
+        let s = Scratch::new("backlink");
+        let admin = s.admin("main", "w");
+        s.gitdir_file("orig", &admin.display().to_string());
+        // `cp -R orig copy`: the same .git file, but the admin dir's `gitdir`
+        // still names orig/.git.
+        s.file("copy/.git", format!("gitdir: {}\n", admin.display()).as_bytes());
+        s.file("copy/payload", b"x");
+        // A commondir that names nothing, one that names the admin dir itself
+        // (not the folder that holds `worktrees`), and one that is a link.
+        s.file("fake/worktrees/w/commondir", b"garbage\n");
+        s.file("fake/worktrees/w/gitdir", format!("{}\n", s.path("fakewt/.git").display()).as_bytes());
+        s.gitdir_file("fakewt", &s.path("fake/worktrees/w").display().to_string());
+        s.file("self/worktrees/w/commondir", b".\n");
+        s.gitdir_file("selfwt", &s.path("self/worktrees/w").display().to_string());
+        s.file("link/worktrees/w/real", b"../..\n");
+        std::os::unix::fs::symlink("real", s.path("link/worktrees/w/commondir")).unwrap();
+        s.gitdir_file("linkwt", &s.path("link/worktrees/w").display().to_string());
+        // A missing, empty or multi-line back link.
+        for (name, back) in [("noback", None), ("emptyback", Some("")), ("twoback", Some("a\nb\n"))] {
+            let admin = s.admin("main", name);
+            s.gitdir_file(name, &admin.display().to_string());
+            let file = admin.join("gitdir");
+            match back {
+                None => std::fs::remove_file(file).unwrap(),
+                Some(text) => std::fs::write(file, text).unwrap(),
+            }
+        }
+        assert_eq!(s.found("", None), expect(&[("orig", "git_worktree")]));
     }
 
     #[test]

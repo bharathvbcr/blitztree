@@ -120,9 +120,10 @@ Rules (`~` is `$HOME`; marker = an entry with that name beside the folder):
   `stack.yaml`, `cabal.project` or a `*.cabal` file.
 - Caches: each child of a `.cache`, wherever it is (except `huggingface`,
   whose `hub` entries are models, so `token` and `stored_tokens` are never
-  offered; `torch` is a model; a folder holding `token` or `stored_tokens`
-  beside `hub` is treated as a Hugging Face folder, whatever its name; a
-  `.cache` inside a `.cache` is another container); `.npm`; `.bun/install/cache`; each child of
+  offered; `torch` is a model; a tool cache with a file named `token` or
+  `stored_tokens` anywhere inside it is treated as a Hugging Face folder,
+  whatever its name, so only its `hub` entries are offered; a `.cache` inside
+  a `.cache` is another container); `.npm`; `.bun/install/cache`; each child of
   `~/Library/Caches` except `com.apple.*`; `Library/Caches` deeper inside the
   home (app containers) and `CoreSimulator/Caches`, whole; Electron caches
   (`Cache`, `Code Cache`, `GPUCache`, `CachedData`, `CachedExtensionVSIXs`,
@@ -140,9 +141,11 @@ Rules (`~` is `$HOME`; marker = an entry with that name beside the folder):
 - Models (review): `~/.cache/huggingface/hub/models--*|datasets--*|spaces--*`,
   `~/.cache/torch`, `~/.ollama/models`.
 - Coding agents (review unless noted): each `~/.claude/projects/<project>`
-  that holds nothing but `*.jsonl` transcripts and session-id folders (Claude
-  Code keeps `memory/` there too: a project with it, or with any other entry,
-  is not offered), `~/.claude/file-history`, `~/.claude/debug` (safe);
+  that holds nothing but `*.jsonl` transcripts, `.DS_Store` and session-id
+  folders whose entries are only `subagents`, `tool-results`, `workflows`,
+  `custom-title.json`, `*.jsonl` or `.DS_Store` (Claude Code keeps `memory/`
+  beside them, and could keep it inside a session folder: a project with it,
+  or with any other entry, is not offered), `~/.claude/file-history`, `~/.claude/debug` (safe);
   `~/.codex/sessions/<year>`, `~/.codex/archived_sessions`; a linked Git
   worktree at `~/.codex/worktrees/<id>` or `~/.codex/worktrees/<id>/<repo>`
   (Codex's layout; any other folder there, such as one holding only release
@@ -152,14 +155,19 @@ Rules (`~` is `$HOME`; marker = an entry with that name beside the folder):
   `/private/tmp/claude-<uid>/<project>/<session-id>/scratchpad/...` (safe,
   `agent_scratch`, verified with `agent_session`). Any path inside a session's
   temp folder is refused while that session runs, whatever rule matched it.
-- Git worktrees (review): a folder whose `.git` is a regular file (never a
-  link or a pipe) of at most 4096 bytes holding one `gitdir: <path>` line that
-  names `<common dir>/worktrees/<name>`, an existing directory with a
-  `commondir` file; relative paths resolve against the folder. The file's
-  content decides, not where the folder sits: a submodule (`.../.git/modules/...`),
-  a `--separate-git-dir` repository, an empty, oversized, multi-line,
-  non-UTF-8 or dangling `.git` file is not a worktree, whatever scan root
-  found it.
+- Git worktrees (review): a folder whose `.git` is a regular file of at most
+  4096 bytes holding one `gitdir: <path>` line that names
+  `<common dir>/worktrees/<name>`; relative paths resolve against the folder.
+  The admin directory must check out as git leaves it: its `commondir` names
+  a directory whose `worktrees` folder is the admin directory's parent, and
+  its `gitdir` names this very `.git` file (by device and inode), so a copy of
+  a worktree is not one. Every file is read the way the app's verifier reads
+  it: `lstat` first (a link, a pipe, a device, an empty, oversized or dataless
+  file is never opened), then opened without following links or blocking, and
+  accepted only if it is the file `lstat` saw. The content decides, not where
+  the folder sits: a submodule (`.../.git/modules/...`), a `--separate-git-dir`
+  repository, an empty, oversized, multi-line, non-UTF-8 or dangling `.git`
+  file is not a worktree, whatever scan root found it.
 
 Never listed: `~/.cache`, `~/Library/Caches`, `~/.cargo`, `~/.gradle`, `~/.m2`,
 `~/.ollama`, `~/.rustup`, `~/.claude`, `~/.codex` and `~/.cache/huggingface`

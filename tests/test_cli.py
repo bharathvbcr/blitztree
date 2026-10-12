@@ -2,6 +2,7 @@
 import json
 import os
 from pathlib import Path
+import shutil
 import subprocess
 import tempfile
 import unittest
@@ -210,6 +211,7 @@ class AgentCLITests(unittest.TestCase):
         self.write(f"{repo}/.git/worktrees/{name}/commondir", "../..\n")
         self.write(f"{repo}/.git/worktrees/{name}/HEAD", "ref: refs/heads/x\n")
         self.write(f"{folder}/.git", f"gitdir: {admin}\n")
+        self.write(f"{repo}/.git/worktrees/{name}/gitdir", f"{self.home / folder}/.git\n")
         self.file(f"{folder}/file")
 
     def test_worktree_contents_are_listed_and_counted_once(self):
@@ -247,6 +249,25 @@ class AgentCLITests(unittest.TestCase):
         self.assertEqual(self.relative_kinds(candidates), {"main/vendor/wt": "git_worktree"})
         self.assertEqual(candidates[0]["verify"], "git_worktree")
 
+    def test_a_copied_worktree_and_a_pipe_for_a_git_file_are_not_worktrees(self):
+        self.linked_worktree("main", "w", "work/orig")
+        shutil.copytree(self.home / "work/orig", self.home / "work/copy", symlinks=True)
+        self.file("work/piped/payload")
+        os.mkfifo(self.home / "work/piped/.git")
+        self.assertEqual(self.relative_kinds(self.wins("--limit", "100")["candidates"]),
+                         {"work/orig": "git_worktree"})
+
+    def test_hugging_face_homes_under_any_name_are_never_offered_whole(self):
+        for path in ["a/.cache/hf/token", "a/.cache/hf/datasets/d/file", "a/.cache/hf2/stored_tokens",
+                     "a/.cache/hf2/xet/file", "a/.cache/hf3/hub/models--m/file", "a/.cache/hf3/token",
+                     "a/.cache/deep/x/y/token", "a/.cache/pip/file"]:
+            self.file(path)
+        candidates = self.wins("--limit", "100")["candidates"]
+        self.assertEqual(self.relative_kinds(candidates), {
+            "a/.cache/hf3/hub/models--m": "ml_model", "a/.cache/pip": "tool_caches"})
+        self.assert_none_inside(candidates, [p for p in self.home.rglob("token")] +
+                                [p for p in self.home.rglob("stored_tokens")])
+
     def test_codex_worktrees_are_found_at_both_depths_and_user_folders_are_left_alone(self):
         self.linked_worktree("Code/app", "w1", ".codex/worktrees/a1b2/app")
         self.file(".codex/worktrees/a1b2/app/package.json")
@@ -275,6 +296,10 @@ class AgentCLITests(unittest.TestCase):
         self.file(".claude/projects/with-memory/memory/MEMORY.md")
         self.file(f".claude/projects/unknown/{session}.jsonl")
         self.file(".claude/projects/unknown/notes/a.md")
+        self.file(f".claude/projects/clean/{session}/custom-title.json")
+        self.file(".claude/projects/clean/.DS_Store")
+        self.file(f".claude/projects/in-session/{session}.jsonl")
+        self.file(f".claude/projects/in-session/{session}/memory/MEMORY.md")
         candidates = self.wins("--limit", "100")["candidates"]
         self.assertEqual(self.relative_kinds(candidates), {".claude/projects/clean": "agent_transcripts"})
         self.assert_none_inside(candidates, [self.home / ".claude/projects/with-memory/memory/MEMORY.md"])
