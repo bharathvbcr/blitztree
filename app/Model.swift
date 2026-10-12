@@ -163,11 +163,9 @@ nonisolated final class Tree: @unchecked Sendable {
 
     static func displayPath(_ p: String) -> String {
         let prefix = "/System/Volumes/Data"
-        if p.hasPrefix(prefix) {
-            let rest = String(p.dropFirst(prefix.count))
-            return rest.isEmpty ? "/" : rest
-        }
-        return p
+        // Whole path components only: "/System/Volumes/DataBackup" is another volume.
+        if p == prefix { return "/" }
+        return p.hasPrefix(prefix + "/") ? String(p.dropFirst(prefix.count)) : p
     }
 
     /// Full path: root's name is the scanned path itself.
