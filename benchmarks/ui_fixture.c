@@ -9,6 +9,7 @@ struct BzScan {
     uint32_t *parents, *nfiles, *child_off, *children, *name_off;
     uint64_t *alloc;
     uint8_t *flags, *name_blob;
+    bool *complete;
 };
 static void *copied(const void *source, size_t bytes) {
     void *result = malloc(bytes ? bytes : 1);
@@ -27,6 +28,9 @@ BzScan *bz_fixture_create(uint32_t n, const uint32_t *parents,
     h->parents = copied(parents, n * sizeof(*parents));
     h->alloc = copied(alloc, n * sizeof(*alloc));
     h->flags = copied(flags, n * sizeof(*flags));
+    h->complete = malloc(n ? n : 1);
+    if (!h->complete) abort();
+    memset(h->complete, 1, n); // synthetic trees were read in full
     h->nfiles = calloc(n, sizeof(*h->nfiles));
     if (!h->nfiles) abort();
     // Files below each folder, as the engine counts them. Fixture nodes are
@@ -55,12 +59,34 @@ const uint32_t *bz_children(BzScan *h) { return h->children; }
 const uint32_t *bz_name_off(BzScan *h) { return h->name_off; }
 const uint8_t *bz_name_blob(BzScan *h) { return h->name_blob; }
 uint64_t bz_errors(BzScan *h) { (void)h; return 0; }
+const bool *bz_complete(BzScan *h) { return h->complete; }
+bool bz_coverage(BzScan *h, BzCoverage *out) {
+    (void)h; memset(out, 0, sizeof(*out)); out->complete = true; return true;
+}
+// The fixture never scans, so there is nothing to stop and every handle is done.
+int bz_scan_status(BzScan *h) { (void)h; return BZ_SCAN_DONE; }
+void bz_cancel(BzScan *h) { (void)h; }
 // No benchmark searches; the fixture has no index to search.
 BzSearch *bz_search(BzScan *h, const char *query, uint32_t limit) { (void)h; (void)query; (void)limit; abort(); }
 uint64_t bz_search_total_matches(BzSearch *s) { (void)s; abort(); }
 uint32_t bz_search_result_count(BzSearch *s) { (void)s; abort(); }
 const uint32_t *bz_search_result_nodes(BzSearch *s) { (void)s; abort(); }
 void bz_search_free(BzSearch *s) { (void)s; abort(); }
+// No benchmark removes nodes, lists the largest files or tallies types; the
+// fixture has no engine behind it. Every bz_* in app/bz.h is defined in this
+// file so the link cannot drift; benchmarks/check-fixtures.sh enforces it.
+BzScan *bz_remove(BzScan *h, const uint32_t *nodes, uint32_t count) { (void)h; (void)nodes; (void)count; abort(); }
+BzLargest *bz_largest_files(BzScan *h, uint32_t limit, uint64_t min_bytes) { (void)h; (void)limit; (void)min_bytes; abort(); }
+uint32_t bz_largest_count(BzLargest *l) { (void)l; abort(); }
+const uint32_t *bz_largest_nodes(BzLargest *l) { (void)l; abort(); }
+void bz_largest_free(BzLargest *l) { (void)l; abort(); }
+BzTypes *bz_types(BzScan *h, uint32_t root) { (void)h; (void)root; abort(); }
+uint32_t bz_types_count(BzTypes *t) { (void)t; abort(); }
+const uint32_t *bz_types_ext_off(BzTypes *t) { (void)t; abort(); }
+const uint8_t *bz_types_ext_blob(BzTypes *t) { (void)t; abort(); }
+const uint64_t *bz_types_alloc(BzTypes *t) { (void)t; abort(); }
+const uint64_t *bz_types_files(BzTypes *t) { (void)t; abort(); }
+void bz_types_free(BzTypes *t) { (void)t; abort(); }
 void bz_fixture_add_cleanup(BzScan *h, uint32_t node, const char *description) {
     uint32_t n = h->cleanup_count;
     h->cleanup_nodes = realloc(h->cleanup_nodes, (n + 1) * sizeof(*h->cleanup_nodes));
@@ -94,6 +120,6 @@ void bz_free(BzScan *h) {
     if (!h) return;
     for (uint32_t i = 0; i < h->cleanup_count; ++i) free(h->cleanup_descriptions[i]);
     free(h->cleanup_descriptions); free(h->cleanup_nodes);
-    free(h->parents); free(h->alloc); free(h->flags); free(h->nfiles);
+    free(h->parents); free(h->alloc); free(h->flags); free(h->complete); free(h->nfiles);
     free(h->child_off); free(h->children); free(h->name_off); free(h->name_blob); free(h);
 }

@@ -10,36 +10,39 @@ shasum -a 256 "$AGENT_BENCH_TMP/app/Agent.swift" "$AGENT_BENCH_TMP/app/Cleanup.s
 python3 - "$AGENT_BENCH_TMP/app/Agent.swift" "$AGENT_BENCH_TMP/app/Cleanup.swift" "$AGENT_BENCH_TMP/app/Model.swift" <<'PY'
 from pathlib import Path
 import sys
+
+def hook(source, old, new, path, what):
+    # The hooks anchor on exact production text, so a refactor of that text
+    # must fail here, by name, rather than silently skip a hook.
+    if source.count(old) != 1:
+        sys.exit(f'benchmarks/run-agent.sh: cannot hook "{what}": expected exactly one occurrence of this anchor '
+                 f'in {Path(path).name}, found {source.count(old)}:\n--- anchor ---\n{old}\n--- end ---\n'
+                 f'The production code changed; update the anchor in benchmarks/run-agent.sh.')
+    return source.replace(old, new)
+
 p=Path(sys.argv[1]); source=p.read_text()
 changes={
     'private var preparationTask: Task<Void, Never>?': 'var preparationTask: Task<Void, Never>?',
-    'start(input: input, env: env)': 'AgentBenchmarkLaunch.record(input)',
-    'AgentPrompt.build(tree: tree, scanRoot: scanRoot, known: known, running: running)': 'AgentBenchmarkGate.shared.waitIfArmed(); return AgentPrompt.build(tree: tree, scanRoot: scanRoot, known: known, running: running)',
-    '+ AgentPrompt.appData(tree: tree)': '',  # Keep simulator/session lookups out of the offline fixture.
+    '            step(asking)\n            start()\n': '            step(asking)\n            AgentBenchmarkLaunch.record(input)\n',
+    'AgentPrompt.build(tree: tree, scanRoot: scanRoot, known: known, running: running, focus: focus)': 'AgentBenchmarkGate.shared.waitIfArmed(); return AgentPrompt.build(tree: tree, scanRoot: scanRoot, known: known, running: running, focus: focus)',
+    '+ AgentPrompt.appData(tree: tree, focus: focus?.path)': '',  # Keep simulator/session lookups out of the offline fixture.
 }
 for old,new in changes.items():
-    assert source.count(old)==1, f'Expected one benchmark hook: {old}'
-    source=source.replace(old,new)
+    source=hook(source, old, new, p, 'AgentRun launch / prompt preparation')
 p.write_text(source)
 p=Path(sys.argv[2]); source=p.read_text()
 old='''                        guard let target = item.target else {
                             throw CleanupOperations.failure("This folder could not be validated; rescan before cleaning")
                         }
-                        // Checked again now: the folder may have been used since the scan.
-                        if let reason = CleanupItem.verifyReason(item.verify, path: target.path) {
-                            throw CleanupOperations.failure(reason.localized)
-                        }
+                        // Revalidating at the boundary checks the folder again
+                        // (it may have been used since the scan), rule check included.
                         _ = try CleanupOperations.trash(target)'''
-assert source.count(old)==1, 'Expected one manual-trash operation'
-p.write_text(source.replace(old, '                        try AgentBenchmarkTrash.move(item)'))
+p.write_text(hook(source, old, '                        try AgentBenchmarkTrash.move(item)', p, 'manual Trash operation'))
 p=Path(sys.argv[3]); source=p.read_text()
-old='''    func startAgent(_ agent: InstalledAgent) {
+old='''    func startAgent(_ agent: InstalledAgent, focus: AgentFocus? = nil, routes: [Manvi.Route]? = nil) {
 '''
-new='''    func startAgent(_ agent: InstalledAgent) {
-        AgentBenchmarkLaunch.agentStarts += 1
-'''
-assert source.count(old)==1, 'Expected one agent start'
-p.write_text(source.replace(old, new))
+new=old+'        AgentBenchmarkLaunch.agentStarts += 1\n'
+p.write_text(hook(source, old, new, p, 'ScanModel.startAgent'))
 PY
 clang -O2 -mmacosx-version-min=14.0 -c benchmarks/ui_fixture.c -o "$AGENT_BENCH_TMP/fixture.o"
 # Every app source but the entry point (and its Sparkle import), as the

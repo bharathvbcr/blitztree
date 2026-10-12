@@ -195,6 +195,126 @@ pub struct Progress {
     /// Set after the volume refused the extended attributes once, so the
     /// remaining directories ask for the plain ones directly.
     no_extended_attrs: std::sync::atomic::AtomicBool,
+    /// A stop was asked for (`cancel`). The walk checks it before reading
+    /// each directory and between the batches of a large one.
+    cancelled: std::sync::atomic::AtomicBool,
+    /// The walk really left a directory unread because of `cancelled`. A
+    /// stop that arrives after the last directory was read leaves this
+    /// false: that tree is whole and is not reported as cut short.
+    stopped_early: std::sync::atomic::AtomicBool,
+    /// Test seam: cancel once this many directories have been entered (0
+    /// is off). Per scan, so parallel tests cannot disturb each other.
+    #[cfg(test)]
+    cancel_after_dirs: AtomicU64,
+}
+
+impl Progress {
+    /// Ask the scan to stop. The walk then reads no further directory; every
+    /// one it did not read is left incomplete, and `stopped_early` says so.
+    /// Safe from any thread, repeatable, and harmless once the walk is over.
+    pub fn cancel(&self) {
+        self.cancelled.store(true, Ordering::Release);
+    }
+
+    pub fn is_cancelled(&self) -> bool {
+        self.cancelled.load(Ordering::Acquire)
+    }
+
+    /// Whether a stop cut the walk short, so the tree describes only part of
+    /// what was asked for. Final once `scan` has returned.
+    pub fn stopped_early(&self) -> bool {
+        self.stopped_early.load(Ordering::Acquire)
+    }
+
+    /// True (and recorded) when the walk should leave the directory it is
+    /// about to read.
+    fn stop_here(&self) -> bool {
+        #[cfg(test)]
+        if self.cancel_after_dirs.load(Ordering::Relaxed) != 0
+            && self.cancel_after_dirs.fetch_sub(1, Ordering::Relaxed) == 1
+        {
+            self.cancel();
+        }
+        self.stopped()
+    }
+
+    /// Whether a stop was asked for, recording that it cut the walk short.
+    fn stopped(&self) -> bool {
+        let stop = self.is_cancelled();
+        if stop {
+            self.stopped_early.store(true, Ordering::Release);
+        }
+        stop
+    }
+}
+
+/// What a finished scan could and could not read: the one account of
+/// coverage, handed to the CLI report and (by value, `#[repr(C)]`) to the app
+/// through `bz_coverage`. Built only by `Coverage::of`.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Coverage {
+    /// Failed reads of every kind: unreadable directories, failed listings,
+    /// dropped entries.
+    pub errors: u64,
+    /// Entries that could not be read or whose record was malformed.
+    pub entry_errors: u64,
+    /// Entries dropped because their name is not valid UTF-8. They and
+    /// anything below them are missing from the tree.
+    pub invalid_names: u64,
+    /// Cloud-only directories left unread (reading them would download them).
+    pub skipped_cloud_directories: u64,
+    /// Mount points left unread (a scan measures one volume).
+    pub skipped_mount_points: u64,
+    /// Allocated bytes not counted again because another scanned path holds
+    /// the same data (hard links, whole APFS clones).
+    pub shared_allocated_bytes: u64,
+    /// Directories whose volume reported no clone ids.
+    pub clone_ids_unavailable_directories: u64,
+    /// Every directory was read in full: nothing unreadable or skipped.
+    pub complete: bool,
+}
+
+impl Coverage {
+    /// The counters of a finished scan with its tree's root state.
+    pub fn of(progress: &Progress, tree: &Tree) -> Coverage {
+        let count = |c: &AtomicU64| c.load(Ordering::Relaxed);
+        Coverage {
+            errors: tree.errors,
+            entry_errors: count(&progress.entry_errors),
+            invalid_names: count(&progress.invalid_names),
+            skipped_cloud_directories: count(&progress.skipped_cloud_dirs),
+            skipped_mount_points: count(&progress.skipped_mount_points),
+            shared_allocated_bytes: count(&progress.shared_bytes),
+            clone_ids_unavailable_directories: count(&progress.clone_ids_unavailable_dirs),
+            complete: tree.complete.first().copied().unwrap_or(false),
+        }
+    }
+
+    /// The same account for a tree derived from the scanned one (a removal).
+    /// Every failed read, dropped entry and skipped folder leaves its folder
+    /// incomplete, so a derived tree whose root reads complete has none of
+    /// them left: the error- and skip-class counters are zero, and the
+    /// account never says "read in full" next to "N items unreadable". The
+    /// per-folder counts are not kept, so while any folder is still partial
+    /// the scan's counters stay as scanned (upper bounds: a removed folder
+    /// may have held some of them). Sharing figures describe data, not
+    /// unread items, and stay.
+    pub fn for_derived(&self, tree: &Tree) -> Coverage {
+        if tree.complete.first().copied().unwrap_or(false) {
+            Coverage {
+                shared_allocated_bytes: self.shared_allocated_bytes,
+                clone_ids_unavailable_directories: self.clone_ids_unavailable_directories,
+                complete: true,
+                ..Coverage::default()
+            }
+        } else {
+            Coverage {
+                complete: false,
+                ..*self
+            }
+        }
+    }
 }
 
 /// Identifies the data a file's allocated bytes belong to, for files that
@@ -335,6 +455,12 @@ fn read_dir_bulk(path: &CStr, s: &mut Scratch, progress: &Progress) -> Option<bo
     let mut complete = true;
     let mut read_any = false;
     loop {
+        // A directory of millions of entries is read in many batches: a stop
+        // does not wait for the last one. What was listed so far is kept.
+        if read_any && progress.stopped() {
+            complete = false;
+            break;
+        }
         let n = retry_interrupted(|| unsafe {
             bulk_syscall(fd, &mut attrlist, s.buf.as_mut_ptr() as *mut c_void, options)
         });
@@ -359,29 +485,57 @@ fn read_dir_bulk(path: &CStr, s: &mut Scratch, progress: &Progress) -> Option<bo
             break;
         }
         read_any = true;
-        let mut off = 0usize;
-        for _ in 0..n {
-            // A record must hold its own length and fit in the buffer.
-            let len = s.buf.get(off..off + 4).map_or(0, |_| u32_at(&s.buf, off) as usize);
-            let Some(record) = s.buf.get(off..off + len).filter(|_| len >= 4) else {
-                progress.entry_errors.fetch_add(1, Ordering::Relaxed);
-                progress.errors.fetch_add(1, Ordering::Relaxed);
-                complete = false;
-                log_error(|| format!("malformed record list in {}", path.to_string_lossy()));
-                break;
-            };
-            if !parse_entry(record, &mut s.entries, &mut s.names, progress) {
-                complete = false;
-                log_error(|| {
-                    format!("entry dropped in {} (unreadable, malformed or non-UTF-8 name)", path.to_string_lossy())
-                });
-            }
-            off += len;
-        }
+        complete &= parse_batch(
+            &s.buf,
+            n as usize,
+            &mut s.entries,
+            &mut s.names,
+            progress,
+            path,
+        );
     }
     complete &= fill_missing_alloc(fd, s, progress);
     unsafe { libc::close(fd) };
     Some(complete)
+}
+
+/// Parse the `n` records one `getattrlistbulk` call put in `buf`. False if any
+/// entry had to be dropped (unreadable, malformed, or a name that is not
+/// UTF-8: it and everything below it are then missing from the tree, so its
+/// directory is incomplete).
+fn parse_batch(
+    buf: &[u8],
+    n: usize,
+    entries: &mut Vec<Entry>,
+    names: &mut Vec<u8>,
+    progress: &Progress,
+    path: &CStr,
+) -> bool {
+    let mut complete = true;
+    let mut off = 0usize;
+    for _ in 0..n {
+        // A record must hold its own length and fit in the buffer.
+        let len = buf
+            .get(off..off + 4)
+            .map_or(0, |_| u32_at(buf, off) as usize);
+        let Some(record) = buf.get(off..off + len).filter(|_| len >= 4) else {
+            progress.entry_errors.fetch_add(1, Ordering::Relaxed);
+            progress.errors.fetch_add(1, Ordering::Relaxed);
+            log_error(|| format!("malformed record list in {}", path.to_string_lossy()));
+            return false;
+        };
+        if !parse_entry(record, entries, names, progress) {
+            complete = false;
+            log_error(|| {
+                format!(
+                    "entry dropped in {} (unreadable, malformed or non-UTF-8 name)",
+                    path.to_string_lossy()
+                )
+            });
+        }
+        off += len;
+    }
+    complete
 }
 
 /// Some file systems (FAT32 through FSKit) list files without their
@@ -678,6 +832,12 @@ fn child_path(dir: &CStr, name: &[u8]) -> Option<CString> {
 fn walk<'s>(scope: &rayon::Scope<'s>, shared: &'s Shared<'s>, path: CString, dir_idx: u32) {
     #[cfg(test)]
     tests::inject_scan_fault(&path);
+    // A stop leaves this directory unread: it is incomplete, and its
+    // children, if any, were never listed.
+    if shared.progress.stop_here() {
+        shared.mark_incomplete(dir_idx);
+        return;
+    }
     // Nothing below runs another job on this thread (spawn only queues), so
     // the borrow can't nest.
     SCRATCH.with_borrow_mut(|s| {
@@ -1171,7 +1331,15 @@ pub fn scan_count(root: &Path, progress: &Progress) {
 mod tests {
     use super::*;
 
-    fn bulk_record(name: &str, is_dir: bool, flags: u32, mount_status: u32, links: u32, ext: Option<(u64, u64)>) -> Vec<u8> {
+    fn bulk_record(
+        name: impl AsRef<[u8]>,
+        is_dir: bool,
+        flags: u32,
+        mount_status: u32,
+        links: u32,
+        ext: Option<(u64, u64)>,
+    ) -> Vec<u8> {
+        let name = name.as_ref();
         let mut e = vec![0u8; 4];
         let common = ATTR_CMN_RETURNED_ATTRS
             | ATTR_CMN_ERROR
@@ -1210,7 +1378,7 @@ mod tests {
         let name_offset = (e.len() - name_ref) as u32;
         e[name_ref..name_ref + 4].copy_from_slice(&name_offset.to_le_bytes());
         e[name_ref + 4..name_ref + 8].copy_from_slice(&(name.len() as u32 + 1).to_le_bytes());
-        e.extend_from_slice(name.as_bytes());
+        e.extend_from_slice(name);
         e.push(0);
         let len = e.len() as u32;
         e[..4].copy_from_slice(&len.to_le_bytes());
@@ -2245,5 +2413,221 @@ mod tests {
         let outcome = std::panic::catch_unwind(|| scan(&root, &Progress::default()));
         assert!(outcome.is_err());
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// `fan` folders, each with `fan` folders holding `files` files: about
+    /// `fan * fan` directories to walk.
+    fn wide_fixture(name: &str, fan: usize, files: usize) -> PathBuf {
+        let root = std::env::temp_dir().join(format!("{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        for a in 0..fan {
+            for b in 0..fan {
+                let dir = root.join(format!("a{a}/b{b}"));
+                std::fs::create_dir_all(&dir).unwrap();
+                for f in 0..files {
+                    std::fs::write(dir.join(format!("f{f}")), b"x").unwrap();
+                }
+            }
+        }
+        root
+    }
+
+    /// Every folder the walk did not list reads as unread, and so does the root.
+    fn assert_unread_folders_are_incomplete(t: &Tree) {
+        assert!(!t.complete[0], "a tree cut short is not complete");
+        for i in (0..t.len()).filter(|&i| t.is_dir(i) && t.kids(i).is_empty()) {
+            assert!(
+                !t.complete[i],
+                "folder {i} was never listed but reads as complete"
+            );
+        }
+    }
+
+    #[test]
+    fn cancel_stops_a_large_walk_early_and_marks_what_it_left() {
+        let root = wide_fixture("bz-test-cancel-wide", 40, 3);
+        let full = scan(&root, &Progress::default());
+        assert!(full.complete[0] && full.len() > 6000);
+
+        let progress = Progress {
+            cancel_after_dirs: AtomicU64::new(25),
+            ..Default::default()
+        };
+        let started = std::time::Instant::now();
+        let t = scan(&root, &progress);
+        let took = started.elapsed();
+        assert!(progress.is_cancelled() && progress.stopped_early());
+        assert!(
+            t.len() < full.len() / 2,
+            "{} of {} nodes: the walk went on after the stop",
+            t.len(),
+            full.len()
+        );
+        assert_unread_folders_are_incomplete(&t);
+        assert_partition(&t);
+        assert!(took < std::time::Duration::from_secs(5), "took {took:?}");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn cancel_before_the_first_folder_reads_nothing() {
+        let root = limit_fixture("bz-test-cancel-first");
+        let progress = Progress::default();
+        progress.cancel();
+        progress.cancel(); // repeating it changes nothing
+        let t = scan(&root, &progress);
+        assert!(progress.stopped_early());
+        assert_eq!(t.len(), 1, "not even the root was listed");
+        assert_unread_folders_are_incomplete(&t);
+        assert_eq!(progress.files.load(Ordering::Relaxed), 0);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn cancel_after_the_walk_leaves_a_whole_tree_alone() {
+        let root = limit_fixture("bz-test-cancel-after");
+        let progress = Progress::default();
+        let t = scan(&root, &progress);
+        progress.cancel();
+        assert!(!progress.stopped_early(), "nothing was left unread");
+        assert!(t.complete[0] && t.errors == 0 && t.len() == 8);
+        assert!(Coverage::of(&progress, &t).complete);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn cancel_does_not_wait_for_the_end_of_a_huge_folder() {
+        let root = std::env::temp_dir().join(format!("bz-test-cancel-huge-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        for i in 0..12_000 {
+            std::fs::write(
+                root.join(format!("a-rather-long-file-name-to-fill-the-buffer-{i:06}")),
+                b"",
+            )
+            .unwrap();
+        }
+        let path = CString::new(root.as_os_str().as_encoded_bytes()).unwrap();
+        let mut scratch = Scratch::default();
+
+        let all = read_dir_bulk(&path, &mut scratch, &Progress::default());
+        assert_eq!((all, scratch.entries.len()), (Some(true), 12_000));
+
+        let progress = Progress::default();
+        progress.cancel();
+        let cut = read_dir_bulk(&path, &mut scratch, &progress);
+        assert_eq!(cut, Some(false), "the listing is partial");
+        assert!(progress.stopped_early());
+        assert!(
+            !scratch.entries.is_empty() && scratch.entries.len() < 12_000,
+            "{} entries: a batch was read, the rest was not",
+            scratch.entries.len()
+        );
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn coverage_is_the_one_account_the_cli_and_the_app_read() {
+        let root = limit_fixture("bz-test-coverage");
+        let progress = Progress::default();
+        let t = scan(&root, &progress);
+        let whole = Coverage::of(&progress, &t);
+        assert_eq!(
+            whole,
+            Coverage {
+                complete: true,
+                ..Default::default()
+            }
+        );
+
+        // Every counter lands in its own field.
+        let progress = Progress::default();
+        for (n, counter) in [
+            &progress.entry_errors,
+            &progress.invalid_names,
+            &progress.skipped_cloud_dirs,
+            &progress.skipped_mount_points,
+            &progress.shared_bytes,
+            &progress.clone_ids_unavailable_dirs,
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            counter.store(n as u64 + 10, Ordering::Relaxed);
+        }
+        let mut cut = Tree {
+            errors: 3,
+            ..Tree::with_root("/x")
+        };
+        cut.complete[0] = false;
+        let c = Coverage::of(&progress, &cut);
+        assert_eq!((c.errors, c.complete), (3, false));
+        assert_eq!(
+            [
+                c.entry_errors,
+                c.invalid_names,
+                c.skipped_cloud_directories,
+                c.skipped_mount_points,
+                c.shared_allocated_bytes,
+                c.clone_ids_unavailable_directories
+            ],
+            [10, 11, 12, 13, 14, 15]
+        );
+
+        // A derived tree that reads complete has nothing unread left to count;
+        // only the sharing figures describe data and stay.
+        let mut healthy = Tree::with_root("/x");
+        healthy.link_children();
+        let d = c.for_derived(&healthy);
+        assert_eq!(
+            d,
+            Coverage {
+                complete: true,
+                shared_allocated_bytes: 14,
+                clone_ids_unavailable_directories: 15,
+                ..Default::default()
+            }
+        );
+        // One that is still partial keeps the scan's counters (upper bounds).
+        let d = c.for_derived(&cut);
+        assert_eq!(d, c);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn an_entry_with_a_name_that_is_not_utf8_is_counted_and_its_folder_reads_partial() {
+        // APFS, HFS+ and exFAT all refuse such a name (HFS+ stores it escaped
+        // as "%FF"), so the records are built by hand.
+        let mut batch = bulk_record("ok", true, 0, 0, 1, None);
+        batch.extend(bulk_record(b"bad-\xff\xfe", true, 0, 0, 1, None));
+        batch.extend(bulk_record("f", false, 0, 0, 1, None));
+        let progress = Progress::default();
+        let (mut entries, mut names) = (Vec::new(), Vec::new());
+        let complete = parse_batch(&batch, 3, &mut entries, &mut names, &progress, c"/dir");
+        assert!(!complete, "a dropped entry makes its directory partial");
+        assert_eq!(entries.len(), 2, "the entries around it are kept");
+        assert_eq!(names, b"okf");
+        assert_eq!(progress.invalid_names.load(Ordering::Relaxed), 1);
+        assert_eq!(progress.errors.load(Ordering::Relaxed), 1);
+
+        // The scan's account says what is missing.
+        let mut tree = Tree::with_root("/dir");
+        tree.complete[0] = complete;
+        tree.errors = progress.errors.load(Ordering::Relaxed);
+        let c = Coverage::of(&progress, &tree);
+        assert_eq!((c.complete, c.invalid_names, c.errors), (false, 1, 1));
+
+        // A record list cut short is reported too, not walked past.
+        let progress = Progress::default();
+        let (mut entries, mut names) = (Vec::new(), Vec::new());
+        assert!(!parse_batch(
+            &batch[..batch.len() - 3],
+            3,
+            &mut entries,
+            &mut names,
+            &progress,
+            c"/dir"
+        ));
+        assert_eq!(progress.entry_errors.load(Ordering::Relaxed), 1);
     }
 }

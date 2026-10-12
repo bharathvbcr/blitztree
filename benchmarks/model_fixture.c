@@ -15,6 +15,7 @@ struct BzScan {
     uint64_t *logical;
     uint32_t *nfiles;
     uint8_t *flags;
+    bool *complete;
     uint32_t *child_off;
     uint32_t *children;
     uint32_t *name_off;
@@ -41,6 +42,8 @@ BzScan *bz_scan_start(const char *path) {
     h->nfiles = zeroed(1, sizeof(*h->nfiles));
     h->flags = zeroed(1, sizeof(*h->flags));
     h->flags[0] = 1;
+    h->complete = zeroed(1, sizeof(*h->complete));
+    h->complete[0] = true;
     h->child_off = zeroed(2, sizeof(*h->child_off));
     h->children = zeroed(1, sizeof(*h->children));
 
@@ -72,6 +75,13 @@ const uint32_t *bz_children(BzScan *h) { return h->children; }
 const uint32_t *bz_name_off(BzScan *h) { return h->name_off; }
 const uint8_t *bz_name_blob(BzScan *h) { return h->name_blob; }
 uint64_t bz_errors(BzScan *h) { (void)h; return 0; }
+const bool *bz_complete(BzScan *h) { return h->complete; }
+bool bz_coverage(BzScan *h, BzCoverage *out) {
+    (void)h; memset(out, 0, sizeof(*out)); out->complete = true; return true;
+}
+// The adapter finishes before the first poll and has nothing to stop.
+int bz_scan_status(BzScan *h) { (void)h; return BZ_SCAN_DONE; }
+void bz_cancel(BzScan *h) { (void)h; }
 uint64_t bz_cleanup_count(BzScan *h) { (void)h; return 0; }
 const uint32_t *bz_cleanup_nodes(BzScan *h) { return h->children; }
 const char *bz_cleanup_description(BzScan *h, uint64_t index) {
@@ -91,6 +101,27 @@ const char *bz_cleanup_verify(BzScan *h, uint64_t index) {
     (void)h; (void)index; return NULL;
 }
 
+// The hand-off test never searches, removes nodes, lists the largest files or
+// tallies types. Every bz_* in app/bz.h is defined in this file so the link
+// cannot drift; benchmarks/check-fixtures.sh enforces it.
+BzSearch *bz_search(BzScan *h, const char *query, uint32_t limit) { (void)h; (void)query; (void)limit; abort(); }
+uint64_t bz_search_total_matches(BzSearch *s) { (void)s; abort(); }
+uint32_t bz_search_result_count(BzSearch *s) { (void)s; abort(); }
+const uint32_t *bz_search_result_nodes(BzSearch *s) { (void)s; abort(); }
+void bz_search_free(BzSearch *s) { (void)s; abort(); }
+BzScan *bz_remove(BzScan *h, const uint32_t *nodes, uint32_t count) { (void)h; (void)nodes; (void)count; abort(); }
+BzLargest *bz_largest_files(BzScan *h, uint32_t limit, uint64_t min_bytes) { (void)h; (void)limit; (void)min_bytes; abort(); }
+uint32_t bz_largest_count(BzLargest *l) { (void)l; abort(); }
+const uint32_t *bz_largest_nodes(BzLargest *l) { (void)l; abort(); }
+void bz_largest_free(BzLargest *l) { (void)l; abort(); }
+BzTypes *bz_types(BzScan *h, uint32_t root) { (void)h; (void)root; abort(); }
+uint32_t bz_types_count(BzTypes *t) { (void)t; abort(); }
+const uint32_t *bz_types_ext_off(BzTypes *t) { (void)t; abort(); }
+const uint8_t *bz_types_ext_blob(BzTypes *t) { (void)t; abort(); }
+const uint64_t *bz_types_alloc(BzTypes *t) { (void)t; abort(); }
+const uint64_t *bz_types_files(BzTypes *t) { (void)t; abort(); }
+void bz_types_free(BzTypes *t) { (void)t; abort(); }
+
 void bz_free(BzScan *h) {
     if (!h) return;
     free_count += 1;
@@ -99,6 +130,7 @@ void bz_free(BzScan *h) {
     free(h->logical);
     free(h->nfiles);
     free(h->flags);
+    free(h->complete);
     free(h->child_off);
     free(h->children);
     free(h->name_off);

@@ -52,12 +52,13 @@ try:
         raise SystemExit("VolumeSpace.read shape changed; update the test injection")
     (work / "Model.swift").write_text(model.replace(marker, injection, 1))
 
-    sources = [
-        work / "Model.swift",
-        ROOT / "app/Agent.swift",
-        ROOT / "app/Cleanup.swift",
-        ROOT / "benchmarks/ModelHandoff.swift",
-    ]
+    # Every app source but the entry point (and its Sparkle import), with the
+    # injected Model.swift standing in for the real one, so a new file can't
+    # leave this behind.
+    sources = [work / "Model.swift"] + [
+        path for path in sorted((ROOT / "app").glob("*.swift"))
+        if path.name not in ("Main.swift", "Model.swift")
+    ] + [ROOT / "benchmarks/ModelHandoff.swift"]
     fixture_object = work / "model_fixture.o"
     subprocess.run(
         ["clang", "-O2", "-mmacosx-version-min=14.0", "-c",

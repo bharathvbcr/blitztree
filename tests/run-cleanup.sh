@@ -9,17 +9,17 @@ trap '[[ -n "$PROVIDER_MOCK" ]] && kill "$PROVIDER_MOCK" 2>/dev/null; rm -rf "$C
 FLAGS=(-parse-as-library -swift-version 6 -default-isolation MainActor -target arm64-apple-macos14.0)
 swiftc app/CleanupCommand.swift tests/CleanupCommandChecks.swift "${FLAGS[@]}" -o "$CLEANUP_TEST_TMP/commands"
 "$CLEANUP_TEST_TMP/commands"
-# The guard verifies linked git worktrees, so it compiles with GitWorktree and
+# The guard verifies linked git worktrees and runs each rule's check, so it compiles with GitWorktree, CleanupVerify and
 # the session-log reader it consults; the checks build fixtures with real git.
-GUARD=(app/CleanupSafety.swift app/GitWorktree.swift app/Subprocess.swift app/AgentSessions.swift tests/GitFixture.swift)
+GUARD=(app/CleanupSafety.swift app/CleanupVerify.swift app/GitWorktree.swift app/Subprocess.swift app/AgentSessions.swift tests/GitFixture.swift)
 swiftc "${GUARD[@]}" tests/CleanupSafetyChecks.swift "${FLAGS[@]}" -o "$CLEANUP_TEST_TMP/paths"
 "$CLEANUP_TEST_TMP/paths"
-swiftc "${GUARD[@]}" app/CleanupVerify.swift app/CleanupOperations.swift tests/WorktreeChecks.swift \
+swiftc "${GUARD[@]}" app/CleanupOperations.swift tests/WorktreeChecks.swift \
   "${FLAGS[@]}" -Xcc -include -Xcc removefile.h -o "$CLEANUP_TEST_TMP/worktrees"
 "$CLEANUP_TEST_TMP/worktrees"
 # Claude Code scratchpads: path shape, the live-session registry, and the
 # policy that refuses a running session's build output at every capture.
-swiftc "${GUARD[@]}" app/CleanupVerify.swift tests/ScratchpadChecks.swift \
+swiftc "${GUARD[@]}" tests/ScratchpadChecks.swift \
   "${FLAGS[@]}" -o "$CLEANUP_TEST_TMP/scratchpad"
 "$CLEANUP_TEST_TMP/scratchpad"
 cargo build --locked --release --lib
@@ -83,4 +83,10 @@ PROVIDER_MOCK=$!
 for _ in {1..100}; do [[ -s "$CLEANUP_TEST_TMP/ports.json" ]] && break; sleep 0.1; done
 [[ -s "$CLEANUP_TEST_TMP/ports.json" ]] || { echo "provider mock did not start" >&2; exit 1; }
 "$CLEANUP_TEST_TMP/provider-pipeline" "$CLEANUP_TEST_TMP/ports.json"
+# Stopping a scan, the earlier tree coming back, and the coverage the engine
+# reports reaching the app (marks, summary text, strings in every language).
+swiftc "${SOURCES[@]}" tests/ScanCancelChecks.swift "${FLAGS[@]}" \
+  -import-objc-header app/bz.h -L target/release -lblitztree \
+  -framework AppKit -framework SwiftUI -o "$CLEANUP_TEST_TMP/scancancel"
+"$CLEANUP_TEST_TMP/scancancel"
 
