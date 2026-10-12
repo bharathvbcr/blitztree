@@ -120,7 +120,9 @@ Rules (`~` is `$HOME`; marker = an entry with that name beside the folder):
   `stack.yaml`, `cabal.project` or a `*.cabal` file.
 - Caches: each child of a `.cache`, wherever it is (except `huggingface`,
   whose `hub` entries are models, so `token` and `stored_tokens` are never
-  offered; `torch` is a model); `.npm`; `.bun/install/cache`; each child of
+  offered; `torch` is a model; a folder holding `token` or `stored_tokens`
+  beside `hub` is treated as a Hugging Face folder, whatever its name; a
+  `.cache` inside a `.cache` is another container); `.npm`; `.bun/install/cache`; each child of
   `~/Library/Caches` except `com.apple.*`; `Library/Caches` deeper inside the
   home (app containers) and `CoreSimulator/Caches`, whole; Electron caches
   (`Cache`, `Code Cache`, `GPUCache`, `CachedData`, `CachedExtensionVSIXs`,
