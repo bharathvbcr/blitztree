@@ -24,6 +24,8 @@
 "Clean Up" = "クリーンアップ";
 "Show folders that are safe to clean up" = "安全にクリーンアップできるフォルダを表示";
 "Pick a target and scan" = "対象を選んでスキャン";
+"The scan failed" = "スキャンに失敗しました";
+"BlitzTree could not scan %@" = "BlitzTree は %@ をスキャンできませんでした";
 "%@ files · %@ folders · %@s" = "%@ ファイル · %@ フォルダ · %@秒";
 "%@ files · %@" = "%@ ファイル · %@";
 "%@ system folders unreadable%@" = "読み取れないシステムフォルダ%@個%@";

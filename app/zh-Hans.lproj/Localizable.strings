@@ -24,6 +24,8 @@
 "Clean Up" = "清理";
 "Show folders that are safe to clean up" = "显示可安全清理的文件夹";
 "Pick a target and scan" = "选择目标并扫描";
+"The scan failed" = "扫描失败";
+"BlitzTree could not scan %@" = "BlitzTree 无法扫描 %@";
 "%@ files · %@ folders · %@s" = "%@ 个文件 · %@ 个文件夹 · %@ 秒";
 "%@ files · %@" = "%@ 个文件 · %@";
 "%@ system folders unreadable%@" = "%@ 个系统文件夹无法读取%@";

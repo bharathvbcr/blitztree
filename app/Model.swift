@@ -275,6 +275,10 @@ final class ScanModel {
     var dirs: UInt64 = 0
     var bytes: UInt64 = 0
     var scanning = false
+    /// The last scan ended without a tree (the engine failed, or could not
+    /// start). `scanning` is false again, so a new scan is allowed; cleared
+    /// when one starts.
+    private(set) var scanFailed = false
     var elapsed: Double = 0
     /// The tree on screen. Node numbers belong to the tree that made them:
     /// a rescan or a removal renumbers, so every replacement goes through
@@ -625,6 +629,7 @@ final class ScanModel {
         overcountedBytes = 0
         files = 0; dirs = 0; bytes = 0; elapsed = 0
         lastPollAt = nil; maxPollGap = 0
+        scanFailed = false
         scanning = true
         startedAt = Date()
         // Keep the process out of App Nap / timer coalescing while scanning.
@@ -637,7 +642,14 @@ final class ScanModel {
         // visible so a slow service cannot delay the first useful frame.
         let volumePath = scanRoot
         volumeTask = Task.detached(priority: .userInitiated) { VolumeSpace.read(volumePath) }
-        handle = bz_scan_start(scanRoot)
+        guard let started = bz_scan_start(scanRoot) else {
+            // No handle means no scan to poll: end it here, as failed.
+            volumeTask?.cancel()
+            volumeTask = nil
+            finishScan(nil, generation: scanGeneration, doneAt: Date())
+            return
+        }
+        handle = started
 
         // 60 Hz: the elapsed time ticks every frame, so the screen keeps
         // moving while the engine assembles the tree after the last file is
@@ -685,6 +697,7 @@ final class ScanModel {
         timer?.invalidate()
         timer = nil
         tree = result
+        scanFailed = result == nil
         if tree != nil { hasShownTree = true }
         if ProcessInfo.processInfo.environment["BZ_TIMING"] != nil {
             // Queue latency includes awaiting metadata and UI updates; it is
