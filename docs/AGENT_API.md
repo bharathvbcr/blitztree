@@ -89,8 +89,10 @@ These fields were added within schema version 1 (additive):
   process inside), `recent_activity` (nothing modified in the last 2 days) or
   `agent_session` (the tag's signature line, and the Claude Code session that
   owns the scratchpad is no longer running).
-  The CLI matches markers by name and never reads file contents, so treat a
-  non-null `verify` as an open question, not a result.
+  The CLI matches markers by name and reads no file contents, except one: the
+  `.git` file of a folder, which decides whether it is a linked worktree (see
+  Git worktrees below). Treat a non-null `verify` as an open question, not a
+  result.
 - `contained_in`: `null`, or the path of the enclosing candidate. Only
   `git_worktree` candidates contain others (their own build output is listed
   separately); never add a contained candidate to its container's size.
@@ -112,10 +114,16 @@ Rules (`~` is `$HOME`; marker = an entry with that name beside the folder):
   `package.json`; `.build` + `Package.swift`; `build` + `build.gradle[.kts]` or
   `settings.gradle[.kts]`; `.dart_tool` + `pubspec.yaml`; `.turbo`,
   `.parcel-cache`, `.nuxt`, `.svelte-kit`, `.expo`, `.angular` + `package.json`;
-  `Pods` + `Podfile`; `.tox`, `.nox`; `.zig-cache`, `zig-cache`, `zig-out` +
-  `build.zig`; `_build`, `deps` + `mix.exs`; `.stack-work`; `dist-newstyle`.
-- Caches: each child of `~/.cache` (except `huggingface`; `torch` is a model);
-  a `.cache` elsewhere, whole; `.npm`; `.bun/install/cache`; each child of
+  `Pods` + `Podfile`; `.tox`, `.nox` + `tox.ini`, `noxfile.py`,
+  `pyproject.toml` or `setup.cfg`; `.zig-cache`, `zig-cache`, `zig-out` +
+  `build.zig`; `_build`, `deps` + `mix.exs`; `.stack-work`, `dist-newstyle` +
+  `stack.yaml`, `cabal.project` or a `*.cabal` file.
+- Caches: each child of a `.cache`, wherever it is (except `huggingface`,
+  whose `hub` entries are models, so `token` and `stored_tokens` are never
+  offered; `torch` is a model; a tool cache with a file named `token` or
+  `stored_tokens` anywhere inside it is treated as a Hugging Face folder,
+  whatever its name, so only its `hub` entries are offered; a `.cache` inside
+  a `.cache` is another container); `.npm`; `.bun/install/cache`; each child of
   `~/Library/Caches` except `com.apple.*`; `Library/Caches` deeper inside the
   home (app containers) and `CoreSimulator/Caches`, whole; Electron caches
   (`Cache`, `Code Cache`, `GPUCache`, `CachedData`, `CachedExtensionVSIXs`,
@@ -132,17 +140,34 @@ Rules (`~` is `$HOME`; marker = an entry with that name beside the folder):
   `~/.rustup/toolchains/<toolchain>` (review), `~/.rustup/downloads|tmp`.
 - Models (review): `~/.cache/huggingface/hub/models--*|datasets--*|spaces--*`,
   `~/.cache/torch`, `~/.ollama/models`.
-- Coding agents (review unless noted): each `~/.claude/projects/<project>`,
-  `~/.claude/file-history`, `~/.claude/debug` (safe); `~/.codex/sessions/<year>`,
-  `~/.codex/archived_sessions`; each `~/.codex/worktrees/<child>` (a Git
-  worktree, or a leftover folder); a `CACHEDIR.TAG` folder inside a Claude
+- Coding agents (review unless noted): each `~/.claude/projects/<project>`
+  that holds nothing but `*.jsonl` transcripts, `.DS_Store` and session-id
+  folders whose entries are only `subagents`, `tool-results`, `workflows`,
+  `custom-title.json`, `*.jsonl` or `.DS_Store` (Claude Code keeps `memory/`
+  beside them, and could keep it inside a session folder: a project with it,
+  or with any other entry, is not offered), `~/.claude/file-history`, `~/.claude/debug` (safe);
+  `~/.codex/sessions/<year>`, `~/.codex/archived_sessions`; a linked Git
+  worktree at `~/.codex/worktrees/<id>` or `~/.codex/worktrees/<id>/<repo>`
+  (Codex's layout; any other folder there, such as one holding only release
+  artifacts, or a full clone with a `.git` directory, is never offered); a
+  `CACHEDIR.TAG` folder inside a Claude
   Code session's temp scratchpad,
   `/private/tmp/claude-<uid>/<project>/<session-id>/scratchpad/...` (safe,
   `agent_scratch`, verified with `agent_session`). Any path inside a session's
   temp folder is refused while that session runs, whatever rule matched it.
-- Git worktrees (review): a folder whose `.git` is a file, not a directory,
-  when its parent is named `worktrees` or no ancestor in the scan has a `.git`
-  entry (submodules always have one and are excluded).
+- Git worktrees (review): a folder whose `.git` is a regular file of at most
+  4096 bytes holding one `gitdir: <path>` line that names
+  `<common dir>/worktrees/<name>`; relative paths resolve against the folder.
+  The admin directory must check out as git leaves it: its `commondir` names
+  a directory whose `worktrees` folder is the admin directory's parent, and
+  its `gitdir` names this very `.git` file (by device and inode), so a copy of
+  a worktree is not one. Every file is read the way the app's verifier reads
+  it: `lstat` first (a link, a pipe, a device, an empty, oversized or dataless
+  file is never opened), then opened without following links or blocking, and
+  accepted only if it is the file `lstat` saw. The content decides, not where
+  the folder sits: a submodule (`.../.git/modules/...`), a `--separate-git-dir`
+  repository, an empty, oversized, multi-line, non-UTF-8 or dangling `.git`
+  file is not a worktree, whatever scan root found it.
 
 Never listed: `~/.cache`, `~/Library/Caches`, `~/.cargo`, `~/.gradle`, `~/.m2`,
 `~/.ollama`, `~/.rustup`, `~/.claude`, `~/.codex` and `~/.cache/huggingface`
@@ -160,7 +185,7 @@ its normal spelling and its Data-volume spelling (a whole-disk scan rooted at
 `/System/Volumes/Data` sees `/Users/x` as `/System/Volumes/Data/Users/x`), also
 when the scan root is inside the home. With an explicit root outside the home,
 or no usable `$HOME`, home rules never match; the unanchored rules (for example
-a whole `.cache`) still do.
+the children of a `.cache`) still do.
 
 Both interfaces visit descendants, excluding the scan root itself and `.Trash`
 subtrees. A recognized directory is not descended into, even below the size
