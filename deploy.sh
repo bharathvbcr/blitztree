@@ -38,5 +38,12 @@ if [[ -e "$DEST" ]]; then
 else
     mv "$STAGING/new.app" "$DEST"
 fi
-codesign --verify --deep --strict "$DEST"
+if ! codesign --verify --deep --strict "$DEST"; then
+    if [[ -e "$STAGING/old.app" ]]; then
+        mv "$DEST" "$STAGING/rejected.app"
+        mv "$STAGING/old.app" "$DEST"
+        print -u2 "deploy.sh: the deployed bundle failed verification; the old one is restored"
+    fi
+    exit 1
+fi
 echo "==> Deployed $HAVE to $DEST (signature verified)"
