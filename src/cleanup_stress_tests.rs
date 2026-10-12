@@ -145,7 +145,7 @@ fn random_paths(rng: &mut Rng, home_rel: Option<&str>) -> (Vec<String>, Vec<Stri
         }
     }
     // The same entries at non-home depths: only their direct rules protect them.
-    for p in [".gradle/gradle.properties", "lib/node_modules/npm/index.js"] {
+    for p in [".gradle/gradle.properties", "lib/node_modules/npm/index.js", ".cache/huggingface/token"] {
         if rng.chance(50) {
             paths.push(format!("{}/{p}", rng.pick(NAMES)));
         }
@@ -199,21 +199,23 @@ fn check(seed: u64) -> Vec<Kind> {
                 "{ctx}: {path} without its project file"
             );
         }
-        // Wherever a `.cache` sits, neither it nor its huggingface folder is
-        // ever a candidate, so the tokens beside the hub never go with it.
-        let name = path.rsplit('/').next().unwrap_or("");
-        if name == ".cache" || name == "huggingface" {
+        // Under any home or none, neither a `.cache` nor its huggingface folder
+        // is ever a candidate, so the tokens beside the hub never go with it.
+        for p in paths.iter().map(|p| p.trim_end_matches('/')) {
+            for tail in NEVER_INSIDE {
+                let tail = tail.join("/");
+                let Some(cache) = p.strip_suffix(&tail).map(|x| x.trim_end_matches('/')) else { continue };
+                let cache = format!("{cache}/.cache");
+                let cache = cache.trim_start_matches('/');
+                let hf = format!("{cache}/huggingface");
+                assert!(path != cache && *path != hf,"{ctx}: {path} ({:?}) holds {p}", c.kind);
+            }
+        }
+        // A Hugging Face home anywhere (HF_HOME=~/.cache/hf) is never a whole cache.
+        if c.kind == Kind::ToolCaches {
             assert!(
-                !paths.iter().any(|p| {
-                    let p = p.trim_end_matches('/');
-                    p.starts_with(&format!("{path}/"))
-                        && NEVER_INSIDE.iter().any(|tail| {
-                            let tail = tail.join("/");
-                            p == tail || p.ends_with(&format!("/{tail}"))
-                        })
-                }),
-                "{ctx}: {path} ({:?}) holds a huggingface token",
-                c.kind
+                !(contains(&t, n, &["token", "stored_tokens"]) && contains(&t, n, &["hub"])),
+                "{ctx}: Hugging Face home {path} is a candidate"
             );
         }
         for p in &protected {

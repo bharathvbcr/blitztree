@@ -583,6 +583,7 @@ fn container_rule(t: &Tree, i: usize, ctx: Container, git: &dyn Fn(usize) -> Git
         C::Plain => return None,
         C::DotCache => match name {
             "huggingface" => Descend(C::HuggingFace),
+            ".cache" => Descend(C::DotCache),
             "torch" => Emit(Kind::MlModel),
             _ => Emit(Kind::ToolCaches),
         },
@@ -590,6 +591,8 @@ fn container_rule(t: &Tree, i: usize, ctx: Container, git: &dyn Fn(usize) -> Git
             // macOS-managed caches; the Swift guard refuses them too.
             if name.len() >= 10 && name.as_bytes()[..10].eq_ignore_ascii_case(b"com.apple.") {
                 Skip
+            } else if name == ".cache" {
+                Descend(C::DotCache)
             } else {
                 Emit(Kind::AppCaches)
             }
@@ -826,6 +829,13 @@ pub(crate) fn find_with(
                 // holds credentials in gradle.properties: never emit it whole.
                 Outcome::Emit(kind) if !kind.descends() && contains(t, c, GRADLE_CONFIG) => {
                     Outcome::Descend(Container::GradleHome)
+                }
+                // Likewise a Hugging Face home anywhere (HF_HOME=~/.cache/hf):
+                // `token` and `stored_tokens` sit beside `hub`.
+                Outcome::Emit(Kind::ToolCaches)
+                    if contains(t, c, &["token", "stored_tokens"]) && contains(t, c, &["hub"]) =>
+                {
+                    Outcome::Descend(Container::HuggingFace)
                 }
                 outcome => outcome,
             };
@@ -1080,10 +1090,14 @@ mod tests {
             "Users/other/.cache/gradle/caches/x",
             "Users/u/proj/.cache/huggingface/token",
             "Users/u/proj/.cache/hit/x",
+            // HF_HOME=~/.cache/hf: a Hugging Face home under another name.
+            "Users/other/.cache/hf/token",
+            "Users/other/.cache/hf/hub/models--b/x",
         ];
         let t = build("/", &paths);
         let expected = expect(&[
             ("Users/other/.cache/gradle/caches", "gradle_cache"),
+            ("Users/other/.cache/hf/hub/models--b", "ml_model"),
             ("Users/other/.cache/huggingface/hub/models--a", "ml_model"),
             ("Users/other/.cache/pip", "tool_caches"),
             ("Users/u/proj/.cache/hit", "tool_caches"),
