@@ -42,6 +42,14 @@ func collect(_ client: LLMPlanClient, _ prompt: String) async -> (String, Int, I
         assert(r4.3.contains("HTTP 401"), "401: \(r4)")
         print("PASS HTTP error surfaces")
 
+        // A remote http endpoint is refused before any request leaves; the
+        // loopback http mock above is the one allowed exception.
+        let remote = LLMProvider(id: "r", displayName: "r", baseURL: URL(string: "http://example.com/v1")!,
+                                 api: .openAIChat, model: "m")
+        let r5 = await collect(LLMPlanClient(provider: remote, apiKey: "k"), "sse")
+        assert(r5.3.contains("plain http"), "http to a remote host: \(r5)")
+        print("PASS plain http to a remote host is refused")
+
         // Malformed replies must return nil, not crash (the bounds of the
         // brace span can invert; this regressed once).
         let junk: [String] = ["}{", "}", "{", "", "no braces here", "{\"items\":[]", "}items{"]

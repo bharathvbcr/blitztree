@@ -9,7 +9,7 @@ swiftc app/CleanupCommand.swift tests/CleanupCommandChecks.swift "${FLAGS[@]}" -
 "$CLEANUP_TEST_TMP/commands"
 # The guard verifies linked git worktrees, so it compiles with GitWorktree and
 # the session-log reader it consults; the checks build fixtures with real git.
-GUARD=(app/CleanupSafety.swift app/GitWorktree.swift app/AgentSessions.swift tests/GitFixture.swift)
+GUARD=(app/CleanupSafety.swift app/GitWorktree.swift app/Subprocess.swift app/AgentSessions.swift tests/GitFixture.swift)
 swiftc "${GUARD[@]}" tests/CleanupSafetyChecks.swift "${FLAGS[@]}" -o "$CLEANUP_TEST_TMP/paths"
 "$CLEANUP_TEST_TMP/paths"
 swiftc "${GUARD[@]}" app/CleanupVerify.swift app/CleanupOperations.swift tests/WorktreeChecks.swift \
@@ -57,7 +57,13 @@ swiftc "${SOURCES[@]}" tests/ListIntegrationChecks.swift "${FLAGS[@]}" \
   -framework AppKit -framework SwiftUI -o "$CLEANUP_TEST_TMP/list"
 "$CLEANUP_TEST_TMP/list"
 # Sign-in opens the authorize URL itself. No scan engine and no real browser.
-swiftc app/AgentLogin.swift tests/AgentLoginChecks.swift "${FLAGS[@]}" \
+swiftc app/AgentLogin.swift app/Subprocess.swift tests/AgentLoginChecks.swift "${FLAGS[@]}" \
   -framework AppKit -o "$CLEANUP_TEST_TMP/login"
 "$CLEANUP_TEST_TMP/login"
+# The shared subprocess helper: SIGPIPE, bounded and cancellable waits, no
+# leaked reader or descriptor, the install script, many children at once.
+swiftc "${SOURCES[@]}" tests/SubprocessChecks.swift "${FLAGS[@]}" \
+  -import-objc-header app/bz.h -L target/release -lblitztree \
+  -framework AppKit -framework SwiftUI -o "$CLEANUP_TEST_TMP/subprocess"
+"$CLEANUP_TEST_TMP/subprocess"
 

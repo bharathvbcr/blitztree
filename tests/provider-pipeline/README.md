@@ -8,6 +8,8 @@ actually produce:
 2. markdown-fenced JSON
 3. non-SSE plain JSON body (endpoint ignored `stream: true`)
 4. HTTP error propagation
+5. plain http to a remote host is refused before any request (loopback http,
+   like this mock, is the one allowed exception)
 
     python3 tests/provider-pipeline/server.py &   # port 18080
     swiftc -parse-as-library app/PlanParsing.swift app/ModelProvider.swift \

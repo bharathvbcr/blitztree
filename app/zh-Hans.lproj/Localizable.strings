@@ -299,3 +299,12 @@
 "No key found. Export %@ in your shell profile, or save the key in your Keychain as “%@”." = "未找到密钥。请在 shell 配置文件中导出 %@，或将密钥以“%@”存入钥匙串。";
 "Ready: %@" = "已就绪：%@";
 "A cloud run sends folder paths and sizes from the scan, never file contents, to that provider. MANVI only plans: BlitzTree starts it read-only, where it can't write files or run commands, and does the cleanup itself." = "云端运行会把扫描得到的文件夹路径和大小发送给该提供商，绝不发送文件内容。MANVI 只负责规划：BlitzTree 以只读方式启动它，使其无法写入文件或运行命令，清理由 BlitzTree 自己完成。";
+"Installation was cancelled. Nothing was downloaded or run." = "安装已取消。未下载或运行任何内容。";
+"Run the Claude Code installer?" = "要运行 Claude Code 安装程序吗？";
+"BlitzTree will download %@ and run it with bash, as you. It is Anthropic's own installer, but it isn't pinned to a checksum and can change between releases. This is the exact command:\n\n%@" = "BlitzTree 将下载 %@ 并以你的身份用 bash 运行。这是 Anthropic 自己的安装程序，但未固定校验和，不同版本之间可能会变化。确切的命令如下：\n\n%@";
+"Download and Run" = "下载并运行";
+"Enter a full URL, such as https://gateway.example/v1." = "请输入完整的 URL，例如 https://gateway.example/v1。";
+"The URL needs a host name, such as gateway.example." = "URL 需要主机名，例如 gateway.example。";
+"“%@://” isn't supported. Use https://." = "不支持“%@://”。请使用 https://。";
+"“%@” is reached over plain http, so your API key and folder paths would cross the network unencrypted. Use https://. Plain http is allowed only for localhost, 127.0.0.1 and ::1." = "“%@”通过未加密的 http 访问，你的 API 密钥和文件夹路径将以明文在网络上传输。请使用 https://。仅 localhost、127.0.0.1 和 ::1 允许使用纯 http。";
+"Couldn't save the API key to the Keychain: %@ (%@)." = "无法将 API 密钥保存到钥匙串：%@ (%@)。";

@@ -299,3 +299,12 @@
 "No key found. Export %@ in your shell profile, or save the key in your Keychain as “%@”." = "キーが見つかりません。シェルのプロファイルで %@ をエクスポートするか、キーチェーンに「%@」として保存してください。";
 "Ready: %@" = "準備完了: %@";
 "A cloud run sends folder paths and sizes from the scan, never file contents, to that provider. MANVI only plans: BlitzTree starts it read-only, where it can't write files or run commands, and does the cleanup itself." = "クラウドでの実行では、スキャンしたフォルダのパスとサイズをそのプロバイダに送信します。ファイルの内容は送信しません。MANVI は計画するだけです。BlitzTree は MANVI を読み取り専用で起動するため、ファイルの書き込みやコマンドの実行はできず、クリーンアップは BlitzTree 自身が行います。";
+"Installation was cancelled. Nothing was downloaded or run." = "インストールをキャンセルしました。何もダウンロードも実行もされていません。";
+"Run the Claude Code installer?" = "Claude Code のインストーラを実行しますか？";
+"BlitzTree will download %@ and run it with bash, as you. It is Anthropic's own installer, but it isn't pinned to a checksum and can change between releases. This is the exact command:\n\n%@" = "BlitzTree は %@ をダウンロードし、あなたのアカウントで bash を使って実行します。これは Anthropic 公式のインストーラですが、チェックサムで固定されておらず、リリースごとに変わる可能性があります。実行するコマンドは次のとおりです:\n\n%@";
+"Download and Run" = "ダウンロードして実行";
+"Enter a full URL, such as https://gateway.example/v1." = "https://gateway.example/v1 のような完全な URL を入力してください。";
+"The URL needs a host name, such as gateway.example." = "gateway.example のようなホスト名が URL に必要です。";
+"“%@://” isn't supported. Use https://." = "「%@://」はサポートされていません。https:// を使用してください。";
+"“%@” is reached over plain http, so your API key and folder paths would cross the network unencrypted. Use https://. Plain http is allowed only for localhost, 127.0.0.1 and ::1." = "「%@」には暗号化されていない http で接続するため、API キーとフォルダのパスがネットワーク上に平文で流れます。https:// を使用してください。平文の http は localhost、127.0.0.1、::1 にのみ許可されます。";
+"Couldn't save the API key to the Keychain: %@ (%@)." = "API キーをキーチェーンに保存できませんでした: %@ (%@)。";

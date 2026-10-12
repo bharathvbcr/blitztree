@@ -299,3 +299,12 @@
 "No key found. Export %@ in your shell profile, or save the key in your Keychain as “%@”." = "No se encontró ninguna clave. Exporta %@ en el perfil de tu shell o guarda la clave en tu llavero como «%@».";
 "Ready: %@" = "Listo: %@";
 "A cloud run sends folder paths and sizes from the scan, never file contents, to that provider. MANVI only plans: BlitzTree starts it read-only, where it can't write files or run commands, and does the cleanup itself." = "Una ejecución en la nube envía a ese proveedor las rutas y tamaños de carpetas del análisis, nunca el contenido de los archivos. MANVI solo planifica: BlitzTree lo inicia en solo lectura, sin poder escribir archivos ni ejecutar comandos, y hace la limpieza por sí mismo.";
+"Installation was cancelled. Nothing was downloaded or run." = "Instalación cancelada. No se descargó ni ejecutó nada.";
+"Run the Claude Code installer?" = "¿Ejecutar el instalador de Claude Code?";
+"BlitzTree will download %@ and run it with bash, as you. It is Anthropic's own installer, but it isn't pinned to a checksum and can change between releases. This is the exact command:\n\n%@" = "BlitzTree descargará %@ y lo ejecutará con bash, con tu usuario. Es el instalador oficial de Anthropic, pero no está fijado a una suma de comprobación y puede cambiar entre versiones. Este es el comando exacto:\n\n%@";
+"Download and Run" = "Descargar y ejecutar";
+"Enter a full URL, such as https://gateway.example/v1." = "Introduce una URL completa, como https://gateway.example/v1.";
+"The URL needs a host name, such as gateway.example." = "La URL necesita un nombre de host, como gateway.example.";
+"“%@://” isn't supported. Use https://." = "«%@://» no es compatible. Usa https://.";
+"“%@” is reached over plain http, so your API key and folder paths would cross the network unencrypted. Use https://. Plain http is allowed only for localhost, 127.0.0.1 and ::1." = "«%@» se alcanza por http sin cifrar, así que tu clave de API y las rutas de carpetas viajarían por la red sin cifrar. Usa https://. El http sin cifrar solo se permite para localhost, 127.0.0.1 y ::1.";
+"Couldn't save the API key to the Keychain: %@ (%@)." = "No se pudo guardar la clave de API en el Llavero: %@ (%@).";

@@ -299,3 +299,12 @@
 "No key found. Export %@ in your shell profile, or save the key in your Keychain as “%@”." = "Kein Schlüssel gefunden. Exportieren Sie %@ in Ihrem Shell-Profil oder sichern Sie den Schlüssel im Schlüsselbund als „%@“.";
 "Ready: %@" = "Bereit: %@";
 "A cloud run sends folder paths and sizes from the scan, never file contents, to that provider. MANVI only plans: BlitzTree starts it read-only, where it can't write files or run commands, and does the cleanup itself." = "Ein Cloud-Lauf sendet Ordnerpfade und -größen aus dem Scan, niemals Dateiinhalte, an diesen Anbieter. MANVI plant nur: BlitzTree startet es schreibgeschützt, sodass es keine Dateien schreiben und keine Befehle ausführen kann, und bereinigt selbst.";
+"Installation was cancelled. Nothing was downloaded or run." = "Installation abgebrochen. Es wurde nichts heruntergeladen oder ausgeführt.";
+"Run the Claude Code installer?" = "Claude-Code-Installer ausführen?";
+"BlitzTree will download %@ and run it with bash, as you. It is Anthropic's own installer, but it isn't pinned to a checksum and can change between releases. This is the exact command:\n\n%@" = "BlitzTree lädt %@ herunter und führt es mit bash unter Ihrem Konto aus. Es ist Anthropics eigener Installer, aber nicht an eine Prüfsumme gebunden und kann sich zwischen Versionen ändern. Das ist der genaue Befehl:\n\n%@";
+"Download and Run" = "Herunterladen und ausführen";
+"Enter a full URL, such as https://gateway.example/v1." = "Geben Sie eine vollständige URL ein, z. B. https://gateway.example/v1.";
+"The URL needs a host name, such as gateway.example." = "Die URL braucht einen Hostnamen, z. B. gateway.example.";
+"“%@://” isn't supported. Use https://." = "„%@://“ wird nicht unterstützt. Verwenden Sie https://.";
+"“%@” is reached over plain http, so your API key and folder paths would cross the network unencrypted. Use https://. Plain http is allowed only for localhost, 127.0.0.1 and ::1." = "„%@“ wird über unverschlüsseltes http erreicht, sodass Ihr API-Schlüssel und Ordnerpfade unverschlüsselt durchs Netzwerk gehen würden. Verwenden Sie https://. Einfaches http ist nur für localhost, 127.0.0.1 und ::1 erlaubt.";
+"Couldn't save the API key to the Keychain: %@ (%@)." = "Der API-Schlüssel konnte nicht im Schlüsselbund gespeichert werden: %@ (%@).";

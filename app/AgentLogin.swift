@@ -55,43 +55,36 @@ nonisolated enum AgentLogin {
         return line
     }
 
-    /// Runs the CLI on a terminal when the system can allocate one, reads
-    /// everything it prints, and opens the first allowlisted authorize URL.
-    /// `onStart` runs on the main actor once the process is up, so cancel can
-    /// still terminate it.
+    /// Runs the CLI on a terminal when the system can allocate one (pipes
+    /// otherwise), reads everything it prints, and opens the first
+    /// allowlisted authorize URL. The wait is bounded by `timeout` and by the
+    /// shared helper's drain grace once the CLI has exited (a grandchild that
+    /// keeps the terminal open cannot hold the sign-in up), and cancelling the
+    /// calling task terminates the CLI.
     @MainActor
     static func run(executable: String, arguments: [String], environmentPath: String,
                     currentDirectory: String, open: @escaping @Sendable (URL) -> Void,
-                    onStart: ((Process) -> Void)? = nil) async -> Result {
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: executable)
-        process.arguments = arguments
-        var environment = ProcessInfo.processInfo.environment
-        environment["PATH"] = environmentPath
+                    timeout: TimeInterval = 900) async -> Result {
+        var environment = Subprocess.environment(path: environmentPath)
         // A traced or CI shell must not change the sign-in transcript.
         environment["SHELLOPTS"] = nil
         environment["BASH_ENV"] = nil
         environment["ENV"] = nil
         environment["CI"] = nil
-        process.environment = environment
-        process.currentDirectoryURL = URL(fileURLWithPath: currentDirectory)
-        let session = AgentLoginSession(process: process, open: open)
-        session.start()
-        do {
-            try process.run()
-        } catch {
-            session.abort()
-            return Result(status: -1, detail: error.localizedDescription)
+        let transcript = LoginTranscript(open: open)
+        let tail = LoginTail()
+        let sink = Subprocess.Sink.stream { data in
+            transcript.feed(data)
+            tail.feed(data)
         }
-        onStart?(process)
-        session.afterLaunch()
-        await withCheckedContinuation { (c: CheckedContinuation<Void, Never>) in
-            DispatchQueue.global(qos: .userInitiated).async {
-                session.wait()
-                c.resume()
-            }
-        }
-        return session.result
+        let spec = Subprocess.Spec(executable, arguments, environment: environment,
+                                   directory: currentDirectory, terminal: true)
+        let outcome = await Subprocess.run(spec, stdout: sink, stderr: sink, timeout: timeout)
+        transcript.flush()
+        if let error = outcome.launchError { return Result(status: -1, detail: error) }
+        if outcome.cancelled { return Result(status: -1, detail: "cancelled") }
+        if outcome.timedOut { return Result(status: -1, detail: "timed out after \(Int(timeout)) seconds") }
+        return Result(status: outcome.status, detail: detail(from: tail.last, status: outcome.status))
     }
 
     private nonisolated static func allowlisted(_ raw: String) -> URL? {
@@ -161,123 +154,6 @@ nonisolated enum AgentLogin {
         return out
     }
 }
-
-/// Stdio for one sign-in. A terminal makes `isatty` true, which is what the
-/// CLIs check before they will open a browser themselves; pipes still carry
-/// the URL when a terminal cannot be allocated.
-private nonisolated final class AgentLoginSession: @unchecked Sendable {
-    private let process: Process
-    private let tail = LoginTail()
-    private let transcript: LoginTranscript
-    private let lock = NSLock()
-    private let group = DispatchGroup()
-    private var master: Int32 = -1
-    /// Parent's copy of the terminal. Closed after launch so the child's copy
-    /// is the one that keeps the session open.
-    private var slaveHandle: FileHandle?
-    private var pipes: [Pipe] = []
-    private var streams = 0
-    private var finished = false
-    private var started = false
-
-    init(process: Process, open: @escaping @Sendable (URL) -> Void) {
-        self.process = process
-        self.transcript = LoginTranscript(open: open)
-        if let pty = PTY.open() {
-            master = pty.master
-            let handle = FileHandle(fileDescriptor: pty.slave, closeOnDealloc: false)
-            slaveHandle = handle
-            process.standardInput = handle
-            process.standardOutput = handle
-            process.standardError = handle
-            streams = 1
-        } else {
-            let out = Pipe()
-            let err = Pipe()
-            process.standardInput = FileHandle.nullDevice
-            process.standardOutput = out
-            process.standardError = err
-            pipes = [out, err]
-            streams = 2
-        }
-        group.enter()
-    }
-
-    func start() {
-        lock.lock()
-        if started { lock.unlock(); return }
-        started = true
-        let master = master
-        let pipes = pipes
-        lock.unlock()
-        if master >= 0 {
-            read(master)
-        } else {
-            for pipe in pipes {
-                let fd = Darwin.dup(pipe.fileHandleForReading.fileDescriptor)
-                if fd >= 0 { read(fd) }
-                else { streamEnded() }
-            }
-        }
-    }
-
-    /// The child has the terminal (or the pipe write ends) now. Closing the
-    /// parent's copies is what lets the reader see EOF when the CLI exits.
-    func afterLaunch() {
-        let handle = slaveHandle
-        slaveHandle = nil
-        handle?.closeFile()
-        for pipe in pipes {
-            try? pipe.fileHandleForWriting.close()
-        }
-    }
-
-    func wait() {
-        process.waitUntilExit()
-        group.wait()
-    }
-
-    func abort() {
-        afterLaunch()
-        group.wait()
-    }
-
-    var result: AgentLogin.Result {
-        let status = process.terminationStatus
-        return AgentLogin.Result(status: status, detail: AgentLogin.detail(from: tail.last, status: status))
-    }
-
-    private func read(_ fd: Int32) {
-        let transcript = transcript
-        let tail = tail
-        DispatchQueue.global(qos: .userInitiated).async {
-            let handle = FileHandle(fileDescriptor: fd, closeOnDealloc: false)
-            defer {
-                handle.closeFile()
-                self.streamEnded()
-            }
-            while true {
-                let data = handle.availableData
-                if data.isEmpty {
-                    transcript.flush()
-                    break
-                }
-                transcript.feed(data)
-                tail.feed(data)
-            }
-        }
-    }
-
-    private func streamEnded() {
-        lock.lock()
-        streams -= 1
-        let done = streams <= 0 && !finished
-        if done { finished = true }
-        lock.unlock()
-        if done { group.leave() }
-    }
-}
-
 /// Keeps the sign-in transcript and opens the first allowlisted URL once.
 private nonisolated final class LoginTranscript: @unchecked Sendable {
     private let lock = NSLock()
@@ -338,27 +214,5 @@ private nonisolated final class LoginTail: @unchecked Sendable {
             return trimmed
         }
         return ""
-    }
-}
-
-private nonisolated enum PTY {
-    struct Ends { var master: Int32; var slave: Int32 }
-
-    static func open() -> Ends? {
-        let master = posix_openpt(O_RDWR | O_NOCTTY | O_CLOEXEC)
-        guard master >= 0 else { return nil }
-        guard grantpt(master) == 0, unlockpt(master) == 0, let name = ptsname(master) else {
-            Darwin.close(master)
-            return nil
-        }
-        let slaveName = String(cString: name)
-        let slave = Darwin.open(slaveName, O_RDWR | O_NOCTTY)
-        guard slave >= 0 else {
-            Darwin.close(master)
-            return nil
-        }
-        let flags = fcntl(slave, F_GETFD)
-        if flags >= 0 { _ = fcntl(slave, F_SETFD, flags | FD_CLOEXEC) }
-        return Ends(master: master, slave: slave)
     }
 }

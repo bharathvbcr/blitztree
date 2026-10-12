@@ -106,10 +106,10 @@ struct ManviSettingsView: View {
         }
         .task {
             let found = await AgentLocator.find()
-            let (saved, keys) = await Task.detached {
+            let (saved, keys) = await AgentLocator.onBackgroundThread {
                 (Manvi.Choice.load(shell: found.shell),
                  Dictionary(uniqueKeysWithValues: Manvi.cloudProviders.map { ($0, Manvi.hasKey($0, shell: found.shell)) }))
-            }.value
+            }
             stored = saved
             mode = saved.mode
             localModel = saved.localModel ?? ""
@@ -234,7 +234,7 @@ struct ManviSettingsView: View {
         fetching = true
         defer { fetching = false }
         let shell = env.shell
-        guard let key = await Task.detached(operation: { Manvi.key("anthropic", shell: shell) }).value else {
+        guard let key = await AgentLocator.onBackgroundThread({ Manvi.key("anthropic", shell: shell) }) else {
             modelError = String(localized: "no key")
             return
         }
@@ -262,7 +262,7 @@ struct ManviSettingsView: View {
         else { UserDefaults.standard.set(space, forKey: Manvi.workspaceKey) }
         let provider = cloud, shell = env.shell
         Task {
-            keyed[provider] = await Task.detached { Manvi.hasKey(provider, shell: shell) }.value
+            keyed[provider] = await AgentLocator.onBackgroundThread { Manvi.hasKey(provider, shell: shell) }
             announce()
             await fetchClaudeModels()
         }
@@ -283,9 +283,9 @@ struct ManviSettingsView: View {
         NotificationCenter.default.post(name: Manvi.settingsChanged, object: nil)
         Task {
             let path = manvi.path, envPath = env.path, shell = env.shell
-            ready = await Task.detached {
+            ready = await AgentLocator.onBackgroundThread {
                 Manvi.readyRoutes(path: path, envPath: envPath, shell: shell)
-            }.value
+            }
             if mode != "cloud", models.isEmpty { await scanModels() }
         }
     }
@@ -322,6 +322,11 @@ struct ProviderFormView: View {
                   caption: String(localized: "Lowercase identifier, starting with a letter, that uniquely names this provider in requests and as its credential name."))
             field(String(localized: "Display name"), text: $displayName, placeholder: String(localized: "Display name"))
             field(String(localized: "Base URL"), text: $baseURL, placeholder: "https://gateway.example/v1")
+            if let problem = baseURLProblem {
+                // Why the button is disabled: the key and folder paths go to this address.
+                Text(problem).font(.caption).foregroundStyle(.red)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
             Picker("API protocol", selection: $api) {
                 ForEach(APIProtocol.allCases) { proto in
                     Text(proto.label).tag(proto)
@@ -374,7 +379,14 @@ struct ProviderFormView: View {
     private var isValid: Bool {
         // The id doubles as the Keychain credential name; keep it strict.
         id.range(of: "^[a-z][a-z0-9-]*$", options: .regularExpression) != nil
-            && URL(string: baseURL)?.scheme != nil && !model.isEmpty
+            && (try? ProviderURL.validate(baseURL).get()) != nil && !model.isEmpty
+    }
+
+    /// Why the base URL can't be used; nil while it is empty or fine.
+    private var baseURLProblem: String? {
+        guard !baseURL.trimmingCharacters(in: .whitespaces).isEmpty else { return nil }
+        if case .failure(let problem) = ProviderURL.validate(baseURL) { return problem.errorDescription }
+        return nil
     }
 
     private func field(_ title: String, text: Binding<String>, placeholder: String, caption: String? = nil) -> some View {
@@ -391,7 +403,14 @@ struct ProviderFormView: View {
     /// on the typed model ID.
     private func fetchModels() async {
         error = nil
-        guard let base = URL(string: baseURL) else { return }
+        // The key goes with this request, so the same rule as for a plan applies.
+        let base: URL
+        switch ProviderURL.validate(baseURL) {
+        case .success(let url): base = url
+        case .failure(let problem):
+            error = problem.errorDescription
+            return
+        }
         var request = URLRequest(url: base.appending(path: "models"))
         request.timeoutInterval = 15
         if !key.isEmpty { request.setValue("Bearer \(key)", forHTTPHeaderField: "Authorization") }
@@ -420,11 +439,23 @@ struct ProviderFormView: View {
     }
 
     private func save() {
-        guard let url = URL(string: baseURL) else { return }
+        let url: URL
+        switch ProviderURL.validate(baseURL) {
+        case .success(let valid): url = valid
+        case .failure(let problem):
+            error = problem.errorDescription
+            return
+        }
         let provider = LLMProvider(id: id, displayName: displayName.isEmpty ? id : displayName,
                                    baseURL: url, api: api, model: model)
-        ProviderStore.shared.save(provider, key: key.isEmpty ? nil : key)
-        dismiss()
+        // A refused Keychain write or URL keeps the sheet open and says why,
+        // instead of looking saved and failing later as a 401.
+        do {
+            try ProviderStore.shared.save(provider, key: key.isEmpty ? nil : key)
+            dismiss()
+        } catch {
+            self.error = error.localizedDescription
+        }
     }
 }
 

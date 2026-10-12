@@ -299,3 +299,12 @@
 "No key found. Export %@ in your shell profile, or save the key in your Keychain as “%@”." = "Anahtar bulunamadı. Kabuk profilinizde %@ dışa aktarın ya da anahtarı Anahtar Zinciri'ne “%@” adıyla kaydedin.";
 "Ready: %@" = "Hazır: %@";
 "A cloud run sends folder paths and sizes from the scan, never file contents, to that provider. MANVI only plans: BlitzTree starts it read-only, where it can't write files or run commands, and does the cleanup itself." = "Bulut çalıştırması taramadaki klasör yollarını ve boyutlarını, asla dosya içeriğini değil, o sağlayıcıya gönderir. MANVI yalnızca planlar: BlitzTree onu dosya yazamayacağı ve komut çalıştıramayacağı salt okunur modda başlatır ve temizliği kendisi yapar.";
+"Installation was cancelled. Nothing was downloaded or run." = "Kurulum iptal edildi. Hiçbir şey indirilmedi veya çalıştırılmadı.";
+"Run the Claude Code installer?" = "Claude Code yükleyicisi çalıştırılsın mı?";
+"BlitzTree will download %@ and run it with bash, as you. It is Anthropic's own installer, but it isn't pinned to a checksum and can change between releases. This is the exact command:\n\n%@" = "BlitzTree %@ adresini indirip sizin hesabınızla bash ile çalıştıracak. Anthropic'in kendi yükleyicisidir, ancak bir sağlama toplamına sabitlenmemiştir ve sürümler arasında değişebilir. Tam komut şudur:\n\n%@";
+"Download and Run" = "İndir ve Çalıştır";
+"Enter a full URL, such as https://gateway.example/v1." = "Tam bir URL girin, örneğin https://gateway.example/v1.";
+"The URL needs a host name, such as gateway.example." = "URL'nin bir ana makine adı olmalıdır, örneğin gateway.example.";
+"“%@://” isn't supported. Use https://." = "“%@://” desteklenmiyor. https:// kullanın.";
+"“%@” is reached over plain http, so your API key and folder paths would cross the network unencrypted. Use https://. Plain http is allowed only for localhost, 127.0.0.1 and ::1." = "“%@” şifresiz http üzerinden erişiliyor; API anahtarınız ve klasör yolları ağ üzerinden şifrelenmeden geçerdi. https:// kullanın. Düz http yalnızca localhost, 127.0.0.1 ve ::1 için izinlidir.";
+"Couldn't save the API key to the Keychain: %@ (%@)." = "API anahtarı Anahtar Zinciri'ne kaydedilemedi: %@ (%@).";
