@@ -9,18 +9,22 @@ use std::collections::BinaryHeap;
 struct Ranked<'a> {
     tree: &'a Tree,
     node: usize,
+    // `tree.alloc[node]`, kept here so ordering does not chase it per compare.
+    alloc: u64,
 }
 
 impl Ord for Ranked<'_> {
+    #[inline]
     fn cmp(&self, other: &Self) -> Ordering {
-        self.tree.alloc[self.node]
-            .cmp(&other.tree.alloc[other.node])
+        self.alloc
+            .cmp(&other.alloc)
             .then_with(|| self.tree.compare_paths(other.node, self.node))
             .then_with(|| self.node.cmp(&other.node))
     }
 }
 
 impl PartialOrd for Ranked<'_> {
+    #[inline]
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
         Some(self.cmp(other))
     }
@@ -34,33 +38,82 @@ impl PartialEq for Ranked<'_> {
 
 impl Eq for Ranked<'_> {}
 
+/// The `limit` best nodes by (allocated bytes, path, node index) seen so far.
+/// The order is total, so the survivors do not depend on the order nodes are
+/// pushed or on how `merge` splits the work: parallel callers get exactly the
+/// set a serial pass would.
+pub(crate) struct TopK<'a> {
+    scan: &'a Tree,
+    limit: usize,
+    // A min-heap: the root is the weakest survivor.
+    heap: BinaryHeap<Reverse<Ranked<'a>>>,
+    // Allocated bytes of the weakest survivor once the heap is full, else 0:
+    // anything smaller cannot qualify, so it is rejected without a heap probe.
+    floor: u64,
+}
+
+impl<'a> TopK<'a> {
+    pub(crate) fn new(scan: &'a Tree, limit: usize) -> Self {
+        Self {
+            scan,
+            limit,
+            heap: BinaryHeap::new(),
+            floor: 0,
+        }
+    }
+
+    #[inline]
+    pub(crate) fn push(&mut self, node: usize) {
+        if self.limit == 0 {
+            return;
+        }
+        // Keep only the requested top K, even for millions of equally sized files.
+        let alloc = self.scan.alloc[node];
+        if alloc < self.floor {
+            return;
+        }
+        let candidate = Ranked {
+            tree: self.scan,
+            node,
+            alloc,
+        };
+        if self.heap.len() < self.limit {
+            self.heap.push(Reverse(candidate));
+        } else {
+            // Replace the weakest survivor in place: one sift, not pop + push.
+            match self.heap.peek_mut() {
+                Some(mut weakest) if candidate > weakest.0 => *weakest = Reverse(candidate),
+                _ => return,
+            }
+        }
+        if self.heap.len() == self.limit {
+            self.floor = self.heap.peek().map_or(0, |Reverse(minimum)| minimum.alloc);
+        }
+    }
+
+    /// Fold another selection over the same scan into this one.
+    pub(crate) fn merge(mut self, other: Self) -> Self {
+        for Reverse(ranked) in other.heap {
+            self.push(ranked.node);
+        }
+        self
+    }
+
+    /// The survivors, best first.
+    pub(crate) fn into_sorted(self) -> Vec<usize> {
+        let mut best: Vec<_> = self.heap.into_iter().map(|item| item.0).collect();
+        best.sort_unstable_by(|a, b| b.cmp(a));
+        best.into_iter().map(|item| item.node).collect()
+    }
+}
+
 /// The `limit` largest of `indices` by allocated bytes, largest first.
 pub fn top_by_alloc(scan: &Tree, indices: impl Iterator<Item = usize>, limit: usize) -> Vec<usize> {
-    if limit == 0 {
-        return Vec::new();
-    }
-    // Keep only the requested top K, even for millions of equally sized files.
-    let mut heap: BinaryHeap<Reverse<Ranked<'_>>> = BinaryHeap::new();
+    let mut top = TopK::new(scan, limit);
     for i in indices {
-        let alloc = scan.alloc[i];
-        if heap.len() == limit
-            && heap
-                .peek()
-                .is_some_and(|Reverse(minimum)| alloc < scan.alloc[minimum.node])
-        {
-            continue;
-        }
-        let candidate = Ranked { tree: scan, node: i };
-        if heap.len() < limit {
-            heap.push(Reverse(candidate));
-        } else if candidate > heap.peek().unwrap().0 {
-            heap.pop();
-            heap.push(Reverse(candidate));
-        }
+        top.push(i);
     }
-    let mut best: Vec<_> = heap.into_iter().map(|item| item.0).collect();
-    best.sort_unstable_by(|a, b| b.cmp(a));
-    best.into_iter().map(|item| item.node).collect()
+    top.into_sorted()
 }
 
 /// The `limit` largest files (anything that is not a directory) of at least
