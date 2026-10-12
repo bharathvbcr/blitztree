@@ -487,3 +487,71 @@ fn mount_point_inside_the_scan_is_a_boundary() {
     assert_eq!(inner.logical[node(&inner, "sub")], 50_000);
     assert_eq!(inner.logical[node(&inner, "inside.bin")], 300_000);
 }
+
+/// A volume with no room left for the CSV: the export is an error that names
+/// the full disk, the file that was there is as it was, and the temporary file
+/// is gone (which gives its space back).
+#[test]
+#[ignore = "needs /usr/bin/hdiutil: fills a disk image (run by tests/run-cleanup.sh)"]
+fn exporting_to_a_full_volume_fails_and_leaves_nothing() {
+    use crate::export;
+    let _turn = ONE_IMAGE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    let volume = Volume::attach("HFS+", "BZFULL", "mnt");
+    let dest = volume.mount.join("out.csv");
+    std::fs::write(&dest, b"before").unwrap();
+    // Fill the volume with 1 MB files until one will not fit, then free two.
+    let chunk = vec![0x42u8; 1 << 20];
+    let mut filled = Vec::new();
+    loop {
+        let path = volume.mount.join(format!("filler-{}", filled.len()));
+        if std::fs::write(&path, &chunk).is_err() {
+            let _ = std::fs::remove_file(&path);
+            break;
+        }
+        filled.push(path);
+    }
+    assert!(
+        filled.len() > 8,
+        "only {} MB fit on the image",
+        filled.len()
+    );
+    for path in filled.iter().rev().take(2) {
+        std::fs::remove_file(path).unwrap();
+    }
+
+    // 400,000 rows are some 25 MB of CSV: far more than the room left.
+    let mut tree = Tree::with_root("/synthetic");
+    let dirs: Vec<u32> = (0..400)
+        .map(|d| tree.push(&format!("folder-{d:03}"), 0, 0, 0, true))
+        .collect();
+    for &d in &dirs {
+        for f in 0..1000u64 {
+            tree.push(&format!("file-{f:04}.dat"), d, 1000 + f, 4096, false);
+        }
+    }
+    finish(&mut tree);
+    let err = export::export_file(&tree, 0, &dest, &export::Control::new()).unwrap_err();
+    match &err {
+        export::Error::Io { source, .. } => {
+            assert_eq!(source.raw_os_error(), Some(libc::ENOSPC), "{err}")
+        }
+        other => panic!("expected a write error, got {other}"),
+    }
+    assert!(err.to_string().contains("No space left on device"), "{err}");
+    assert_eq!(std::fs::read(&dest).unwrap(), b"before");
+    let strays: Vec<_> = std::fs::read_dir(&volume.mount)
+        .unwrap()
+        .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+        .filter(|n| n.starts_with(".blitztree-export-"))
+        .collect();
+    assert!(strays.is_empty(), "left behind: {strays:?}");
+
+    // The space came back: a small export now succeeds.
+    let mut small = Tree::with_root("/small");
+    small.push("a", 0, 1, 1, false);
+    finish(&mut small);
+    export::export_file(&small, 0, &dest, &export::Control::new()).unwrap();
+    assert!(std::fs::read(&dest).unwrap().starts_with(b"path,"));
+}

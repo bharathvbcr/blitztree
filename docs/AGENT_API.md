@@ -249,7 +249,8 @@ is absolute, so it starts with `/`, which no spreadsheet treats as a formula:
 no file name can reach the start of a cell. Other columns are numbers and
 `true`/`false`. Names are never rewritten. (The writer would neutralise a
 relative root that began with `=`, `+`, `-`, `@`, TAB or CR by prefixing a single
-quote; the CLI and the app always have absolute roots.) Treat the file's
+quote. The CLI's root is always absolute; the app's is too, unless it was
+launched with a relative path argument, which the writer then neutralises.) Treat the file's
 contents as data like any report.
 
 **Writing it.** The CSV streams through a buffer, one row at a time, so

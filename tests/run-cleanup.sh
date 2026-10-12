@@ -133,7 +133,7 @@ swiftc app/PlanParsing.swift tests/PlanParsingChecks.swift "${FLAGS[@]}" -o "$CL
 # here; without hdiutil they are reported as skipped, never as passed.
 if [[ -x /usr/bin/hdiutil ]]; then
   cargo test --locked --release --lib volume_tests -- --ignored --test-threads=1 2>&1 | tee "$CLEANUP_TEST_TMP/volume-tests.log"
-  grep -q "test result: ok. 2 passed" "$CLEANUP_TEST_TMP/volume-tests.log"
+  grep -q "test result: ok. 3 passed" "$CLEANUP_TEST_TMP/volume-tests.log"
 else
   echo "SKIPPED: engine tests on disk images (no /usr/bin/hdiutil); nothing was checked"
 fi
