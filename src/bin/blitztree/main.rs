@@ -1,7 +1,7 @@
 //! A local JSON interface. No network, subprocesses, agent launch or deletion.
 mod report;
 
-use blitztree::{cleanup, local_path, scan, Progress};
+use blitztree::{cleanup, local_path, scan_resolved, Progress};
 use serde_json::{json, Value};
 use std::io::{self, Write};
 use std::os::macos::fs::MetadataExt;
@@ -122,7 +122,7 @@ fn run() -> Result<Value, (i32, String)> {
     let anchors = cleanup::Anchors::new(anchor_home.as_deref());
     let progress = Progress::default();
     let started = Instant::now();
-    let tree = scan(&root, &progress);
+    let tree = scan_resolved(&root, &progress);
     let elapsed = started.elapsed().as_secs_f64();
     let report = if command == "quick-wins" {
         report::quick_wins(&tree, &options, &anchors)

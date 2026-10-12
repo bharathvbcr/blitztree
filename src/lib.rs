@@ -1378,16 +1378,25 @@ fn fast_pool() -> rayon::ThreadPool {
 /// Each ancestor is checked before resolving deeper: canonicalize/read_dir on
 /// a cloud-only directory can ask its provider to materialize that directory,
 /// so a cloud-only path is refused instead.
+///
+/// At most `MAX_SYMLINK_HOPS` links are followed in total (the kernel's
+/// `MAXSYMLINKS`), however they nest, so a looping or doubling chain fails
+/// at once instead of walking for ever.
+///
+/// A scan keeps the name it was given for its root, not this resolved path,
+/// so for a tree scanned through a symlinked root Clean Up's rules, which
+/// compare resolved paths, match nothing and every action is refused (fail
+/// closed).
 pub fn local_path(p: &Path) -> Result<PathBuf, String> {
-    local_path_at(p, 0)
+    local_path_at(p, &mut 0)
 }
 
-fn local_path_at(p: &Path, depth: u32) -> Result<PathBuf, String> {
+/// Symbolic links `local_path` follows before giving up (ELOOP).
+const MAX_SYMLINK_HOPS: u32 = 32;
+
+fn local_path_at(p: &Path, hops: &mut u32) -> Result<PathBuf, String> {
     use std::os::macos::fs::MetadataExt;
     use std::path::Component;
-    if depth > 40 {
-        return Err("Too many symbolic links in the scan root".into());
-    }
     let absolute = if p.is_absolute() {
         p.to_owned()
     } else {
@@ -1414,13 +1423,17 @@ fn local_path_at(p: &Path, depth: u32) -> Result<PathBuf, String> {
             return Err(format!("Cloud-only path; refusing to materialize {}", resolved.display()));
         }
         if m.file_type().is_symlink() {
+            *hops += 1;
+            if *hops > MAX_SYMLINK_HOPS {
+                return Err(format!("Too many levels of symbolic links: {}", resolved.display()));
+            }
             let target = std::fs::read_link(&resolved).map_err(|e| e.to_string())?;
             let target = if target.is_absolute() {
                 target
             } else {
                 resolved.parent().unwrap_or(Path::new("/")).join(target)
             };
-            resolved = local_path_at(&target, depth + 1)?;
+            resolved = local_path_at(&target, hops)?;
             is_directory = std::fs::metadata(&resolved).map_err(|e| e.to_string())?.is_dir();
         } else {
             is_directory = m.is_dir();
@@ -1432,12 +1445,29 @@ fn local_path_at(p: &Path, depth: u32) -> Result<PathBuf, String> {
 /// Scan `root` and return the finished tree, ready for the UI. A symlinked
 /// root is followed (see `local_path`); the root node keeps the name it was
 /// given, as far as it is UTF-8 (the path that is read is always exact). A
-/// root that cannot be resolved is counted as an error and left unread.
+/// root that cannot be resolved is counted as an error and left unread. Since
+/// the root keeps its given name, Clean Up refuses every action in a tree
+/// scanned through a symlinked root (it fails closed); scan the resolved path
+/// for a tree it can act on.
 pub fn scan(root: &Path, progress: &Progress) -> Tree {
     scan_with(root, progress, Limits::ABI)
 }
 
+/// `scan` for a root already resolved by `local_path`: it is not resolved again.
+pub fn scan_resolved(root: &Path, progress: &Progress) -> Tree {
+    scan_at(root, || Ok(root.to_path_buf()), progress, Limits::ABI)
+}
+
 fn scan_with(root: &Path, progress: &Progress, limits: Limits) -> Tree {
+    scan_at(root, || local_path(root), progress, limits)
+}
+
+fn scan_at(
+    root: &Path,
+    resolve: impl FnOnce() -> Result<PathBuf, String>,
+    progress: &Progress,
+    limits: Limits,
+) -> Tree {
     let root_name = root.to_string_lossy();
     let root_name = if u32::try_from(root_name.len()).is_ok() { root_name.as_bytes() } else { &[] };
     let tree = Tree {
@@ -1467,7 +1497,7 @@ fn scan_with(root: &Path, progress: &Progress, limits: Limits) -> Tree {
         progress.skipped_cloud_dirs.fetch_add(1, Ordering::Relaxed);
         shared.mark_incomplete(0);
     } else {
-        let target = local_path(root).and_then(|resolved| {
+        let target = resolve().and_then(|resolved| {
             CString::new(resolved.as_os_str().as_encoded_bytes())
                 .map_err(|_| "The scan root contains a NUL byte".to_string())
         });
@@ -2749,6 +2779,41 @@ mod tests {
         let t = scan_with(&root, &Progress::default(), Limits { nodes: 3, name_bytes: u32::MAX as u64 });
         assert_eq!((t.len(), t.complete[0], t.errors), (1, false, 1));
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn a_doubling_symlink_chain_fails_at_once_instead_of_walking_for_ever() {
+        // Lk -> L(k+1)/L(k+1): resolving each hop twice made the walk 2^k long.
+        let base = std::env::temp_dir().join(format!("bz-test-doubling-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        std::fs::create_dir_all(&base).unwrap();
+        for k in 0..22 {
+            std::os::unix::fs::symlink(format!("L{}/L{}", k + 1, k + 1), base.join(format!("L{k}"))).unwrap();
+        }
+        std::os::unix::fs::symlink(".", base.join("L22")).unwrap();
+
+        // Off the test thread, so a regression fails here instead of hanging the suite.
+        let (sender, receiver) = std::sync::mpsc::channel();
+        let (start, link) = (std::time::Instant::now(), base.join("L0"));
+        std::thread::spawn(move || {
+            let resolved = local_path(&link);
+            let scanned = scan(&link, &Progress::default());
+            let _ = sender.send((resolved, scanned.errors, scanned.len(), start.elapsed()));
+        });
+        let (resolved, errors, nodes, elapsed) = receiver
+            .recv_timeout(std::time::Duration::from_secs(5))
+            .expect("resolving the chain did not finish");
+        assert!(resolved.unwrap_err().contains("Too many levels of symbolic links"));
+        assert_eq!((errors, nodes), (1, 1), "the scan counts the root as unreadable");
+        assert!(elapsed < std::time::Duration::from_secs(1), "took {elapsed:?}");
+
+        // A chain within the limit still resolves.
+        for k in 0..30 {
+            std::os::unix::fs::symlink(format!("M{}", k + 1), base.join(format!("M{k}"))).unwrap();
+        }
+        std::fs::create_dir(base.join("M30")).unwrap();
+        assert_eq!(local_path(&base.join("M0")).unwrap(), std::fs::canonicalize(&base).unwrap().join("M30"));
+        let _ = std::fs::remove_dir_all(&base);
     }
 
     #[test]

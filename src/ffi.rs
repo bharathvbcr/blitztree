@@ -9,6 +9,7 @@
 
 use std::any::Any;
 use std::ffi::{c_char, c_int, CStr, CString, OsStr};
+use std::io::Write;
 use std::os::unix::ffi::OsStrExt;
 use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::path::{Path, PathBuf};
@@ -66,7 +67,9 @@ fn panic_message(payload: &(dyn Any + Send)) -> String {
 /// unwinding into C.
 fn guarded<T>(fallback: T, work: impl FnOnce() -> T) -> T {
     catch_unwind(AssertUnwindSafe(work)).unwrap_or_else(|payload| {
-        eprintln!("[bz] internal error: {}", panic_message(&*payload));
+        // Not eprintln!: it panics when stderr is closed, and this runs
+        // outside the catch.
+        let _ = writeln!(std::io::stderr(), "[bz] internal error: {}", panic_message(&*payload));
         fallback
     })
 }
