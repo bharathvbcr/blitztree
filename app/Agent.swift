@@ -357,41 +357,53 @@ nonisolated struct AgentFocus: Sendable, Equatable {
     let path: String
     let name: String
     let isDir: Bool
-    /// BlitzTree's own check before any agent sees it: why its guards would
-    /// refuse the item, or the rebuildable folder it was recognised as.
-    let local: String?
-    let localDisplay: String?
 
-    @MainActor
-    init(node: Int, tree: Tree, known: [CleanupItem], home: String = NSHomeDirectory()) {
+    /// What the right-click names, nothing more: cheap enough for the main
+    /// actor. The judgement (`verdict`) reads files and runs the path guards,
+    /// so the prompt builder makes it, away from the main actor.
+    init(node: Int, tree: Tree) {
         self.node = node
         path = tree.displayPath(node)
         name = node == 0 ? path : tree.name(node)
         isDir = tree.isDir(node)
+    }
+
+    /// BlitzTree's own check before any agent sees the item, once in English
+    /// for the prompt and once in the user's language for the screen.
+    struct Verdict: Sendable, Equatable {
+        let english: String
+        let display: String
+    }
+
+    /// Why BlitzTree's guards would refuse the item, or the rebuildable folder
+    /// it was recognised as. Nil when nothing is worth telling. Reads session
+    /// logs and runs the git and process checks of a worktree: never call it
+    /// on the main actor.
+    func verdict(tree: Tree, known: [CleanupItem], home: String = NSHomeDirectory()) -> Verdict? {
         let ancestry = Set(tree.ancestry(node))
         if let item = known.first(where: { ancestry.contains($0.node) }) {
             let englishReason = item.englishBlocked ?? item.blocked
-            local = englishReason.map { "Recognised as \(item.kind), but BlitzTree won't remove it: \($0)" }
-                ?? (item.node == node ? "Recognised by BlitzTree as \(item.kind)"
-                    : "Inside \(item.display), recognised by BlitzTree as \(item.kind)")
-            localDisplay = item.blocked.map { String(localized: "Recognised as \(item.kind), but BlitzTree won't remove it: \($0)") }
-                ?? (item.node == node ? String(localized: "Recognised by BlitzTree as \(item.kind)")
-                    : String(localized: "Inside \(item.display), recognised by BlitzTree as \(item.kind)"))
-        } else {
-            do {
-                let root = CleanupPathSafety.plannerRoot(for: tree.path(node), home: home)
-                _ = try CleanupPathSafety.capture(path: tree.path(node), root: root, home: home, check: .policyOnly)
-                // A scratchpad's session check ran in the capture above.
-                let recent = root == home && CleanupGuard.recentlyUsed(path)
-                local = recent ? "In a project used in the last 2 days" : nil
-                localDisplay = recent ? String(localized: "In a project used in the last 2 days") : nil
-            } catch let error as CleanupPathError {
-                local = "BlitzTree won't remove this: \(error.englishDescription)"
-                localDisplay = String(localized: "BlitzTree won't remove this: \(error.errorDescription ?? error.englishDescription)")
-            } catch {
-                local = "BlitzTree won't remove this: \(error.localizedDescription)"
-                localDisplay = String(localized: "BlitzTree won't remove this: \(error.localizedDescription)")
-            }
+            return Verdict(
+                english: englishReason.map { "Recognised as \(item.kind), but BlitzTree won't remove it: \($0)" }
+                    ?? (item.node == node ? "Recognised by BlitzTree as \(item.kind)"
+                        : "Inside \(item.display), recognised by BlitzTree as \(item.kind)"),
+                display: item.blocked.map { String(localized: "Recognised as \(item.kind), but BlitzTree won't remove it: \($0)") }
+                    ?? (item.node == node ? String(localized: "Recognised by BlitzTree as \(item.kind)")
+                        : String(localized: "Inside \(item.display), recognised by BlitzTree as \(item.kind)")))
+        }
+        do {
+            let root = CleanupPathSafety.plannerRoot(for: tree.path(node), home: home)
+            _ = try CleanupPathSafety.capture(path: tree.path(node), root: root, home: home, check: .policyOnly)
+            // A scratchpad's session check ran in the capture above.
+            guard root == home, CleanupGuard.recentlyUsed(path) else { return nil }
+            return Verdict(english: "In a project used in the last 2 days",
+                           display: String(localized: "In a project used in the last 2 days"))
+        } catch let error as CleanupPathError {
+            return Verdict(english: "BlitzTree won't remove this: \(error.englishDescription)",
+                           display: String(localized: "BlitzTree won't remove this: \(error.errorDescription ?? error.englishDescription)"))
+        } catch {
+            return Verdict(english: "BlitzTree won't remove this: \(error.localizedDescription)",
+                           display: String(localized: "BlitzTree won't remove this: \(error.localizedDescription)"))
         }
     }
 }
@@ -416,6 +428,10 @@ final class PlanItem: Identifiable {
     let cleanupTargets: [CleanupTarget]
     var trashedBytes: UInt64 = 0
     var stagingError: String?
+    /// Things that were left as they were when the folders were deleted (a
+    /// worktree's git metadata that changed meanwhile): not failures, but the
+    /// person should know.
+    var notices: [String] = []
 
     /// Measured size from the scan; never trust a size supplied by the agent.
     let bytes: UInt64
@@ -427,10 +443,54 @@ final class PlanItem: Identifiable {
     /// A tool cache that is only a folder: trashed and deleted like one.
     let viaTrash: Bool
 
+    /// What judging one card decides. It reads files and may run git and
+    /// lsof (a worktree), so `evaluate` makes it away from the main actor and
+    /// the card is only assembled from it here.
+    nonisolated struct Evaluation: Sendable {
+        let blocked: String?
+        let selected: Bool
+        let cleanupTargets: [CleanupTarget]
+        let paths: [String]
+        let nodes: [Int]
+        let bytes: UInt64
+        let note: String?
+        let viaTrash: Bool
+    }
+
+    init(spec: PlanItemSpec, evaluation: Evaluation) {
+        self.spec = spec
+        blocked = evaluation.blocked
+        selected = evaluation.selected
+        cleanupTargets = evaluation.cleanupTargets
+        paths = evaluation.paths
+        nodes = evaluation.nodes
+        bytes = evaluation.bytes
+        note = evaluation.note
+        viaTrash = evaluation.viaTrash
+    }
+
+    /// Judges a card on the calling thread. For tests and benchmarks; the app
+    /// goes through `make`, which keeps the main actor free.
+    convenience init(spec: PlanItemSpec, tree: Tree, home: String = NSHomeDirectory(), scope: Int? = nil) {
+        self.init(spec: spec, evaluation: Self.evaluate(spec: spec, tree: tree, home: home, scope: scope,
+                                                        apps: RunningApps.current()))
+    }
+
+    /// A card judged on a dispatch thread (see `AgentLocator.onBackgroundThread`),
+    /// so a long run of them streaming in never stalls the window.
+    static func make(spec: PlanItemSpec, tree: Tree, home: String = NSHomeDirectory(),
+                     scope: Int? = nil) async -> PlanItem {
+        let apps = RunningApps.current()
+        let evaluation = await AgentLocator.onBackgroundThread {
+            evaluate(spec: spec, tree: tree, home: home, scope: scope, apps: apps)
+        }
+        return PlanItem(spec: spec, evaluation: evaluation)
+    }
+
     /// `scope`: the node a focused run asked about. Any path outside it
     /// blocks the whole item, so a command that would reach past it can't run.
-    init(spec: PlanItemSpec, tree: Tree, home: String = NSHomeDirectory(), scope: Int? = nil) {
-        self.spec = spec
+    nonisolated static func evaluate(spec: PlanItemSpec, tree: Tree, home: String, scope: Int?,
+                                     apps: RunningApps) -> Evaluation {
         var asked = spec.paths.map { ($0 as NSString).expandingTildeInPath }
         let command = spec.action == "command" ? CleanupCommand.parse(spec.command) : nil
         var reason: String?
@@ -465,10 +525,10 @@ final class PlanItem: Identifiable {
         }) {
             reason = String(localized: "Outside the item you asked about")
         }
-        viaTrash = folderCache
         // Every per-path guard and the pre-selection live in CleanupGuard.vet.
         let vetting = reason == nil && (spec.action == "trash" || folderCache)
-            ? CleanupGuard.vet(asked: asked, tree: tree, home: home, folderCache: folderCache, specGroup: spec.group)
+            ? CleanupGuard.vet(asked: asked, tree: tree, home: home, folderCache: folderCache,
+                               specGroup: spec.group, apps: apps)
             : nil
         if let vetting {
             reason = vetting.blocked
@@ -477,7 +537,7 @@ final class PlanItem: Identifiable {
             // targets, but must still belong to the scan being reviewed.
             if asked.isEmpty || asked.contains(where: { tree.node(at: $0).map { $0 == 0 } ?? true }) {
                 reason = String(localized: "A supplied path is not in this scan")
-            } else if let app = CleanupGuard.runningOwner(of: asked) {
+            } else if let app = apps.owner(of: asked) {
                 reason = String(localized: "Quit \(app) to clean this")
             }
         }
@@ -486,13 +546,12 @@ final class PlanItem: Identifiable {
         let outer = candidateNodes.filter { node in
             !tree.ancestry(node).dropLast().contains(where: candidateNodes.contains)
         }
-        cleanupTargets = kept.filter { target in tree.node(at: target.path).map(outer.contains) ?? false }
+        let cleanupTargets: [CleanupTarget] = kept.filter { target in tree.node(at: target.path).map(outer.contains) ?? false }
             .reduce(into: []) { targets, target in
                 if !targets.contains(where: { $0.identity == target.identity }) { targets.append(target) }
             }
-        paths = spec.action == "command" && !folderCache ? asked : cleanupTargets.map(\.path)
-        blocked = reason
-        selected = vetting?.preselect ?? false
+        let paths = spec.action == "command" && !folderCache ? asked : cleanupTargets.map(\.path)
+        let note: String?
         if spec.action == "command" && !folderCache && reason == nil {
             note = String(localized: "Runs the tool's cleanup, which may affect data outside the listed paths")
         } else if let vetting, vetting.excluded > 0 && !kept.isEmpty {
@@ -500,13 +559,25 @@ final class PlanItem: Identifiable {
         } else {
             note = nil
         }
-        let nodes = Set(paths.compactMap { tree.node(at: $0) })
-        self.nodes = Array(nodes.filter { node in !tree.ancestry(node).dropLast().contains(where: nodes.contains) })
-        let measured = self.nodes.reduce(UInt64(0)) { $0 + tree.alloc[$1] }
-        bytes = measured
+        let found = Set(paths.compactMap { tree.node(at: $0) })
+        let nodes = Array(found.filter { node in !tree.ancestry(node).dropLast().contains(where: found.contains) })
+        return Evaluation(blocked: reason, selected: vetting?.preselect ?? false, cleanupTargets: cleanupTargets,
+                          paths: paths, nodes: nodes, bytes: nodes.reduce(UInt64(0)) { $0 + tree.alloc[$1] },
+                          note: note, viaTrash: folderCache)
     }
 
     var isCommand: Bool { spec.action == "command" && !viaTrash }
+
+    /// What deleting this item's Trash copies came to (`AgentRun.deleteTrashed`).
+    func recordDeletion(remaining: [CleanupReceipt], notices: [String], error: String?, stagedBytes: UInt64, tree: Tree) {
+        trashed = remaining
+        self.notices = notices
+        trashedBytes = remaining.reduce(UInt64(0)) { total, receipt in
+            total + (tree.node(at: receipt.sourcePath).map { tree.alloc[$0] } ?? 0)
+        }
+        if error == nil { freed = stagedBytes }
+        withAnimation(.snappy) { status = (error ?? stagingError).map { .failed($0) } ?? .done }
+    }
 
     /// Keep running commands visible in the countdown; folder sizes only
     /// include actual Trash moves, including receipts retained after failure.
@@ -517,16 +588,21 @@ final class PlanItem: Identifiable {
 
     /// Retain a reviewed action and its captured identities only when its full
     /// specification is unchanged. New or changed final actions need selection.
-    static func reconcile(_ specs: [PlanItemSpec], previous: [PlanItem], tree: Tree, scope: Int? = nil) -> [PlanItem] {
+    /// What is new is judged off the main actor, one card after another.
+    static func reconcile(_ specs: [PlanItemSpec], previous: [PlanItem], tree: Tree,
+                          scope: Int? = nil) async -> [PlanItem] {
         var remaining = previous
-        return specs.map { spec in
+        var result: [PlanItem] = []
+        for spec in specs {
             if let index = remaining.firstIndex(where: { $0.spec == spec }) {
-                return remaining.remove(at: index)
+                result.append(remaining.remove(at: index))
+                continue
             }
-            let fresh = PlanItem(spec: spec, tree: tree, scope: scope)
+            let fresh = await make(spec: spec, tree: tree, scope: scope)
             fresh.selected = false
-            return fresh
+            result.append(fresh)
         }
+        return result
     }
 }
 
@@ -547,6 +623,8 @@ final class AgentRun {
     var displayName: String { agent?.kind.name ?? provider?.displayName ?? "The assistant" }
     /// Set when the user asked about one item rather than the whole scan.
     let focus: AgentFocus?
+    /// BlitzTree's own check of that item, once made (with the prompt).
+    private(set) var focusVerdict: AgentFocus.Verdict?
     private(set) var phase: Phase = .thinking
     /// What the agent has done so far, in plain words; the last one is live.
     private(set) var steps: [String] = [String(localized: "Reading your scan")]
@@ -594,14 +672,18 @@ final class AgentRun {
         preparationTask = Task { [weak self] in
             guard !Task.isCancelled else { return }
             // appData waits on `simctl`; a dispatch thread, not a cooperative one.
-            let input = await AgentLocator.onBackgroundThread {
-                AgentPrompt.build(tree: tree, scanRoot: scanRoot, known: known, running: running, focus: focus)
-                + AgentPrompt.appData(tree: tree, focus: focus?.path)
+            // Judging a right-clicked item reads logs and may run the worktree
+            // checks; it is done here once, for the prompt and for the panel.
+            let (input, verdict) = await AgentLocator.onBackgroundThread {
+                let verdict = focus?.verdict(tree: tree, known: known)
+                return (AgentPrompt.build(tree: tree, scanRoot: scanRoot, known: known, running: running, focus: focus, verdict: verdict)
+                        + AgentPrompt.appData(tree: tree, focus: focus?.path), verdict)
             }
             // Closing or replacing a run while its prompt was being built
             // must not launch an agent after cancellation.
             guard !Task.isCancelled, let self else { return }
             preparationTask = nil
+            focusVerdict = verdict
             self.input = input
             step(asking)
             start()
@@ -774,58 +856,113 @@ final class AgentRun {
             ?? String(localized: "Asking \(displayName) what can go")
     }
 
+    /// The tail of the cards being judged. Judging a card reads files and may
+    /// run git and lsof, so it happens away from the main actor; what the
+    /// stream said is applied here strictly in the order it was read, each
+    /// step waiting for the one before it.
+    private var applying: Task<Void, Never>?
+
+    private func inOrder(_ step: @escaping @MainActor (AgentRun) async -> Void) {
+        let previous = applying
+        applying = Task { [weak self] in
+            await previous?.value
+            guard let self, !self.cancelled else { return }
+            await step(self)
+        }
+    }
+
     /// Every card goes through the same guards; a focused run also keeps
     /// them inside the item it asked about.
-    private func plan(_ spec: PlanItemSpec) -> PlanItem { PlanItem(spec: spec, tree: tree, scope: focus?.node) }
+    private func plan(_ spec: PlanItemSpec) async -> PlanItem {
+        await PlanItem.make(spec: spec, tree: tree, scope: focus?.node)
+    }
 
     private func handleProvider(_ event: LLMEvent, name: String) {
         guard phase == .thinking else { return }
         switch event {
         case .item(let spec):
-            withAnimation(.snappy) { items.append(plan(spec)) }
-        case .plan(let summary, let specs):
-            self.summary = summary
-            // The final JSON is authoritative; keep the cards already shown
-            // (and their checkboxes) when they match.
-            if specs.map(\.title) != items.map(\.spec.title) {
-                withAnimation(.snappy) { items = specs.map(plan) }
+            inOrder { run in
+                guard run.phase == .thinking else { return }
+                let item = await run.plan(spec)
+                guard run.phase == .thinking, !run.cancelled else { return }
+                withAnimation(.snappy) { run.items.append(item) }
             }
-            finishPlanning()
+        case .plan(let summary, let specs):
+            inOrder { run in
+                guard run.phase == .thinking else { return }
+                run.summary = summary
+                // The final JSON is authoritative; keep the cards already shown
+                // (and their checkboxes) when they match.
+                if specs.map(\.title) != run.items.map(\.spec.title) {
+                    var final: [PlanItem] = []
+                    for spec in specs { final.append(await run.plan(spec)) }
+                    guard run.phase == .thinking, !run.cancelled else { return }
+                    withAnimation(.snappy) { run.items = final }
+                }
+                run.finishPlanning()
+            }
         case .failed(let message):
             NSLog("[bz] provider \(name) failed: \(message)")
-            if !items.isEmpty { finishPlanning() } else { phase = .failed(message) }
+            inOrder { run in
+                guard run.phase == .thinking else { return }
+                if !run.items.isEmpty { run.finishPlanning() } else { run.phase = .failed(message) }
+            }
         }
     }
 
-    private func handle(_ event: AgentStreamReader.Event) {
+    /// Takes what the stream read. The cards are judged off the main actor and
+    /// land in `items` in order, so `items` lags the stream by the cards still
+    /// being judged: anything that decides from `items` goes through `inOrder`.
+    func handle(_ event: AgentStreamReader.Event) {
         guard phase == .thinking else { return }
         switch event {
         case .activity(let text):
             step(text)
         case .item(let spec):
-            withAnimation(.snappy) { items.append(plan(spec)) }
-        case .restart:
-            withAnimation(.snappy) { items = [] }
-        case .plan(let summary, let specs):
-            self.summary = summary
-            // The final JSON is authoritative; keep the cards already shown
-            // (and their checkboxes) when they match.
-            if specs != items.map(\.spec) {
-                withAnimation(.snappy) {
-                    items = PlanItem.reconcile(specs, previous: items, tree: tree, scope: focus?.node)
-                }
+            inOrder { run in
+                guard run.phase == .thinking else { return }
+                let item = await run.plan(spec)
+                guard run.phase == .thinking, !run.cancelled else { return }
+                withAnimation(.snappy) { run.items.append(item) }
             }
-            finishPlanning()
+        case .restart:
+            inOrder { run in
+                guard run.phase == .thinking else { return }
+                withAnimation(.snappy) { run.items = [] }
+            }
+        case .plan(let summary, let specs):
+            inOrder { run in
+                guard run.phase == .thinking else { return }
+                run.summary = summary
+                // The final JSON is authoritative; keep the cards already shown
+                // (and their checkboxes) when they match.
+                if specs != run.items.map(\.spec) {
+                    let final = await PlanItem.reconcile(specs, previous: run.items, tree: run.tree,
+                                                         scope: run.focus?.node)
+                    guard run.phase == .thinking, !run.cancelled else { return }
+                    withAnimation(.snappy) { run.items = final }
+                }
+                run.finishPlanning()
+            }
         case .failed(let message):
             // A CLI run that dies after streaming cards still finishes
             // planning with what arrived; a provider whose JSON never
             // decoded strictly gets the same grace.
-            if !items.isEmpty { finishPlanning() } else { phase = .failed(message) }
+            inOrder { run in
+                guard run.phase == .thinking else { return }
+                if !run.items.isEmpty { run.finishPlanning() } else { run.phase = .failed(message) }
+            }
         }
     }
 
     private func processEnded(status: Int32, stderr: String) {
         job = nil
+        guard phase == .thinking, !cancelled else { return }
+        // After every card the stream delivered has landed.
+        inOrder { run in run.decideAfterExit(status: status, stderr: stderr) }
+    }
+
+    private func decideAfterExit(status: Int32, stderr: String) {
         guard phase == .thinking, !cancelled else { return }
         if !items.isEmpty {
             finishPlanning()
@@ -909,6 +1046,7 @@ final class AgentRun {
                     group.addTask {
                         var error: String?
                         var remaining: [CleanupReceipt] = []
+                        var notices: [String] = []
                         if dryRun {
                             // Roughly as long as the real delete: bigger items finish later.
                             let gb = Double(bytes) / 1e9
@@ -916,20 +1054,14 @@ final class AgentRun {
                         } else if let command {
                             error = await Self.runCommand(command, path: env.path)
                         } else {
-                            let result = await CleanupOperations.remove(urls)
-                            remaining = result.remaining
-                            if !result.errors.isEmpty { error = result.errors.joined(separator: "\n") }
+                            (remaining, notices, error) = await Self.deleteTrashed(urls)
                         }
                         let failedReceipts = remaining
+                        let leftInPlace = notices
+                        let failure = error
                         await MainActor.run {
-                            item.trashed = failedReceipts
-                            item.trashedBytes = failedReceipts.reduce(UInt64(0)) { total, receipt in
-                                total + (self.tree.node(at: receipt.sourcePath).map { self.tree.alloc[$0] } ?? 0)
-                            }
-                            if error == nil { item.freed = stagedBytes }
-                            withAnimation(.snappy) {
-                                item.status = (error ?? item.stagingError).map { .failed($0) } ?? .done
-                            }
+                            item.recordDeletion(remaining: failedReceipts, notices: leftInPlace, error: failure,
+                                                stagedBytes: stagedBytes, tree: self.tree)
                         }
                     }
                 }
@@ -952,9 +1084,20 @@ final class AgentRun {
         }
     }
 
+    /// Deletes what step one moved to the Trash. `remaining` failed and can be
+    /// retried; `notices` are things left as they were (a worktree's git
+    /// metadata that changed meanwhile), which the card shows.
+    nonisolated static func deleteTrashed(_ receipts: [CleanupReceipt])
+        async -> (remaining: [CleanupReceipt], notices: [String], error: String?) {
+        let result = await CleanupOperations.remove(receipts)
+        return (result.remaining, result.notices, result.errors.isEmpty ? nil : result.errors.joined(separator: "\n"))
+    }
+
     /// Revalidate captured targets at the actual operation boundary.
     nonisolated static func trash(_ targets: [CleanupTarget]) async -> (moved: [CleanupReceipt], error: String?) {
-        await Task.detached(priority: .userInitiated) {
+        // Each move re-verifies its target (git, lsof): a dispatch thread,
+        // not one of the few cooperative ones.
+        await AgentLocator.onBackgroundThread {
             var moved: [CleanupReceipt] = []
             var errors: [String] = []
             for target in targets {
@@ -962,7 +1105,7 @@ final class AgentRun {
                 catch { errors.append("\(target.path): \(error.localizedDescription)") }
             }
             return (moved, errors.isEmpty ? nil : errors.joined(separator: "\n"))
-        }.value
+        }
     }
 
     /// Plain available space (statfs), exact to the block.
@@ -1339,8 +1482,8 @@ nonisolated enum AgentPrompt {
     /// safe to clean?" Both share the plan rules; a focus only narrows the
     /// tables to the item and asks for a verdict as the summary.
     static func build(tree: Tree, scanRoot: String, known: [CleanupItem], running: [String],
-                      focus: AgentFocus? = nil) -> String {
-        let home = NSHomeDirectory()
+                      focus: AgentFocus? = nil, verdict: AgentFocus.Verdict? = nil,
+                      home: String = NSHomeDirectory()) -> String {
         func shown(_ i: Int) -> String { tree.displayPath(i) }
 
         var md: String
@@ -1356,7 +1499,7 @@ nonisolated enum AgentPrompt {
             one \(kind) and asked whether it is safe to clean: \(focus.path) (\(Fmt.size(tree.alloc[focus.node]))\
             \(focus.isDir ? ", \(Fmt.num(UInt64(tree.nFiles[focus.node]))) files" : "")). They are watching a \
             live view of your steps, so be fast. Their home folder is \(home).
-            \(focus.local.map { "\nBlitzTree's own check: \($0)\n" } ?? "")
+            \(verdict.map { "\nBlitzTree's own check: \($0.english)\n" } ?? "")
             Below is BlitzTree's scan of that \(kind) (allocated sizes, measured seconds ago). Use it; do \
             not re-scan the disk. Only check what you really cannot judge from the tables, batched (one \
             `du -sk a b c` beats several), at most 3 commands.
@@ -1579,25 +1722,5 @@ nonisolated enum AgentPrompt {
             md += "| \(Fmt.size(tree.alloc[node])) | \(path) | \(used.map(ago) ?? "unknown") | \(inside.joined(separator: ", ")) |\n"
         }
         return md
-    }
-}
-
-extension Tree {
-    /// The node at an absolute path, if the scan covered it.
-    nonisolated func node(at path: String) -> Int? {
-        let root = self.path(0)
-        guard var p = try? CleanupPathSafety.normalize(path) else { return nil }
-        // A whole-disk scan is rooted at the Data volume; /Users/… lives there.
-        let data = "/System/Volumes/Data"
-        if root == data || root.hasPrefix(data + "/") {
-            if p != data && !p.hasPrefix(data + "/") { p = data + p }
-        } else if p.hasPrefix(data + "/") { p = String(p.dropFirst(data.count)) }
-        guard p == root || p.hasPrefix(root == "/" ? "/" : root + "/") else { return nil }
-        var cur = 0
-        for part in p.dropFirst(root.count).split(separator: "/") {
-            guard let next = children(cur).first(where: { name(Int($0)) == part }) else { return nil }
-            cur = Int(next)
-        }
-        return cur
     }
 }

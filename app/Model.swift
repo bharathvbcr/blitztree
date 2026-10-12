@@ -112,6 +112,48 @@ nonisolated final class Tree: @unchecked Sendable {
         return UnsafeBufferPointer(start: childArr + start, count: end - start)
     }
 
+    /// The node at an absolute path, if the scan covered it.
+    func node(at path: String) -> Int? {
+        let root = self.path(0)
+        guard var p = try? CleanupPathSafety.normalize(path) else { return nil }
+        // A whole-disk scan is rooted at the Data volume; /Users/… lives there.
+        let data = "/System/Volumes/Data"
+        if root == data || root.hasPrefix(data + "/") {
+            if p != data && !p.hasPrefix(data + "/") { p = data + p }
+        } else if p.hasPrefix(data + "/") { p = String(p.dropFirst(data.count)) }
+        guard p == root || p.hasPrefix(root == "/" ? "/" : root + "/") else { return nil }
+        var cur = 0
+        for part in p.dropFirst(root.count).split(separator: "/") {
+            guard let next = child(of: cur, named: part) else { return nil }
+            cur = next
+        }
+        return cur
+    }
+
+    /// The child of `parent` called `name`. Each child's name bytes are compared
+    /// with the component's UTF-8 in place, so a folder with 100k entries
+    /// costs one pass of `memcmp`s and no String per child. A component with
+    /// non-ASCII letters that matched no bytes is tried again the way
+    /// `String ==` always compared it, by canonical equivalence (the same
+    /// folder spelled composed or decomposed): rare, and only after the fast
+    /// pass found nothing.
+    private func child(of parent: Int, named name: Substring) -> Int? {
+        var wanted = name
+        let fast = wanted.withUTF8 { wanted -> Int? in
+            for child in children(parent) {
+                let bytes = nameBytes(Int(child))
+                if bytes.count == wanted.count,
+                   wanted.count == 0 || memcmp(bytes.baseAddress!, wanted.baseAddress!, wanted.count) == 0 {
+                    return Int(child)
+                }
+            }
+            return nil
+        }
+        if let fast { return fast }
+        guard name.utf8.contains(where: { $0 >= 0x80 }) else { return nil }
+        return children(parent).first(where: { self.name(Int($0)) == name }).map(Int.init)
+    }
+
     /// The `limit` largest files anywhere in the scan, largest first. Chosen by
     /// the engine (the CLI's `largest_files` uses the same code).
     func largestFiles(limit: Int = 1000, minBytes: UInt64 = 0) -> [Int] {
@@ -374,7 +416,7 @@ final class ScanModel {
     /// once setup finishes.
     func ask(about node: Int) {
         guard let tree, canStartRun, node > 0, node < tree.count else { return }
-        let focus = AgentFocus(node: node, tree: tree, known: cleanup)
+        let focus = AgentFocus(node: node, tree: tree)
         selection = node
         // Always ask the window to open the panel: agentRun may already be
         // non-nil, so its own observer would not fire for a replaced run.
@@ -393,7 +435,7 @@ final class ScanModel {
     /// one the question was asked from (or no longer contain it).
     private func refocus(_ old: AgentFocus?) -> AgentFocus? {
         guard let old, let tree, let node = tree.node(at: old.path) else { return nil }
-        return AgentFocus(node: node, tree: tree, known: cleanup)
+        return AgentFocus(node: node, tree: tree)
     }
 
     func startProvider(_ provider: LLMProvider, focus: AgentFocus? = nil) {
@@ -745,7 +787,11 @@ final class ScanModel {
     /// file types) for a tree just installed.
     private func refreshForNewTree(_ tree: Tree) {
         Task {
-            let found = await Task.detached(priority: .userInitiated) { Cleanup.find(in: tree) }.value
+            // Worktrees whose Trash copy was emptied since: free their branches.
+            await cleanupTrash.settleWorktrees()
+            // Verifying a worktree waits on git and lsof: a dispatch thread,
+            // not one of the few cooperative ones that search and types share.
+            let found = await AgentLocator.onBackgroundThread { Cleanup.find(in: tree) }
             // A rescan may have replaced the tree while discovery ran.
             // Node IDs only belong to the scan that produced them.
             guard self.tree === tree else { return }

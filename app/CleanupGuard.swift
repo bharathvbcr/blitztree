@@ -3,6 +3,36 @@ import Foundation
 
 // MARK: - Guards (enforced here, never left to the model)
 
+/// The regular apps that are running, read on the main actor (AppKit's
+/// process list is main-actor API) so the guards can compare paths against
+/// them anywhere.
+nonisolated struct RunningApps: Sendable {
+    struct App: Sendable {
+        let id: String
+        let name: String
+    }
+
+    let apps: [App]
+
+    @MainActor
+    static func current() -> RunningApps {
+        RunningApps(apps: NSWorkspace.shared.runningApplications.filter { $0.activationPolicy == .regular }
+            .map { App(id: $0.bundleIdentifier ?? "", name: $0.localizedName ?? "") })
+    }
+
+    /// An app that must be quit before its files go, when one is running.
+    func owner(of paths: [String]) -> String? {
+        for app in apps {
+            for path in paths {
+                let parts = path.split(separator: "/").map(String.init)
+                if !app.id.isEmpty, parts.contains(where: { $0 == app.id || $0.hasPrefix(app.id + ".") }) { return app.name }
+                if app.name.count > 2, parts.contains(app.name) { return app.name }
+            }
+        }
+        return nil
+    }
+}
+
 nonisolated enum CleanupGuard {
     static let home = NSHomeDirectory()
 
@@ -61,20 +91,6 @@ nonisolated enum CleanupGuard {
         return AgentSessions.claudeUsage(in: project.path, since: cutoff)
     }
 
-    /// An app that must be quit before its files go, when one is running.
-    @MainActor
-    static func runningOwner(of paths: [String]) -> String? {
-        for app in NSWorkspace.shared.runningApplications where app.activationPolicy == .regular {
-            let id = app.bundleIdentifier ?? ""
-            let name = app.localizedName ?? ""
-            for path in paths {
-                let parts = path.split(separator: "/").map(String.init)
-                if !id.isEmpty, parts.contains(where: { $0 == id || $0.hasPrefix(id + ".") }) { return name }
-                if name.count > 2, parts.contains(name) { return name }
-            }
-        }
-        return nil
-    }
 
     /// The outcome of vetting the paths of one agent plan card.
     struct Vetting {
@@ -99,8 +115,13 @@ nonisolated enum CleanupGuard {
     /// a Claude Code scratchpad must also be, or be inside, a folder the scan
     /// itself recognised as cleanable (the session check stands in for the
     /// recent-use one: a scratchpad is new by nature).
-    @MainActor
-    static func vet(asked: [String], tree: Tree, home: String, folderCache: Bool, specGroup: String) -> Vetting {
+    ///
+    /// Reads files and may run git and lsof (a worktree), so it is not for
+    /// the main actor; the running apps are read there beforehand (`apps`).
+    /// The paths of one card share one lsof and one Codex log scan.
+    static func vet(asked: [String], tree: Tree, home: String, folderCache: Bool, specGroup: String,
+                    apps: RunningApps) -> Vetting {
+        let evidence = WorktreeEvidence()
         var kept: [CleanupTarget] = []
         var excluded = 0
         var firstExclusion: String?
@@ -116,7 +137,8 @@ nonisolated enum CleanupGuard {
                 let normalized = try CleanupPathSafety.normalize(path)
                 let found = tree.node(at: normalized)
                 let check = found.map { tree.cleanupCheck(for: $0, path: normalized, indexByNode: indexByNode) } ?? .policyOnly
-                let target = try CleanupPathSafety.capture(path: path, root: root, home: home, check: check)
+                let target = try CleanupPathSafety.capture(path: path, root: root, home: home, check: check,
+                                                           evidence: evidence)
                 guard let node = found, node != 0 else {
                     throw CleanupOperations.failure(String(localized: "Path is not an item in this scan"))
                 }
@@ -136,7 +158,7 @@ nonisolated enum CleanupGuard {
                     throw CleanupOperations.failure(String(localized: "Not a folder the scan recognised as removable"))
                 }
                 if codexChat(target.path) == nil,
-                   let app = runningOwner(of: [target.path]) {
+                   let app = apps.owner(of: [target.path]) {
                     throw CleanupOperations.failure(String(localized: "Quit \(app) to clean this"))
                 }
                 if !scratch {

@@ -19,7 +19,8 @@ nonisolated enum CleanupVerify {
         path: String,
         now: Date = Date(),
         within: TimeInterval = recentWindow,
-        entryCap: Int = entryCap
+        entryCap: Int = entryCap,
+        evidence: WorktreeEvidence? = nil
     ) -> Reason? {
         switch verify {
         case "":
@@ -47,7 +48,7 @@ nonisolated enum CleanupVerify {
             }
         case "git_worktree":
             do {
-                _ = try GitWorktree.verify(path, recentWithin: within, now: now)
+                _ = try GitWorktree.verify(path, recentWithin: within, now: now, evidence: evidence)
                 return nil
             } catch let error as GitWorktreeError {
                 return (error.errorDescription ?? error.englishDescription, error.englishDescription)

@@ -28,6 +28,13 @@ enum WorktreeChecks {
         try cleanupVerify(base: base, worktree: worktree)
         try boundary(base: base, fixture: fixture, worktree: worktree)
         try await flow(fixture: fixture, base: base, repo: repo, worktree: worktree)
+        try processFailures(base: base, worktree: worktree)
+        try boundedProcess(base: base)
+        try gitBudget(base: base, worktree: worktree)
+        try unreachableRepository(fixture: fixture, worktree: worktree)
+        try sharedEvidence(base: base, worktree: worktree)
+        try await staleRefresh(fixture: fixture, base: base, worktree: worktree)
+        try await settlement(fixture: fixture, base: base, repo: repo, worktree: worktree)
         print("PASS WorktreeChecks")
     }
 
@@ -669,6 +676,325 @@ enum WorktreeChecks {
         } catch CleanupPathError.gitWorktree(.changes) {
             precondition(fm.fileExists(atPath: late.path))
         }
+    }
+
+    // MARK: Fake programs
+
+    /// An executable shell script, to stand in for lsof or git.
+    private static func program(_ path: String, _ body: String) throws {
+        try Data(("#!/bin/sh\n" + body + "\n").utf8).write(to: URL(fileURLWithPath: path))
+        precondition(chmod(path, 0o755) == 0)
+    }
+
+    private static func seconds(_ work: () -> Void) -> Double {
+        let start = DispatchTime.now().uptimeNanoseconds
+        work()
+        return Double(DispatchTime.now().uptimeNanoseconds - start) / 1e9
+    }
+
+    // MARK: lsof failing
+
+    /// A process check that cannot answer blocks, whatever the reason: no
+    /// lsof, a failing lsof, one that says nothing, one that hangs, one that
+    /// floods. None of them may read as "nothing is using the worktree".
+    private static func processFailures(base: URL, worktree: (String) -> String) throws {
+        let clean = worktree("lsof-failures")
+        let bin = base.appendingPathComponent("fake-lsof")
+        try fm.createDirectory(at: bin, withIntermediateDirectories: true)
+        let missing = bin.appendingPathComponent("no-such-lsof").path
+        let failing = bin.appendingPathComponent("failing").path
+        let silent = bin.appendingPathComponent("silent").path
+        let hanging = bin.appendingPathComponent("hanging").path
+        let flooding = bin.appendingPathComponent("flooding").path
+        let answering = bin.appendingPathComponent("answering").path
+        try program(failing, "echo 'lsof: WARNING' >&2; exit 1")
+        try program(silent, "exit 0")
+        try program(hanging, "exec /bin/sleep 30")
+        try program(flooding, "exec /usr/bin/yes n/somewhere")
+        try program(answering, "echo p1; echo n/elsewhere")
+
+        func blocked(_ label: String, _ limits: GitWorktree.Limits) {
+            let elapsed = seconds {
+                do {
+                    let info = try GitWorktree.verify(clean, recentWithin: 0, limits: limits)
+                    fatalError("\(label): verified \(info)")
+                } catch let error as GitWorktreeError {
+                    precondition(error == .processCheckFailed(clean), "\(label): blocked for the wrong reason: \(error)")
+                } catch { fatalError("\(label): \(error)") }
+            }
+            precondition(elapsed < 15, "\(label): the check must stay bounded, took \(elapsed) s")
+        }
+        blocked("lsof is not there", GitWorktree.Limits(lsof: missing))
+        blocked("lsof exits non-zero", GitWorktree.Limits(lsof: failing))
+        blocked("lsof answers nothing", GitWorktree.Limits(lsof: silent))
+        blocked("lsof hangs past its limit", GitWorktree.Limits(lsof: hanging, lsofTimeout: 1))
+        blocked("lsof output past its cap", GitWorktree.Limits(lsof: flooding, lsofCap: 64))
+        // And the same lsof, answering, lets it through.
+        _ = try GitWorktree.verify(clean, recentWithin: 0, limits: GitWorktree.Limits(lsof: answering))
+        // A failed reading is cached by the refresh sharing it: one 10 s lsof
+        // is not paid once per worktree.
+        BoundedProcess.spawns.reset()
+        let shared = WorktreeEvidence(limits: GitWorktree.Limits(lsof: failing))
+        let others = [clean, worktree("lsof-failures-2"), worktree("lsof-failures-3")]
+        for path in others {
+            do {
+                _ = try GitWorktree.verify(path, recentWithin: 0, evidence: shared)
+                fatalError("verified with a failed lsof")
+            } catch let error as GitWorktreeError {
+                precondition(error == .processCheckFailed(path), "shared failure: \(error)")
+            }
+        }
+        precondition(BoundedProcess.spawns.count("failing") == 1, "a failed lsof reading is shared, not retried per worktree")
+    }
+
+    // MARK: BoundedProcess
+
+    /// The time limit, the output cap and the kill of a program that ignores
+    /// the first signal.
+    private static func boundedProcess(base: URL) throws {
+        let sleeping = BoundedProcess.run("/bin/sleep", ["30"], environment: ["PATH": "/usr/bin:/bin"], timeout: 0.5, cap: 1024)
+        precondition(sleeping?.timedOut == true, "a program past its limit is reported as timed out")
+        let flooded = BoundedProcess.run("/usr/bin/yes", [], environment: ["PATH": "/usr/bin:/bin"], timeout: 3, cap: 1000)
+        precondition(flooded?.overflow == true && flooded?.stdout.count == 1000, "output past the cap is cut and says so")
+        precondition(BoundedProcess.run(base.appendingPathComponent("nothing-here").path, [], environment: [:],
+                                        timeout: 1, cap: 1) == nil, "a program that cannot start is nil, not a result")
+        // Ignores TERM, so only the kill ends it, and only within a bound.
+        let stubborn = base.appendingPathComponent("stubborn.sh").path
+        try program(stubborn, "trap '' TERM\nwhile :; do /bin/sleep 1; done")
+        var outcome: BoundedProcess.Outcome?
+        let elapsed = seconds {
+            outcome = BoundedProcess.run(stubborn, [], environment: ["PATH": "/usr/bin:/bin"], timeout: 0.5, cap: 1024)
+        }
+        precondition(outcome?.timedOut == true && elapsed < 10, "a program that ignores TERM is killed within a bound: \(elapsed) s")
+    }
+
+    // MARK: git budget
+
+    /// All of one worktree's git commands share one budget: a git that hangs,
+    /// or many that are each slow, block with "took too long".
+    private static func gitBudget(base: URL, worktree: (String) -> String) throws {
+        let clean = worktree("git-budget")
+        guard let realGit = GitWorktree.locateGit(.standard) else { fatalError("no git") }
+        let hang = base.appendingPathComponent("hanging-git")
+        let slow = base.appendingPathComponent("slow-git")
+        for folder in [hang, slow] { try fm.createDirectory(at: folder, withIntermediateDirectories: true) }
+        try program(hang.appendingPathComponent("git").path, "exec /bin/sleep 30")
+        try program(slow.appendingPathComponent("git").path, "/bin/sleep 0.7\nexec '\(realGit)' \"$@\"")
+
+        func timedOut(_ label: String, _ folder: URL, budget: TimeInterval) {
+            let elapsed = seconds {
+                do {
+                    let info = try GitWorktree.verify(clean, recentWithin: 0,
+                                                      lookup: GitLookup(searchPath: folder.path, useDeveloperDir: false),
+                                                      limits: GitWorktree.Limits(gitBudget: budget))
+                    fatalError("\(label): verified \(info)")
+                } catch let error as GitWorktreeError {
+                    precondition(error == .timedOut(clean), "\(label): blocked for the wrong reason: \(error)")
+                } catch { fatalError("\(label): \(error)") }
+            }
+            precondition(elapsed < 12, "\(label): bounded, took \(elapsed) s")
+        }
+        timedOut("a git that never answers", hang, budget: 1)
+        timedOut("commands that are each fast enough but together spend the budget", slow, budget: 1.5)
+        // Within the budget the same slow git passes.
+        _ = try GitWorktree.verify(clean, recentWithin: 0, lookup: GitLookup(searchPath: slow.path, useDeveloperDir: false),
+                                   limits: GitWorktree.Limits(gitBudget: 60))
+    }
+
+    // MARK: Unreachable repository
+
+    /// A worktree whose repository is off-line (an unmounted drive) says so;
+    /// a pruned entry in a repository that is there stays "not a worktree".
+    private static func unreachableRepository(fixture: GitFixture, worktree: (String) -> String) throws {
+        let offline = fixture.base.appendingPathComponent("wts/offline-worktree").path
+        try fm.createDirectory(atPath: offline, withIntermediateDirectories: true)
+        fixture.write(offline + "/.git", "gitdir: /Volumes/BlitzTreeNoSuchDisk/repo/.git/worktrees/offline\n")
+        expectBlocked("the repository's drive is not mounted", offline, .repositoryUnavailable(offline))
+        let message = GitWorktreeError.repositoryUnavailable(offline).englishDescription
+        precondition(message.contains("can't be reached") && !message.contains("protected"), message)
+
+        // Reached through CleanupPathSafety it is the same message, not "Git metadata path is protected".
+        do {
+            _ = try CleanupPathSafety.capture(path: offline, root: fixture.base.path, home: fixture.base.path,
+                                              check: .policyOnly)
+            fatalError("captured a worktree whose repository is off-line")
+        } catch CleanupPathError.gitWorktree(.repositoryUnavailable) {}
+
+        let moved = worktree("commondir-offline")
+        let commondir = fixture.admin(of: moved) + "/commondir"
+        let original = try String(contentsOfFile: commondir, encoding: .utf8)
+        fixture.write(commondir, "/Volumes/BlitzTreeNoSuchDisk/repo/.git\n")
+        expectBlocked("the common dir named by commondir is off-line", moved, .repositoryUnavailable(moved))
+        fixture.write(commondir, original)
+
+        let pruned = fixture.base.appendingPathComponent("pruned-worktree").path
+        try fm.createDirectory(atPath: pruned, withIntermediateDirectories: true)
+        let reachableRepo = fixture.base.appendingPathComponent("repo").path
+        fixture.write(pruned + "/.git", "gitdir: \(reachableRepo)/.git/worktrees/pruned\n")
+        expectBlocked("the entry was pruned from a repository that is there", pruned, .notWorktree(pruned))
+    }
+
+    // MARK: One reading per refresh
+
+    /// A refresh shares one lsof between its worktrees, verifies each once,
+    /// and a verification without a shared reading runs its own.
+    private static func sharedEvidence(base: URL, worktree: (String) -> String) throws {
+        let paths = (0..<4).map { worktree("shared-\($0)") }
+        BoundedProcess.spawns.reset()
+        _ = try GitWorktree.verify(paths[0], recentWithin: 0)
+        let gitPerVerification = BoundedProcess.spawns.count("git")
+        precondition(gitPerVerification >= 4, "a verification runs git: \(gitPerVerification)")
+        precondition(BoundedProcess.spawns.count("lsof") == 1, "a lone verification reads the processes itself")
+
+        BoundedProcess.spawns.reset()
+        let evidence = WorktreeEvidence()
+        for path in paths { _ = try GitWorktree.verify(path, recentWithin: 0, evidence: evidence) }
+        precondition(BoundedProcess.spawns.count("lsof") == 1,
+                     "four verifications of one refresh share one lsof, ran \(BoundedProcess.spawns.count("lsof"))")
+        precondition(BoundedProcess.spawns.count("git") == gitPerVerification * paths.count,
+                     "and verify each worktree once, no more")
+
+        BoundedProcess.spawns.reset()
+        for path in paths { _ = try GitWorktree.verify(path, recentWithin: 0) }
+        precondition(BoundedProcess.spawns.count("lsof") == paths.count, "without a shared reading each runs its own")
+    }
+
+    // MARK: A refresh is advisory
+
+    /// What the refresh read is only what the panel offers. A worktree that
+    /// becomes busy or dirty afterwards is blocked at the Trash, which reads
+    /// lsof and git status again, fresh: one lsof and the git commands per move.
+    private static func staleRefresh(fixture: GitFixture, base: URL, worktree: (String) -> String) async throws {
+        let trash = base.appendingPathComponent("stale-trash")
+        try fm.createDirectory(at: trash, withIntermediateDirectories: true)
+        func capture(_ path: String, _ evidence: WorktreeEvidence) throws -> CleanupTarget {
+            try CleanupPathSafety.capture(path: path, root: base.path, home: base.path,
+                                          check: CleanupCheck(verify: "git_worktree", folder: path), evidence: evidence)
+        }
+        func toTrash(_ target: CleanupTarget) throws -> CleanupReceipt {
+            try CleanupOperations.trash(target) { source in
+                let destination = trash.appendingPathComponent(UUID().uuidString)
+                try fm.moveItem(at: source, to: destination)
+                return destination
+            }
+        }
+        let evidence = WorktreeEvidence()
+        let busy = worktree("busy-after-refresh"), dirty = worktree("dirty-after-refresh"), quiet = worktree("quiet-after-refresh")
+        for path in [busy, dirty, quiet] { fixture.backdate(path) }
+        let busyTarget = try capture(busy, evidence), dirtyTarget = try capture(dirty, evidence)
+        let quietTarget = try capture(quiet, evidence)
+        precondition(BoundedProcess.spawns.count("lsof") >= 1)
+
+        // The refresh saw nothing running; a process starts in `busy` afterwards.
+        let sleeper = Process()
+        sleeper.executableURL = URL(fileURLWithPath: "/bin/sleep")
+        sleeper.arguments = ["30"]
+        sleeper.currentDirectoryURL = URL(fileURLWithPath: busy)
+        try sleeper.run()
+        defer { if sleeper.isRunning { sleeper.terminate() } }
+        usleep(200_000)
+        precondition((try? capture(busy, evidence)) != nil,
+                     "the refresh's own reading still says it is free: that is why the Trash must look again")
+        do {
+            _ = try toTrash(busyTarget)
+            fatalError("a worktree that became busy after the refresh reached the Trash")
+        } catch CleanupPathError.gitWorktree(.inUse) {
+            precondition(fm.fileExists(atPath: busy))
+        }
+        sleeper.terminate()
+        sleeper.waitUntilExit()
+
+        // Dirty after the refresh.
+        try Data("late\n".utf8).write(to: URL(fileURLWithPath: dirty + "/late.txt"))
+        do {
+            _ = try toTrash(dirtyTarget)
+            fatalError("a worktree dirtied after the refresh reached the Trash")
+        } catch CleanupPathError.gitWorktree(.changes) {
+            precondition(fm.fileExists(atPath: dirty))
+        }
+
+        // A quiet one moves, and the Trash did its own reading: one lsof, the git commands.
+        BoundedProcess.spawns.reset()
+        _ = try toTrash(quietTarget)
+        precondition(BoundedProcess.spawns.count("lsof") == 1 && BoundedProcess.spawns.count("git") >= 4,
+                     "the Trash reads lsof and git again: lsof \(BoundedProcess.spawns.count("lsof")), git \(BoundedProcess.spawns.count("git"))")
+    }
+
+    // MARK: Emptying the Trash frees the branch
+
+    /// The panel only moves a worktree to the Trash. Its admin entry goes once
+    /// the Trash copy is gone, never while it can still be put back.
+    private static func settlement(fixture: GitFixture, base: URL, repo: String,
+                                   worktree: (String) -> String) async throws {
+        let trash = base.appendingPathComponent("settle-trash")
+        try fm.createDirectory(at: trash, withIntermediateDirectories: true)
+        func listed(_ path: String) -> Bool {
+            fixture.run(["worktree", "list", "--porcelain"], in: repo)
+                .split(separator: "\n").contains { $0 == "worktree \(path)" }
+        }
+        func moved(_ name: String) throws -> (path: String, admin: String, receipt: CleanupReceipt) {
+            let path = worktree(name)
+            fixture.backdate(path)
+            let target = try CleanupPathSafety.capture(path: path, root: base.path, home: base.path,
+                                                       check: CleanupCheck(verify: "git_worktree", folder: path))
+            let admin = fixture.admin(of: path)
+            let receipt = try CleanupOperations.trash(target) { source in
+                let destination = trash.appendingPathComponent(UUID().uuidString)
+                try fm.moveItem(at: source, to: destination)
+                return destination
+            }
+            return (path, admin, receipt)
+        }
+
+        // In the Trash: waits. Emptied: the entry goes, only that entry.
+        let neighbour = worktree("settle-neighbour")
+        let one = try moved("settle-one")
+        var settled = CleanupOperations.settleWorktrees([one.receipt])
+        precondition(settled.waiting.count == 1 && settled.notices.isEmpty && fm.fileExists(atPath: one.admin),
+                     "still in the Trash: the entry stays so a put-back worktree works")
+        try fm.removeItem(atPath: one.receipt.url.path)
+        settled = CleanupOperations.settleWorktrees(settled.waiting)
+        precondition(settled.waiting.isEmpty && settled.notices.isEmpty, "settled: \(settled.notices)")
+        precondition(!fm.fileExists(atPath: one.admin) && !listed(one.path), "emptied: the admin entry is gone")
+        precondition(listed(neighbour) && fm.fileExists(atPath: fixture.admin(of: neighbour)), "other worktrees untouched")
+        precondition(!fixture.run(["rev-parse", "--verify", "refs/heads/\((one.path as NSString).lastPathComponent)"], in: repo).isEmpty,
+                     "the branch survives")
+
+        // Renamed inside the Trash: still there.
+        let renamed = try moved("settle-renamed")
+        let newName = trash.appendingPathComponent("renamed by the person")
+        try fm.moveItem(at: renamed.receipt.url, to: newName)
+        precondition(CleanupOperations.settleWorktrees([renamed.receipt]).waiting.count == 1 && fm.fileExists(atPath: renamed.admin),
+                     "a rename in the Trash does not make it look emptied")
+        try fm.removeItem(at: newName)
+        precondition(CleanupOperations.settleWorktrees([renamed.receipt]).waiting.isEmpty && !fm.fileExists(atPath: renamed.admin))
+
+        // Put back where it was: the worktree exists again, the entry stays and says why.
+        let back = try moved("settle-put-back")
+        try fm.moveItem(atPath: back.receipt.url.path, toPath: back.path)
+        let notice = CleanupOperations.settleWorktrees([back.receipt])
+        precondition(notice.notices.count == 1 && fm.fileExists(atPath: back.admin) && listed(back.path), "put back: \(notice.notices)")
+
+        // A Trash that was replaced, or cannot be read, is "unknown", never "emptied".
+        let swapped = try moved("settle-swapped")
+        try fm.removeItem(atPath: swapped.receipt.url.path)
+        let aside = base.appendingPathComponent("settle-trash-aside")
+        try fm.moveItem(at: trash, to: aside)
+        try fm.createDirectory(at: trash, withIntermediateDirectories: true)
+        precondition(swapped.receipt.trashState() == .unknown, "a different Trash folder proves nothing")
+        precondition(CleanupOperations.settleWorktrees([swapped.receipt]).waiting.count == 1 && fm.fileExists(atPath: swapped.admin))
+        try fm.removeItem(at: trash)
+        try fm.moveItem(at: aside, to: trash)
+        precondition(swapped.receipt.trashState() == .gone)
+        let crowded = try moved("settle-crowded")
+        try fm.removeItem(atPath: crowded.receipt.url.path)
+        precondition(fm.createFile(atPath: trash.appendingPathComponent("decoy").path, contents: Data()))
+        precondition(crowded.receipt.trashState(entryLimit: 0) == .unknown, "more entries than the limit is unknown")
+        precondition(crowded.receipt.trashState() == .gone)
+        // A worktree locked after the move keeps its entry.
+        fixture.run(["worktree", "lock", "--reason", "fixture", crowded.path], in: repo)
+        precondition(CleanupOperations.settleWorktrees([crowded.receipt]).notices.count == 1 && fm.fileExists(atPath: crowded.admin),
+                     "a locked entry is left in place and reported")
     }
 
     // MARK: Helpers

@@ -24,7 +24,7 @@ p=Path(sys.argv[1]); source=p.read_text()
 changes={
     'private var preparationTask: Task<Void, Never>?': 'var preparationTask: Task<Void, Never>?',
     '            step(asking)\n            start()\n': '            step(asking)\n            AgentBenchmarkLaunch.record(input)\n',
-    'AgentPrompt.build(tree: tree, scanRoot: scanRoot, known: known, running: running, focus: focus)': 'AgentBenchmarkGate.shared.waitIfArmed(); return AgentPrompt.build(tree: tree, scanRoot: scanRoot, known: known, running: running, focus: focus)',
+    'let verdict = focus?.verdict(tree: tree, known: known)': 'AgentBenchmarkGate.shared.waitIfArmed(); let verdict = focus?.verdict(tree: tree, known: known)',
     '+ AgentPrompt.appData(tree: tree, focus: focus?.path)': '',  # Keep simulator/session lookups out of the offline fixture.
 }
 for old,new in changes.items():
@@ -36,7 +36,7 @@ old='''                        guard let target = item.target else {
                         }
                         // Revalidating at the boundary checks the folder again
                         // (it may have been used since the scan), rule check included.
-                        _ = try CleanupOperations.trash(target)'''
+                        receipts.append(try CleanupOperations.trash(target))'''
 p.write_text(hook(source, old, '                        try AgentBenchmarkTrash.move(item)', p, 'manual Trash operation'))
 p=Path(sys.argv[3]); source=p.read_text()
 old='''    func startAgent(_ agent: InstalledAgent, focus: AgentFocus? = nil, routes: [Manvi.Route]? = nil) {

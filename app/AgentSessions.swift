@@ -214,7 +214,12 @@ nonisolated enum AgentSessions {
 
     /// Whether a session in `root` worked at or inside `folder` since `since`.
     static func usage(in folder: String, root: URL, since: Date, folders: ((String) -> Bool)? = nil) -> Usage {
-        let activity = scan(in: root, since: since, folders: folders)
+        usage(of: folder, in: scan(in: root, since: since, folders: folders))
+    }
+
+    /// The same answer from a scan already made, for callers asking about
+    /// several folders of one root.
+    static func usage(of folder: String, in activity: Activity) -> Usage {
         if activity.folders.keys.contains(where: { $0 == folder || $0.hasPrefix(folder + "/") }) { return .used }
         return activity.complete ? .unused : .unknown
     }

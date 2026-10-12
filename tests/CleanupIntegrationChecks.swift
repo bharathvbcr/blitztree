@@ -89,11 +89,12 @@ struct CleanupIntegrationChecks {
             precondition(plan(spec([unscanned], action: "command", command: command)).blocked != nil)
         }
         let changed = spec([], action: "command", command: "docker system prune -f --volumes")
-        let final = PlanItem.reconcile([original.spec, changed], previous: [original], tree: tree)
+        let final = await PlanItem.reconcile([original.spec, changed], previous: [original], tree: tree)
         precondition(final[0] === original, "unchanged actions retain their captured identities")
         precondition(final[1].blocked != nil && !final[1].selected, "same title must not hide changed action")
         let newValid = spec([], action: "command", command: "docker builder prune -f")
-        precondition(!PlanItem.reconcile([newValid], previous: [original], tree: tree)[0].selected)
+        let reconciledNew = await PlanItem.reconcile([newValid], previous: [original], tree: tree)
+        precondition(!reconciledNew[0].selected)
         let invalidCommand = await AgentRun.runCommand("docker system prune -f --volumes", path: "/usr/bin")
         precondition(invalidCommand != nil, "execution must independently reject changed arguments")
         let relativeTool = await AgentRun.runCommand("docker builder prune -f", path: ".:relative:")
@@ -117,27 +118,30 @@ struct CleanupIntegrationChecks {
         }
         precondition(scoped(spec([cache], action: "command", command: "uv cache clean"), uvNode).blocked == nil,
                      "the tool's own cache command fits when its folder is the item")
-        let rescoped = PlanItem.reconcile([spec([other])], previous: [], tree: tree, scope: uvNode)
+        let rescoped = await PlanItem.reconcile([spec([other])], previous: [], tree: tree, scope: uvNode)
         precondition(rescoped[0].blocked != nil, "cards from the final plan are scoped too")
 
         let askedNode = tree.node(at: asked)!
-        let focus = AgentFocus(node: askedNode, tree: tree, known: [], home: home)
-        precondition(focus.path == asked && focus.name == "big" && focus.isDir && focus.local == nil)
-        let focused = AgentPrompt.build(tree: tree, scanRoot: home, known: [], running: [], focus: focus)
+        let focus = AgentFocus(node: askedNode, tree: tree)
+        precondition(focus.path == asked && focus.name == "big" && focus.isDir
+                     && focus.verdict(tree: tree, known: [], home: home) == nil)
+        let focused = AgentPrompt.build(tree: tree, scanRoot: home, known: [], running: [], focus: focus, verdict: focus.verdict(tree: tree, known: [], home: home), home: home)
         precondition(focused.contains("asked whether it is safe to clean: \(asked)"))
         precondition(focused.contains("| \(askedInside)/ |"), "the item's own subfolders are listed")
         precondition(!focused.contains(askedSibling), "an unrelated sibling stays out of the question")
         precondition(!focused.contains("BlitzTree's own check"), "no local check line when there is none")
-        let fileFocus = AgentFocus(node: tree.node(at: askedFile)!, tree: tree, known: [], home: home)
-        let filePrompt = AgentPrompt.build(tree: tree, scanRoot: home, known: [], running: [], focus: fileFocus)
+        let fileFocus = AgentFocus(node: tree.node(at: askedFile)!, tree: tree)
+        let filePrompt = AgentPrompt.build(tree: tree, scanRoot: home, known: [], running: [], focus: fileFocus,
+                                      verdict: fileFocus.verdict(tree: tree, known: [], home: home), home: home)
         precondition(!fileFocus.isDir && filePrompt.contains("Answer about this file only")
                      && filePrompt.contains("## The file") && !filePrompt.contains("## Largest folders"))
         let whole = AgentPrompt.build(tree: tree, scanRoot: home, known: [], running: [])
         precondition(whole.contains("The user clicked \"Clean up\"") && !whole.contains("right-clicked"))
-        let guarded = AgentFocus(node: tree.node(at: secret)!, tree: tree, known: [], home: home)
-        precondition(guarded.local?.hasPrefix("BlitzTree won't remove this: ") == true,
+        let guarded = AgentFocus(node: tree.node(at: secret)!, tree: tree)
+        precondition(guarded.verdict(tree: tree, known: [], home: home)?.english.hasPrefix("BlitzTree won't remove this: ") == true,
                      "a protected item says so before any agent answers")
-        let guardedPrompt = AgentPrompt.build(tree: tree, scanRoot: home, known: [], running: [], focus: guarded)
+        let guardedPrompt = AgentPrompt.build(tree: tree, scanRoot: home, known: [], running: [], focus: guarded,
+                                         verdict: guarded.verdict(tree: tree, known: [], home: home), home: home)
         precondition(guardedPrompt.contains("BlitzTree's own check: BlitzTree won't remove this"))
         precondition(AgentPrompt.relevant("/a/b", to: nil) && AgentPrompt.relevant("/a/b", to: "/a")
                      && AgentPrompt.relevant("/a/b", to: "/a/b/c") && AgentPrompt.relevant("/a/b", to: "/")
@@ -457,8 +461,8 @@ struct CleanupIntegrationChecks {
 
         // Localization checks:
         // 1. Acceptance Criterion 2: Guarded prompt stays English
-        precondition(guarded.local?.hasPrefix("BlitzTree won't remove this: ") == true)
-        precondition(guarded.localDisplay != nil)
+        precondition(guarded.verdict(tree: tree, known: [], home: home)?.english.hasPrefix("BlitzTree won't remove this: ") == true)
+        precondition(guarded.verdict(tree: tree, known: [], home: home)?.display.isEmpty == false)
         precondition(guardedPrompt.contains("BlitzTree's own check: BlitzTree won't remove this: "))
         let error = CleanupPathError.gitPath("/test/.git")
         precondition(error.englishDescription == "Git metadata path is protected: /test/.git")
@@ -825,6 +829,8 @@ struct CleanupIntegrationChecks {
         precondition(movedNow.isEmpty && failedNow.count == 1 && fm.fileExists(atPath: tagged.path),
                      "the verifier runs again before the Trash")
 
+        try await worktrees()
+
         // Clean up UserDefaults after test
         UserDefaults.standard.removeObject(forKey: "bz.launchTarget")
         UserDefaults.standard.removeObject(forKey: "bz.autoAnalyze")
@@ -833,5 +839,131 @@ struct CleanupIntegrationChecks {
         print("PASS: [#9] folder trashing, copy path, treemap label hits and directory outline context menu")
         print("PASS: translation tables, English prompt safety, and step/guard localization")
         print("PASS: launch target and auto-analyse suggestions")
+    }
+
+    // MARK: Worktrees in a refresh, a plan and a deletion
+
+    /// A scan holding five linked worktrees: one refresh verifies each once and
+    /// reads the processes once; a plan card naming three of them does the
+    /// same; a card whose worktree check is slow never stalls the main actor;
+    /// and what deleting leaves in place reaches the card.
+    @MainActor
+    private static func worktrees() async throws {
+        let fm = FileManager.default
+        guard let physical = realpath(fm.temporaryDirectory.path, nil) else { fatalError("no temporary directory") }
+        let base = URL(fileURLWithPath: String(cString: physical)).appendingPathComponent("blitztree-worktrees-\(UUID().uuidString)")
+        free(physical)
+        try fm.createDirectory(at: base, withIntermediateDirectories: true)
+        defer { try? fm.removeItem(at: base) }
+        let git = GitFixture(base: base)
+        let home = base.appendingPathComponent("home").path
+        let paths = git.scannableWorktrees(in: home, count: 5)
+        // Names for the path lookup: composed accents, a lookalike pair, a folder with many entries.
+        let composed = "caf\u{e9}", decomposed = "cafe\u{301}"
+        try fm.createDirectory(atPath: home + "/lookup/\(composed)/\u{fc}ber", withIntermediateDirectories: true)
+        for name in ["a", "b", "ab", "abc", "abd"] { try fm.createDirectory(atPath: home + "/lookup/wide/\(name)", withIntermediateDirectories: true) }
+        guard let handle = bz_scan_start(home) else { fatalError("worktree fixture scan failed") }
+        var files: UInt64 = 0, dirs: UInt64 = 0, bytes: UInt64 = 0, done: Int32 = 0
+        while done == 0 {
+            bz_progress(handle, &files, &dirs, &bytes, &done)
+            if done == 0 { try await Task.sleep(for: .milliseconds(5)) }
+        }
+        guard let tree = Tree(handle: handle) else { bz_free(handle); fatalError("worktree fixture tree failed") }
+
+        // Tree.node(at:) compares name bytes: the right sibling among lookalikes, none for a miss or a
+        // prefix, and a folder spelled decomposed still finds the composed one on disk, as String == did.
+        let wide = tree.node(at: home + "/lookup/wide")!
+        for name in ["a", "b", "ab", "abc", "abd"] {
+            let found = tree.node(at: home + "/lookup/wide/" + name)
+            precondition(found != nil && tree.name(found!) == name && Int(tree.parents[found!]) == wide, "lookup of \(name)")
+        }
+        for name in ["", "abe", "abcd", "AB", "c", "a/b"] where !name.isEmpty {
+            precondition(tree.node(at: home + "/lookup/wide/" + name) == nil, "no node for \(name)")
+        }
+        precondition(tree.node(at: home + "/lookup/wide") == wide && tree.node(at: home + "/lookup/wide/") == wide)
+        let accent = tree.node(at: home + "/lookup/" + composed)
+        precondition(accent != nil && tree.node(at: home + "/lookup/" + decomposed) == accent,
+                     "the same folder spelled composed or decomposed is one node")
+        precondition(tree.node(at: home + "/lookup/" + decomposed + "/\u{fc}ber") == tree.node(at: home + "/lookup/" + composed + "/\u{fc}ber"))
+        precondition(tree.node(at: home + "/lookup/cafe") == nil, "an accent is not optional")
+
+        // One verification, measured alone: the yardstick for "once".
+        BoundedProcess.spawns.reset()
+        _ = try GitWorktree.verify(paths[0])
+        let gitPerVerification = BoundedProcess.spawns.count("git")
+        precondition(gitPerVerification >= 4 && BoundedProcess.spawns.count("lsof") == 1)
+
+        // A refresh: five worktrees, each verified once, one lsof.
+        BoundedProcess.spawns.reset()
+        let items = Cleanup.find(in: tree)
+        let offered = items.filter { paths.contains($0.path) }
+        precondition(offered.count == 5 && offered.allSatisfy { $0.target != nil },
+                     "every worktree is offered and verified: \(offered.map { $0.blocked ?? "ok" })")
+        precondition(BoundedProcess.spawns.count("lsof") == 1,
+                     "a refresh reads the processes once, not once per worktree: \(BoundedProcess.spawns.count("lsof"))")
+        precondition(BoundedProcess.spawns.count("git") == 5 * gitPerVerification,
+                     "a refresh verifies each worktree once: \(BoundedProcess.spawns.count("git")) git runs")
+
+        // A plan card naming three of them: the same.
+        func card(_ names: [String]) -> PlanItemSpec {
+            PlanItemSpec(title: "Worktrees", detail: "Fixture", group: "ask", bytes: 1, paths: names, action: "trash", command: "")
+        }
+        BoundedProcess.spawns.reset()
+        let planned = await PlanItem.make(spec: card(Array(paths.prefix(3))), tree: tree, home: home)
+        precondition(planned.blocked == nil && planned.cleanupTargets.count == 3, "a card of worktrees plans: \(planned.blocked ?? "")")
+        precondition(BoundedProcess.spawns.count("lsof") == 1 && BoundedProcess.spawns.count("git") == 3 * gitPerVerification,
+                     "a card shares one lsof across its paths and verifies each once")
+
+        // A slow worktree check does not stall the main actor.
+        guard let realGit = GitWorktree.locateGit(.standard) else { fatalError("no git") }
+        let slow = base.appendingPathComponent("slow-git")
+        try fm.createDirectory(at: slow, withIntermediateDirectories: true)
+        let wrapper = slow.appendingPathComponent("git").path
+        try Data("#!/bin/sh\n/bin/sleep 0.7\nexec '\(realGit)' \"$@\"\n".utf8).write(to: URL(fileURLWithPath: wrapper))
+        precondition(chmod(wrapper, 0o755) == 0)
+        let normal = GitWorktree.lookup
+        GitWorktree.lookup = GitLookup(searchPath: slow.path, useDeveloperDir: false)
+        defer { GitWorktree.lookup = normal }
+        var lastBeat = DispatchTime.now().uptimeNanoseconds
+        var longestGap = 0.0, beats = 0, evaluating = true
+        let heartbeat = Task { @MainActor in
+            while evaluating {
+                let now = DispatchTime.now().uptimeNanoseconds
+                longestGap = max(longestGap, Double(now - lastBeat) / 1e9)
+                lastBeat = now
+                beats += 1
+                try? await Task.sleep(for: .milliseconds(10))
+            }
+        }
+        let started = DispatchTime.now().uptimeNanoseconds
+        let slowCard = await PlanItem.make(spec: card([paths[3]]), tree: tree, home: home)
+        let evaluated = Double(DispatchTime.now().uptimeNanoseconds - started) / 1e9
+        evaluating = false
+        await heartbeat.value
+        precondition(slowCard.blocked == nil && slowCard.cleanupTargets.count == 1, "the slow card plans: \(slowCard.blocked ?? "")")
+        precondition(evaluated > 2 && beats > 30 && longestGap < 0.5,
+                     "judging a card took \(evaluated) s and the main actor beat \(beats) times, longest gap \(longestGap) s")
+        GitWorktree.lookup = normal
+
+        // Deleting for good: what was left in place reaches the card.
+        let bin = base.appendingPathComponent("trash")
+        try fm.createDirectory(at: bin, withIntermediateDirectories: true)
+        let last = await PlanItem.make(spec: card([paths[4]]), tree: tree, home: home)
+        precondition(last.cleanupTargets.count == 1)
+        let admin = git.admin(of: paths[4])
+        let receipt = try CleanupOperations.trash(last.cleanupTargets[0]) { source in
+            let destination = bin.appendingPathComponent(UUID().uuidString)
+            try fm.moveItem(at: source, to: destination)
+            return destination
+        }
+        last.trashed = [receipt]
+        git.write(admin + "/gitdir", paths[0] + "/.git\n")
+        let outcome = await AgentRun.deleteTrashed([receipt])
+        precondition(outcome.remaining.isEmpty && outcome.error == nil && outcome.notices.count == 1,
+                     "the worktree is freed and its changed metadata reported: \(outcome)")
+        last.recordDeletion(remaining: outcome.remaining, notices: outcome.notices, error: outcome.error,
+                            stagedBytes: 1, tree: tree)
+        precondition(last.status == .done && last.notices == outcome.notices && fm.fileExists(atPath: admin),
+                     "the card is done and carries the notice")
     }
 }

@@ -25,7 +25,7 @@ swiftc "${GUARD[@]}" tests/ScratchpadChecks.swift \
 cargo build --locked --release --lib
 SOURCES=(app/*.swift)
 SOURCES=(${SOURCES:#app/Main.swift})
-swiftc "${SOURCES[@]}" tests/CleanupIntegrationChecks.swift "${FLAGS[@]}" \
+swiftc "${SOURCES[@]}" tests/GitFixture.swift tests/CleanupIntegrationChecks.swift "${FLAGS[@]}" \
   -import-objc-header app/bz.h -L target/release -lblitztree \
   -framework AppKit -framework SwiftUI -o "$CLEANUP_TEST_TMP/integration"
 for LPROJ in app/*.lproj; do

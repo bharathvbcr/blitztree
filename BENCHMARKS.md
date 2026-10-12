@@ -118,3 +118,60 @@ the folder's bytes and file count. Raw output:
 These are engine times only; the app copies the rows and redraws the list
 after them.
 
+## Clean Up safety checks: worktrees, plan cards, path lookup
+
+All three are measured by `benchmarks/run-cleanup-perf.sh` on disposable
+fixtures (real git, the real engine, mktemp directories; nothing reads the
+user's home or session logs). Apple M5 Pro, macOS 27.0.1, **load average
+180-230 from other work**, so absolute times are inflated and only the
+before/after ratios on the same machine state mean anything. The "before"
+numbers come from the commit that added the spawn counter and changed nothing
+else (b59ac42), run alternately with the new tree, three times each; the table
+shows the best of those, each itself the min of 5 runs.
+
+**Refresh** (`run-cleanup-perf.sh refresh --worktrees 6`): `Cleanup.find` on a
+scan with 6 linked worktrees. After Wave 1 a worktree was already verified once
+per capture, but each verification ran its own system-wide `lsof -d cwd`
+(0.32-0.50 s here, 51 KB of output), which was most of its cost.
+
+| | git processes | lsof processes | `Cleanup.find` (min of 5, best of 3 alternating runs) |
+|---|---|---|---|
+| before (b59ac42) | 24 | 6 | 2118 ms (2118-2886) |
+| after | 24 | 1 | **581 ms** (581-761) |
+
+Four git processes per worktree is the verification itself (`status`,
+`ls-files`, `symbolic-ref`, `rev-parse`); a detached HEAD adds a fifth. The
+Codex session logs are scanned once per refresh instead of once per
+spelling of each worktree's path. The move to the Trash still reads lsof and git
+fresh per worktree (checked in `WorktreeChecks.staleRefresh`).
+
+Open files were measured and rejected as an extra check: a system-wide
+`lsof -Fn` of every descriptor took 10.99 s and 12.4 MB against 0.43 s and
+51 KB for working directories alone (past the 10 s limit and the 32 MB cap, so
+it would block every worktree), and `lsof +D` walks a worktree's whole tree
+(a `node_modules` is 100k files) once per worktree.
+
+**Plan cards on the main thread** (`run-cleanup-perf.sh plan`): 12 cards, each
+naming a worktree, one every 150 ms as a model writes them, with 400 Claude Code
+session logs on disk (what each card's recent-use check reads). A heartbeat on
+the main thread counts every gap over 50 ms; three rounds each, alternating,
+min total shown.
+
+| card judged | stalls over 50 ms | stalled time | longest stall |
+|---|---|---|---|
+| on the main thread (`PlanItem.init`, as the run did) | 12 | 4823 ms | 476-713 ms |
+| off it (`PlanItem.make`, as the run does now) | 0 | 0 ms | 15-35 ms |
+
+**`Tree.node(at:)`** (`run-cleanup-perf.sh node`): the last of 100,000 entries in
+one directory, 15 interleaved rounds. It runs on the main thread in removal
+install and about five times per planned path.
+
+| lookup | min | median |
+|---|---|---|
+| a String per child (before) | 4.650 ms | 4.903 ms |
+| name bytes compared in place (after) | **0.226 ms** | 0.271 ms |
+
+20.6x on the min. A component with non-ASCII letters that matches no bytes is
+tried again by canonical equivalence, as `String ==` always matched it, so a
+name spelled composed or decomposed still finds its node.
+

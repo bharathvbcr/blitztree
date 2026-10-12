@@ -185,7 +185,8 @@ nonisolated enum CleanupPathSafety {
         path: String,
         root: String = NSHomeDirectory(),
         home: String = NSHomeDirectory(),
-        check: CleanupCheck
+        check: CleanupCheck,
+        evidence: WorktreeEvidence? = nil
     ) throws -> CleanupTarget {
         let p = try normalize(path)
         let r = try normalize(root)
@@ -198,7 +199,7 @@ nonisolated enum CleanupPathSafety {
             rootIdentity: rootObserved.identity, homeIdentity: homeObserved.identity
         )
         _ = try enforce(target, targetObserved: targetObserved, rootObserved: rootObserved,
-                        homeObserved: homeObserved)
+                        homeObserved: homeObserved, evidence: evidence)
         return target
     }
 
@@ -331,7 +332,8 @@ nonisolated enum CleanupPathSafety {
         _ target: CleanupTarget,
         targetObserved: Observed,
         rootObserved: Observed,
-        homeObserved: Observed
+        homeObserved: Observed,
+        evidence: WorktreeEvidence? = nil
     ) throws -> WorktreeInfo? {
         // A scan root is a boundary, never an actionable target.  Identity
         // also catches the equivalent /System/Volumes/Data spelling.
@@ -348,8 +350,8 @@ nonisolated enum CleanupPathSafety {
         _ = homeObserved // The identity check is part of the root policy below.
         try protectedPolicy(path: target.path, home: target.home, homeIdentity: homeObserved.identity)
         try claudeTempPolicy(target.path)
-        let worktree = try rejectGitPaths(target.path)
-        try enforceCheck(target, worktree: worktree)
+        let worktree = try rejectGitPaths(target.path, evidence: evidence)
+        try enforceCheck(target, worktree: worktree, evidence: evidence)
         return worktree
     }
 
@@ -357,7 +359,8 @@ nonisolated enum CleanupPathSafety {
     /// place it runs, so the panel, the agent and any later caller get it from
     /// the same capture and revalidation. A worktree the git policy above just
     /// verified is not verified a second time.
-    private static func enforceCheck(_ target: CleanupTarget, worktree: WorktreeInfo?) throws {
+    private static func enforceCheck(_ target: CleanupTarget, worktree: WorktreeInfo?,
+                                     evidence: WorktreeEvidence?) throws {
         let check = target.check
         guard !check.verify.isEmpty else { return }
         guard isPath(target.path, under: check.folder) else {
@@ -366,7 +369,7 @@ nonisolated enum CleanupPathSafety {
                 english: "The check does not belong to this folder: \(target.path)")
         }
         if check.verify == "git_worktree", check.folder == target.path, worktree != nil { return }
-        if let reason = CleanupVerify.blockReason(verify: check.verify, path: check.folder) {
+        if let reason = CleanupVerify.blockReason(verify: check.verify, path: check.folder, evidence: evidence) {
             throw CleanupPathError.checkFailed(localized: reason.localized, english: reason.english)
         }
     }
@@ -682,10 +685,10 @@ nonisolated enum CleanupPathSafety {
     /// is a regular file and which `GitWorktree.verify` accepts as a clean,
     /// unused linked worktree. That verification runs at capture and again at
     /// every validation, so a worktree changed after planning is refused.
-    private static func rejectGitPaths(_ path: String) throws -> WorktreeInfo? {
+    private static func rejectGitPaths(_ path: String, evidence: WorktreeEvidence?) throws -> WorktreeInfo? {
         try rejectGitComponents(path)
         let marker = (path as NSString).appendingPathComponent(".git")
-        return try rejectGitMarker(marker, worktree: path)
+        return try rejectGitMarker(marker, worktree: path, evidence: evidence)
     }
 
     private static func rejectGitComponents(_ path: String) throws {
@@ -698,7 +701,8 @@ nonisolated enum CleanupPathSafety {
         }
     }
 
-    private static func rejectGitMarker(_ marker: String, worktree: String) throws -> WorktreeInfo? {
+    private static func rejectGitMarker(_ marker: String, worktree: String,
+                                        evidence: WorktreeEvidence?) throws -> WorktreeInfo? {
         let info: stat
         do {
             info = try readStat(marker)
@@ -710,7 +714,7 @@ nonisolated enum CleanupPathSafety {
             throw CleanupPathError.gitPath(marker)
         }
         do {
-            return try GitWorktree.verify(worktree)
+            return try GitWorktree.verify(worktree, evidence: evidence)
         } catch GitWorktreeError.notWorktree {
             throw CleanupPathError.gitPath(marker)
         } catch let error as GitWorktreeError {

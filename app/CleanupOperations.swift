@@ -30,6 +30,36 @@ nonisolated struct CleanupReceipt: Sendable {
             throw CleanupOperations.failure("The item in the Trash or its parent changed; review it before deleting")
         }
     }
+
+    enum TrashState: Equatable, Sendable {
+        /// Still in the Trash (under its name or another), so it can be put back.
+        case present
+        /// The Trash folder is the one the move went to and nothing in it is the item.
+        case gone
+        /// The Trash could not be read, was replaced, or holds too many entries to look through.
+        case unknown
+    }
+
+    /// Whether the moved item is still in the Trash. "Gone" requires the whole
+    /// Trash folder to have been read and none of its entries to be the item
+    /// (matched by device and inode, so a rename in the Trash does not hide
+    /// it); anything less is `unknown`, which is not "gone".
+    func trashState(entryLimit: Int = 50_000) -> TrashState {
+        var info = stat()
+        if lstat(url.path, &info) == 0 { return .present }
+        guard errno == ENOENT else { return .unknown }
+        let folder = url.deletingLastPathComponent().path
+        guard let current = try? CleanupIdentity.capture(path: folder), current == parentIdentity,
+              let names = try? FileManager.default.contentsOfDirectory(atPath: folder),
+              names.count <= entryLimit else { return .unknown }
+        for name in names {
+            var entry = stat()
+            guard lstat(folder + "/" + name, &entry) == 0 else { continue }
+            if UInt64(truncatingIfNeeded: entry.st_dev) == identity.device,
+               UInt64(truncatingIfNeeded: entry.st_ino) == identity.inode { return .present }
+        }
+        return .gone
+    }
 }
 
 nonisolated enum CleanupOperations {
@@ -148,6 +178,38 @@ nonisolated enum CleanupOperations {
                                                              notices: notices))
             }
         }
+    }
+
+    struct Settlement: Sendable {
+        /// Receipts whose worktree is still in the Trash (or whose Trash could
+        /// not be read): asked again later.
+        let waiting: [CleanupReceipt]
+        /// Admin entries that were left in place, with why.
+        let notices: [String]
+    }
+
+    /// The manual panel only moves a worktree to the Trash; the person empties
+    /// it, later and in Finder. This takes the admin entry of each worktree
+    /// whose Trash copy is gone, the same way and under the same checks as
+    /// the agent's delete-for-good step (`GitWorktree.removeAdminEntry`:
+    /// the entry must be unchanged, name the vanished `.git` file, and the
+    /// worktree must not exist again). While the copy can still be put back
+    /// the entry stays, since a put-back worktree needs it. Never
+    /// `git worktree prune`. Synchronous and bounded by the Trash's size:
+    /// call it off the main thread.
+    static func settleWorktrees(_ receipts: [CleanupReceipt],
+                                erase: (String) -> String? = erasePath) -> Settlement {
+        var waiting: [CleanupReceipt] = []
+        var notices: [String] = []
+        for receipt in receipts {
+            guard let entry = receipt.worktree else { continue }
+            guard receipt.trashState() == .gone else {
+                waiting.append(receipt)
+                continue
+            }
+            if let notice = GitWorktree.removeAdminEntry(entry, erase: erase) { notices.append(notice) }
+        }
+        return Settlement(waiting: waiting, notices: notices)
     }
 
     private static func erasePath(_ path: String) -> String? {

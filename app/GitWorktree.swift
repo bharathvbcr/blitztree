@@ -35,6 +35,9 @@ nonisolated enum GitWorktreeError: Error, LocalizedError, Equatable, Sendable {
     /// Not a linked worktree whose metadata points back to itself. The cleanup
     /// guard reports this exactly as it reports any other `.git` marker.
     case notWorktree(String)
+    /// Its `.git` file names a repository this Mac cannot reach right now: the
+    /// repository's folder is missing, typically on a drive that is not mounted.
+    case repositoryUnavailable(String)
     case locked(String)
     case submodules(String)
     case gitMissing(String)
@@ -54,6 +57,7 @@ nonisolated enum GitWorktreeError: Error, LocalizedError, Equatable, Sendable {
     var errorDescription: String? {
         switch self {
         case .notWorktree(let path): return String(localized: "Not a linked git worktree: \(path)")
+        case .repositoryUnavailable(let path): return String(localized: "The repository of this git worktree can't be reached (is its drive connected?): \(path)")
         case .locked(let path): return String(localized: "Git worktree is locked: \(path)")
         case .submodules(let path): return String(localized: "Git worktree has submodules: \(path)")
         case .gitMissing(let path): return String(localized: "Git is not available to check this worktree: \(path)")
@@ -73,6 +77,7 @@ nonisolated enum GitWorktreeError: Error, LocalizedError, Equatable, Sendable {
     var englishDescription: String {
         switch self {
         case .notWorktree(let path): return "Not a linked git worktree: \(path)"
+        case .repositoryUnavailable(let path): return "The repository of this git worktree can't be reached (is its drive connected?): \(path)"
         case .locked(let path): return "Git worktree is locked: \(path)"
         case .submodules(let path): return "Git worktree has submodules: \(path)"
         case .gitMissing(let path): return "Git is not available to check this worktree: \(path)"
@@ -98,8 +103,12 @@ nonisolated struct GitLookup: Sendable, Equatable {
     var searchPath: String
     var useDeveloperDir: Bool
 
-    /// The app's PATH plus the usual package-manager locations. The app should
-    /// set `GitWorktree.lookup` from the user's shell PATH once it is known.
+    /// The app's PATH plus the usual package-manager locations, then the
+    /// selected developer directory. The app does not widen this to the login
+    /// shell's PATH (decision): the shell PATH reaches user-writable folders
+    /// (`~/.local/bin`, version managers), and the program found here decides
+    /// whether a folder may be deleted. A git installed only there blocks every
+    /// worktree with "Git is not available", which fails closed and says why.
     static var standard: GitLookup {
         let inherited = ProcessInfo.processInfo.environment["PATH"] ?? ""
         return GitLookup(searchPath: inherited + ":/opt/homebrew/bin:/usr/local/bin", useDeveloperDir: true)
@@ -121,22 +130,38 @@ nonisolated enum GitWorktree {
         set { settings.value = newValue }
     }
 
-    private static let gitBudget: TimeInterval = 20
-    private static let lsofTimeout: TimeInterval = 10
+    /// The bounds one verification runs under. Tests narrow them to prove that
+    /// a hung or chatty program blocks.
+    struct Limits: Sendable, Equatable {
+        /// Wall time for all of one worktree's git commands together.
+        var gitBudget: TimeInterval = 20
+        var lsof = "/usr/sbin/lsof"
+        var lsofTimeout: TimeInterval = 10
+        var lsofCap = 32 << 20
+
+        static let standard = Limits()
+    }
+
     private static let markerLimit = 4096
     private static let statusCap = 1 << 20
     private static let listCap = 64 << 20
-    private static let lsofCap = 32 << 20
     private static let dataRoot = "/System/Volumes/Data"
 
     // MARK: Verification
 
+    /// `evidence` is what one refresh shares between its worktrees (one lsof,
+    /// one Codex log scan). Without it every call reads its own, fresh: the
+    /// trash boundary always verifies that way, so a worktree that became busy
+    /// or dirty after the refresh is still caught.
     static func verify(
         _ rawPath: String,
         recentWithin: TimeInterval = recentWindow,
         lookup: GitLookup? = nil,
-        now: Date = Date()
+        now: Date = Date(),
+        limits: Limits = .standard,
+        evidence: WorktreeEvidence? = nil
     ) throws -> WorktreeInfo {
+        let evidence = evidence ?? WorktreeEvidence(limits: limits)
         let layout = try self.layout(of: rawPath)
         let path = layout.path
         if try exists(layout.admin + "/locked", path: path) { throw GitWorktreeError.locked(path) }
@@ -152,13 +177,11 @@ nonisolated enum GitWorktree {
         // A session found anywhere is use; logs that could not be read leave the
         // question open, which blocks with its own reason, not as "unused".
         var unreadable = false
-        let reads: [(String) -> AgentSessions.Usage] = [
-            { AgentSessions.claudeUsage(in: $0, since: cutoff) },
-            { AgentSessions.usage(in: $0, root: AgentSessions.codex, since: cutoff) },
-        ]
+        let codex = evidence.codexActivity(since: cutoff)
         for spelling in spellings(of: path, real: layout.realPath) {
-            for read in reads {
-                switch read(spelling) {
+            for usage in [AgentSessions.claudeUsage(in: spelling, since: cutoff),
+                          AgentSessions.usage(of: spelling, in: codex)] {
+                switch usage {
                 case .used: throw GitWorktreeError.recentlyUsed(path)
                 case .unknown: unreadable = true
                 case .unused: break
@@ -168,7 +191,7 @@ nonisolated enum GitWorktree {
         if unreadable { throw GitWorktreeError.sessionsUnreadable(path) }
 
         guard let git = locateGit(lookup ?? self.lookup) else { throw GitWorktreeError.gitMissing(path) }
-        let runner = GitRunner(git: git, layout: layout, deadline: Date().addingTimeInterval(gitBudget))
+        let runner = GitRunner(git: git, layout: layout, deadline: Date().addingTimeInterval(limits.gitBudget))
 
         // Ignored files count too: git status leaves them out, yet `.env` files,
         // local databases and data kept under an ignored path are not recreated
@@ -222,7 +245,7 @@ nonisolated enum GitWorktree {
             branch = nil
         }
 
-        try rejectProcesses(inside: path, real: layout.realPath)
+        try rejectProcesses(inside: path, real: layout.realPath, evidence: evidence)
         return WorktreeInfo(path: path, adminDir: layout.admin, commonDir: layout.common,
                             branch: branch, head: head, lastUsed: lastUsed)
     }
@@ -299,12 +322,27 @@ nonisolated enum GitWorktree {
         let markerLine = try singleLine(marker.data, path: path)
         guard markerLine.hasPrefix("gitdir: ") else { throw fail }
         let reference = String(markerLine.dropFirst("gitdir: ".count))
-        guard !reference.isEmpty, let admin = self.realPath(join(reference, to: path)),
-              let adminInfo = try? lstatInfo(admin), adminInfo.st_mode & S_IFMT == S_IFDIR else { throw fail }
+        guard !reference.isEmpty else { throw fail }
+        guard let admin = self.realPath(join(reference, to: path)) else {
+            // `<repository>/.git/worktrees/<id>` is gone. With the repository
+            // folder reachable the entry was pruned: not a worktree. Without
+            // it the repository is off-line, and "protected Git metadata"
+            // would be the wrong thing to tell the person.
+            let entry = join(reference, to: path) as NSString
+            let worktrees = entry.deletingLastPathComponent as NSString
+            if worktrees.lastPathComponent == "worktrees", !isReachable(worktrees.deletingLastPathComponent) {
+                throw GitWorktreeError.repositoryUnavailable(path)
+            }
+            throw fail
+        }
+        guard let adminInfo = try? lstatInfo(admin), adminInfo.st_mode & S_IFMT == S_IFDIR else { throw fail }
 
         let commonLine = try singleLine(try readMarker(admin + "/commondir", path: path).data, path: path)
-        guard !commonLine.isEmpty, let common = self.realPath(join(commonLine, to: admin)),
-              let commonInfo = try? lstatInfo(common), commonInfo.st_mode & S_IFMT == S_IFDIR else { throw fail }
+        guard !commonLine.isEmpty else { throw fail }
+        guard let common = self.realPath(join(commonLine, to: admin)) else {
+            throw isReachable(join(commonLine, to: admin)) ? fail : GitWorktreeError.repositoryUnavailable(path)
+        }
+        guard let commonInfo = try? lstatInfo(common), commonInfo.st_mode & S_IFMT == S_IFDIR else { throw fail }
         // The admin entry must be one of the common dir's own worktree entries.
         let parent = (admin as NSString).deletingLastPathComponent
         guard (parent as NSString).lastPathComponent == "worktrees",
@@ -323,6 +361,12 @@ nonisolated enum GitWorktree {
             throw fail
         }
         return Layout(path: path, realPath: realPath, admin: admin, common: common)
+    }
+
+    /// Whether something answers at `path` (symlinks followed): false for a
+    /// folder that is not there, such as one on a drive that is not mounted.
+    private static func isReachable(_ path: String) -> Bool {
+        access(path, F_OK) == 0
     }
 
     /// Whether `inner` is `outer` or inside it, comparing each ancestor of
@@ -403,20 +447,40 @@ nonisolated enum GitWorktree {
 
     /// Blocks when any process this user can see has its working directory at
     /// or inside the worktree. lsof failing to run or answer blocks too.
-    private static func rejectProcesses(inside path: String, real: String) throws {
-        guard let outcome = BoundedProcess.run("/usr/sbin/lsof", ["-a", "-d", "cwd", "-Fn", "-w"],
-                                               environment: minimalEnvironment, timeout: lsofTimeout, cap: lsofCap),
-              !outcome.timedOut, !outcome.overflow, outcome.status == 0 else {
+    ///
+    /// Decision (open files): only working directories are looked at, not
+    /// files a process holds open inside the worktree (`lsof +D`, or every
+    /// descriptor system-wide). Measured on this Mac, listing every open file
+    /// takes 11 s and 12.4 MB against 0.43 s and 51 KB for working
+    /// directories: past the 10 s limit and the 32 MB cap, so it would block
+    /// every worktree, and `+D` walks the whole tree (a `node_modules` has
+    /// 100k files) once per worktree where the working-directory reading is
+    /// shared by a whole refresh. A program with files open in the worktree
+    /// but its working directory elsewhere (an editor) is covered instead by
+    /// the evidence that does not depend on lsof: nothing uncommitted or
+    /// untracked or ignored-and-irreplaceable may be there, the admin entry
+    /// untouched for two days, and no agent session worked in it. What is
+    /// moved goes to the Trash first and can be put back.
+    private static func rejectProcesses(inside path: String, real: String, evidence: WorktreeEvidence) throws {
+        guard let names = evidence.workingDirectories(), !names.isEmpty else {
             throw GitWorktreeError.processCheckFailed(path)
         }
-        let names = String(decoding: outcome.stdout, as: UTF8.self).split(separator: "\n")
-            .filter { $0.hasPrefix("n") }.map { $0.dropFirst().lowercased() }
-        guard !names.isEmpty else { throw GitWorktreeError.processCheckFailed(path) }
         for spelling in spellings(of: path, real: real).map({ $0.lowercased() }) {
             if names.contains(where: { $0 == spelling || $0.hasPrefix(spelling + "/") }) {
                 throw GitWorktreeError.inUse(path)
             }
         }
+    }
+
+    /// Lowercased working directories of every process lsof can see, nil when
+    /// lsof did not run, timed out, overflowed its cap or failed.
+    fileprivate static func readWorkingDirectories(_ limits: Limits) -> [String]? {
+        guard let outcome = BoundedProcess.run(limits.lsof, ["-a", "-d", "cwd", "-Fn", "-w"],
+                                               environment: minimalEnvironment, timeout: limits.lsofTimeout,
+                                               cap: limits.lsofCap),
+              !outcome.timedOut, !outcome.overflow, outcome.status == 0 else { return nil }
+        return String(decoding: outcome.stdout, as: UTF8.self).split(separator: "\n")
+            .filter { $0.hasPrefix("n") }.map { $0.dropFirst().lowercased() }
     }
 
     /// The given, resolved and Data-volume spellings of a folder.
@@ -533,6 +597,47 @@ nonisolated enum GitWorktree {
             get { lock.lock(); defer { lock.unlock() }; return stored }
             set { lock.lock(); stored = newValue; lock.unlock() }
         }
+    }
+}
+
+/// What verifying a worktree needs that does not depend on which worktree it
+/// is: the working directory of every process (one lsof) and the Codex session
+/// logs (one scan). A refresh that verifies many worktrees reads each once and
+/// hands this to every verification; a caller that passes none gets fresh
+/// readings per verification. Single-flight: concurrent callers share the one
+/// reading. A reading that failed stays failed for the lifetime of this value,
+/// so a refresh blocks its worktrees with that reason rather than re-running a
+/// 10 s lsof for each.
+///
+/// Only the refresh uses it, and a refresh only decides what the panel offers:
+/// `CleanupOperations.trash` verifies again with evidence of its own, so
+/// nothing here stands in for the check at the moment of the move.
+nonisolated final class WorktreeEvidence: @unchecked Sendable {
+    private let lock = NSLock()
+    private let limits: GitWorktree.Limits
+    private var directories: [String]??
+    private var codex: (since: Date, activity: AgentSessions.Activity)?
+
+    init(limits: GitWorktree.Limits = .standard) { self.limits = limits }
+
+    /// Lowercased working directories of the processes lsof can see; nil when
+    /// lsof could not answer.
+    func workingDirectories() -> [String]? {
+        lock.lock(); defer { lock.unlock() }
+        if let directories { return directories }
+        let read = GitWorktree.readWorkingDirectories(limits)
+        directories = .some(read)
+        return read
+    }
+
+    /// The Codex session logs written since `cutoff`. A scan made for an
+    /// earlier cutoff serves a later one: it only holds more.
+    func codexActivity(since cutoff: Date) -> AgentSessions.Activity {
+        lock.lock(); defer { lock.unlock() }
+        if let codex, codex.since <= cutoff { return codex.activity }
+        let activity = AgentSessions.scan(in: AgentSessions.codex, since: cutoff)
+        codex = (cutoff, activity)
+        return activity
     }
 }
 

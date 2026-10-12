@@ -21,13 +21,17 @@ nonisolated struct CleanupItem: Identifiable, Sendable {
     /// `verify` has no default: a caller says which check the rule names ("" for
     /// none, nil when the engine gave no answer), so none is skipped by accident.
     /// The capture runs it, and so does every later revalidation of `target`.
+    ///
+    /// `evidence` is what one refresh shares between its worktrees (see
+    /// `WorktreeEvidence`); without it the capture reads its own.
     init(node: Int, path: String, display: String, kind: String, bytes: UInt64, root: String = NSHomeDirectory(),
-         verify: String?) {
+         verify: String?, evidence: WorktreeEvidence? = nil) {
         self.node = node; self.path = path; self.display = display; self.kind = kind; self.bytes = bytes
         self.verify = verify
         do {
             self.target = try CleanupPathSafety.capture(
-                path: path, root: root, check: CleanupCheck(verify: verify ?? CleanupVerify.unavailable, folder: path))
+                path: path, root: root, check: CleanupCheck(verify: verify ?? CleanupVerify.unavailable, folder: path),
+                evidence: evidence)
             self.blocked = nil
             self.englishBlocked = nil
         } catch let error as CleanupPathError {
@@ -49,7 +53,7 @@ extension Tree {
     /// `.policyOnly` when no rule recognised the path or any folder above it, which
     /// leaves only the path policy; a rule the engine gave no verifier answer
     /// for blocks. `path` is `node`'s path in the spelling the caller will trash.
-    func cleanupCheck(for node: Int, path: String, indexByNode: [Int: Int]) -> CleanupCheck {
+    nonisolated func cleanupCheck(for node: Int, path: String, indexByNode: [Int: Int]) -> CleanupCheck {
         let chain = ancestry(node)
         guard let offset = chain.lastIndex(where: { indexByNode[$0] != nil }),
               let index = indexByNode[chain[offset]] else { return .policyOnly }
@@ -61,7 +65,7 @@ extension Tree {
     }
 
     /// The engine's candidate nodes, each with its index in the candidate list.
-    func cleanupIndexByNode() -> [Int: Int] {
+    nonisolated func cleanupIndexByNode() -> [Int: Int] {
         Dictionary((0..<cleanupCount).map { (Int(cleanupNodes[$0]), $0) }, uniquingKeysWith: { first, _ in first })
     }
 }
@@ -69,8 +73,14 @@ extension Tree {
 nonisolated enum Cleanup {
     /// The Rust engine selects candidates for both the panel and JSON CLI.
     /// Swift only supplies presentation paths; rules and labels live in cleanup.rs.
+    ///
+    /// One refresh: every worktree candidate is verified once, and the lsof and
+    /// the Codex log scan behind those verifications run once for all of them.
+    /// What this says is only what the panel offers; the move to the Trash
+    /// verifies again, fresh (`CleanupOperations.trash`).
     static func find(in tree: Tree) -> [CleanupItem] {
         let home = NSHomeDirectory()
+        let evidence = WorktreeEvidence()
         return (0..<tree.cleanupCount).map { index in
             let node = Int(tree.cleanupNodes[index])
             let path = tree.path(node)
@@ -78,7 +88,7 @@ nonisolated enum Cleanup {
             if display.hasPrefix(home) { display = "~" + display.dropFirst(home.count) }
             return CleanupItem(node: node, path: path, display: display,
                                kind: tree.cleanupDescription(index), bytes: tree.alloc[node], root: tree.path(0),
-                               verify: tree.cleanupVerify(index))
+                               verify: tree.cleanupVerify(index), evidence: evidence)
         }
     }
 
@@ -101,14 +111,48 @@ final class CleanupTrashBatch {
 
     func clearFailures() { failures = [] }
 
+    /// Worktrees moved to the Trash whose admin entry is still to be removed
+    /// once the Trash is emptied (see `settleWorktrees`).
+    private var worktreesInTrash: [CleanupReceipt] = []
+    /// Admin entries that were left in place, with why; shown until dismissed.
+    private(set) var notices: [String] = []
+
+    func clearNotices() { notices = [] }
+
+    /// Takes over receipts of worktrees another flow left in the Trash.
+    func adopt(_ receipts: [CleanupReceipt]) {
+        for receipt in receipts where receipt.worktree != nil
+            && !worktreesInTrash.contains(where: { $0.url == receipt.url }) {
+            worktreesInTrash.append(receipt)
+        }
+    }
+
+    /// Removes the admin entry of every adopted worktree whose Trash copy has
+    /// been emptied since. Runs off the main thread and bounded by the Trash's
+    /// size; a worktree still in the Trash waits for the next call.
+    func settleWorktrees() async {
+        let waiting = worktreesInTrash
+        guard !waiting.isEmpty else { return }
+        worktreesInTrash = []
+        let settlement = await AgentLocator.onBackgroundThread { CleanupOperations.settleWorktrees(waiting) }
+        // Receipts adopted while this ran queue behind the ones still waiting.
+        let adoptedMeanwhile = worktreesInTrash
+        worktreesInTrash = settlement.waiting
+        adopt(adoptedMeanwhile)
+        notices.append(contentsOf: settlement.notices)
+    }
+
     @discardableResult
     func start(_ items: [CleanupItem], completion: @escaping (_ moved: [CleanupItem], _ failed: [String]) -> Void) -> Task<Void, Never>? {
         guard !running else { return nil }
         running = true
         return Task {
-            let (moved, failed) = await Task.detached(priority: .userInitiated) {
+            // The checks behind each move wait on git and lsof: a dispatch
+            // thread, not one of the few cooperative ones.
+            let (moved, failed, receipts) = await AgentLocator.onBackgroundThread {
                 var moved: [CleanupItem] = []
                 var failed: [String] = []
+                var receipts: [CleanupReceipt] = []
                 for item in items {
                     do {
                         guard let target = item.target else {
@@ -116,15 +160,16 @@ final class CleanupTrashBatch {
                         }
                         // Revalidating at the boundary checks the folder again
                         // (it may have been used since the scan), rule check included.
-                        _ = try CleanupOperations.trash(target)
+                        receipts.append(try CleanupOperations.trash(target))
                         moved.append(item)
                     } catch {
                         failed.append("\(item.display): \(error.localizedDescription)")
                     }
                 }
-                return (moved, failed)
-            }.value
+                return (moved, failed, receipts)
+            }
             failures.append(contentsOf: failed)
+            adopt(receipts)
             running = false
             completion(moved, failed)
         }
@@ -150,6 +195,8 @@ struct CleanupPanel: View {
         Group {
             if let run = model.agentRun {
                 AgentRunView(run: run, model: model, retry: { model.restart(run) }) {
+                    // Worktrees left in the Trash lose their admin entry when it is emptied.
+                    model.cleanupTrash.adopt(run.items.flatMap(\.trashed))
                     run.cancel()
                     withAnimation(.snappy) { model.agentRun = nil }
                 }
@@ -183,6 +230,21 @@ struct CleanupPanel: View {
                     .foregroundStyle(.secondary)
             }
             .padding(12)
+
+            if !model.cleanupTrash.notices.isEmpty {
+                HStack(alignment: .firstTextBaseline, spacing: 8) {
+                    Text(model.cleanupTrash.notices.joined(separator: "\n"))
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                    Spacer(minLength: 4)
+                    Button(String(localized: "Dismiss")) { model.cleanupTrash.clearNotices() }
+                        .buttonStyle(.plain)
+                        .font(.caption)
+                }
+                .padding(.horizontal, 12)
+                .padding(.bottom, 8)
+            }
 
             List(model.cleanup) { item in
                 HStack(alignment: .top, spacing: 8) {
@@ -514,7 +576,7 @@ private struct AgentRunView: View {
                     .textSelection(.enabled)
                     .fixedSize(horizontal: false, vertical: true)
             }
-            if let local = focus.localDisplay ?? focus.local {
+            if let local = run.focusVerdict?.display {
                 Label(local, systemImage: "checkmark.shield")
                     .font(.caption)
                     .foregroundStyle(.secondary)
@@ -760,6 +822,12 @@ private struct PlanCard: View {
                     }
                     .font(.caption2.monospaced())
                     .foregroundStyle(.tertiary)
+                }
+                ForEach(item.notices, id: \.self) { notice in
+                    Label(notice, systemImage: "info.circle")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
                 }
             }
         }
