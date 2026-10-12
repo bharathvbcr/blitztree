@@ -43,13 +43,32 @@ const NAMES: &[&str] = &[
     "models--m", "torch", ".build", "Package.swift", "build", "build.gradle", ".dart_tool",
     "pubspec.yaml", ".turbo", "Pods", "Podfile", ".tox", "zig-out", "build.zig", "_build", "deps",
     "mix.exs", ".stack-work", "dist-newstyle", "Application Support", "Cache", "GPUCache",
-    "com.apple.x", ".Trash", "lib", "Users", "u",
+    "com.apple.x", ".Trash", "lib", "Users", "u", "tox.ini", "noxfile.py", "stack.yaml",
+    "cabal.project", "app.cabal", "memory", "MEMORY.md", "token", "stored_tokens", "x.jsonl",
+    "0b7e9a52-6c1d-4f3e-8a47-5d2c9e1f0a63",
 ];
+
+/// Credentials that live in a `.cache` at any depth and under any home.
+const NEVER_INSIDE: &[&[&str]] = &[&[".cache", "huggingface", "token"], &[".cache", "huggingface", "stored_tokens"]];
+
+/// What the probe says of a `.git` file, from the folder's path alone, so the
+/// answer is the same under any sibling order. Worktree half the time.
+fn fake_git(t: &Tree, i: usize) -> GitFile {
+    let hash = t.path(i).as_os_str().as_encoded_bytes().iter().fold(0xcbf2_9ce4_8422_2325u64, |h, &b| {
+        (h ^ u64::from(b)).wrapping_mul(0x0000_0100_0000_01b3)
+    });
+    match (hash >> 20) % 4 {
+        0 | 1 => GitFile::Worktree,
+        2 => GitFile::Submodule,
+        _ => GitFile::Other,
+    }
+}
 
 /// Home-relative starts that reach every container and home rule.
 const HOME_STARTS: &[&str] = &[
     ".cache", ".cache/huggingface", ".cache/huggingface/hub", "Library/Caches", "Library",
-    "Library/Developer/Xcode", "Library/Developer/Xcode/UserData", "Library/Application Support/App", ".cargo", ".m2", ".ollama",
+    "Library/Developer/Xcode", "Library/Developer/Xcode/UserData", "Library/Developer/Xcode/UserData/Previews",
+    "Library/Application Support/App", ".cargo", ".m2", ".ollama",
     ".rustup", ".rustup/toolchains", ".claude", ".claude/projects", ".codex", ".codex/sessions",
     ".codex/worktrees", ".gradle", "project", "Library/Containers/c/Data/Library",
 ];
@@ -143,7 +162,7 @@ fn check(seed: u64) -> Vec<Kind> {
     let min_bytes = [0, 1, MIN_BYTES, MIN_BYTES * 2][rng.below(4)];
     let anchors = Anchors::new(home.map(Path::new));
     let t = build_with(root, &paths, &mut |v| v);
-    let found = find(&t, min_bytes, &anchors);
+    let found = find_with(&t, min_bytes, &anchors, &|i| fake_git(&t, i));
     let ctx = format!("seed {seed} root {root} home {home:?} min {min_bytes}");
     let enclosing = enclosing(&t, &found);
     let rels: Vec<String> = found.iter().map(|c| rel(&t, c.node)).collect();
@@ -164,6 +183,38 @@ fn check(seed: u64) -> Vec<Kind> {
         }
         if !c.kind.descends() {
             assert!(!contains(&t, n, GRADLE_CONFIG), "{ctx}: Gradle home {path} is a candidate");
+        }
+        if c.kind == Kind::AgentTranscripts {
+            assert!(only_transcripts(&t, n), "{ctx}: {path} holds more than transcripts");
+        }
+        if c.kind == Kind::HaskellBuild || c.kind == Kind::PythonTestEnvironments {
+            let parent = t.parents[n] as usize;
+            let markers: &[&str] = if c.kind == Kind::HaskellBuild {
+                &["stack.yaml", "cabal.project"]
+            } else {
+                &["tox.ini", "noxfile.py", "pyproject.toml", "setup.cfg"]
+            };
+            assert!(
+                contains(&t, parent, markers) || any_kid(&t, parent, |name| name.ends_with(".cabal")),
+                "{ctx}: {path} without its project file"
+            );
+        }
+        // Wherever a `.cache` sits, neither it nor its huggingface folder is
+        // ever a candidate, so the tokens beside the hub never go with it.
+        let name = path.rsplit('/').next().unwrap_or("");
+        if name == ".cache" || name == "huggingface" {
+            assert!(
+                !paths.iter().any(|p| {
+                    let p = p.trim_end_matches('/');
+                    p.starts_with(&format!("{path}/"))
+                        && NEVER_INSIDE.iter().any(|tail| {
+                            let tail = tail.join("/");
+                            p == tail || p.ends_with(&format!("/{tail}"))
+                        })
+                }),
+                "{ctx}: {path} ({:?}) holds a huggingface token",
+                c.kind
+            );
         }
         for p in &protected {
             assert!(
@@ -203,7 +254,7 @@ fn check(seed: u64) -> Vec<Kind> {
         rng.shuffle(&mut v);
         v
     });
-    let again: Vec<(String, Kind)> = find(&shuffled, min_bytes, &anchors)
+    let again: Vec<(String, Kind)> = find_with(&shuffled, min_bytes, &anchors, &|i| fake_git(&shuffled, i))
         .iter()
         .map(|c| (rel(&shuffled, c.node), c.kind))
         .collect();
@@ -250,7 +301,7 @@ fn degenerate_trees_do_not_panic() {
     paths.extend(worktree_gits.iter().map(String::as_str));
     paths.push("worktrees/wt/x");
     let t = build_with("/w", &paths, &mut |v| v);
-    let found = find(&t, 0, &none);
+    let found = find_with(&t, 0, &none, &|_| GitFile::Worktree);
     assert_eq!(found.iter().filter(|c| c.kind == Kind::GitWorktree).count(), 32);
     assert_eq!(found.iter().filter(|c| c.kind == Kind::NodeModules).count(), 1);
     let enc = enclosing(&t, &found);
@@ -264,4 +315,91 @@ fn degenerate_trees_do_not_panic() {
     let found = find(&t, MIN_BYTES, &home);
     assert_eq!(found.len(), 10_000);
     assert_eq!(rel(&t, found[0].node), "p00000/node_modules");
+}
+
+/// Real `.git` files of every hostile shape: only the two genuine linked
+/// worktrees are candidates, nothing panics and nothing blocks.
+#[test]
+fn hostile_git_files_are_never_linked_worktrees() {
+    use super::tests::Scratch;
+    use std::os::unix::ffi::OsStrExt;
+
+    let s = Scratch::new("hostile");
+    let admin = s.admin("main", "ok");
+    let named = |name: &str| admin.parent().unwrap().join(name);
+    // Genuine: an absolute link, and a relative one.
+    s.gitdir_file("ok", &admin.display().to_string());
+    let rel_admin = s.admin("main", "rel");
+    assert!(rel_admin.exists());
+    s.gitdir_file("rel/deep", "../../main/.git/worktrees/rel");
+    // A symlinked .git file, even to a valid one.
+    s.file("targets/gitfile", format!("gitdir: {}\n", admin.display()).as_bytes());
+    s.file("linked/payload", b"x");
+    std::os::unix::fs::symlink(s.path("targets/gitfile"), s.path("linked/.git")).unwrap();
+    // gitdir: pointing nowhere, to a directory that is no worktree, with a
+    // relative path that climbs out of the filesystem, and to the folder itself.
+    s.gitdir_file("nowhere", &named("gone").display().to_string());
+    s.file("main/.git/worktrees/nocommon/HEAD", b"x");
+    s.gitdir_file("nocommon", &named("nocommon").display().to_string());
+    s.gitdir_file("climbs", &format!("{}main/.git/worktrees/ok", "../".repeat(64)));
+    s.gitdir_file("selfpoint", &s.path("selfpoint").display().to_string());
+    // Empty, oversized, multi-line, not UTF-8, a directory, a pipe.
+    s.file("empty/.git", b"");
+    s.file("empty/payload", b"x");
+    let mut big = format!("gitdir: {}\n", admin.display()).into_bytes();
+    big.extend(std::iter::repeat_n(b'x', 5000));
+    s.file("big/.git", &big);
+    s.file("big/payload", b"x");
+    s.file("twolines/.git", format!("gitdir: {0}\ngitdir: {0}\n", admin.display()).as_bytes());
+    s.file("twolines/payload", b"x");
+    let mut bytes = format!("gitdir: {}", admin.display()).into_bytes();
+    bytes.extend([0xff, b'\n']);
+    s.file("binary/.git", &bytes);
+    s.file("binary/payload", b"x");
+    s.file("dotgit-dir/.git/HEAD", b"x");
+    s.file("pipe/payload", b"x");
+    let fifo = std::ffi::CString::new(s.path("pipe/.git").as_os_str().as_bytes()).unwrap();
+    assert_eq!(unsafe { libc::mkfifo(fifo.as_ptr(), 0o600) }, 0);
+
+    assert_eq!(
+        s.found("", None),
+        vec![("ok".to_string(), "git_worktree"), ("rel/deep".to_string(), "git_worktree")]
+    );
+}
+
+/// APFS refuses non-UTF-8 names and the scanner drops them elsewhere, but a
+/// tree can still carry one (the name reads as ""): nothing panics, and the
+/// real probe, which then looks at a path that is not the folder, finds no
+/// worktree.
+#[test]
+fn a_non_utf8_folder_name_does_not_panic_or_become_a_worktree() {
+    let mut t = Tree::with_root("/w");
+    let bad = t.push("bad-name", 0, MIN_BYTES, MIN_BYTES, true);
+    t.push(".git", bad, 1, 1, false);
+    t.push("payload", bad, MIN_BYTES, MIN_BYTES, false);
+    t.alloc[0] = MIN_BYTES;
+    t.link_children();
+    let start = t.name_off[bad as usize] as usize;
+    t.name_blob[start + 3] = 0xff;
+    assert_eq!(t.name(bad as usize), "");
+    assert!(find(&t, MIN_BYTES, &Anchors::default()).is_empty());
+    let found = find_with(&t, MIN_BYTES, &Anchors::default(), &|_| GitFile::Worktree);
+    assert_eq!(found.len(), 1, "the classifier alone says worktree");
+    assert_eq!(t.path(bad as usize), Path::new("/w/"));
+}
+
+/// A Codex worktrees folder with a hostile entry beside a genuine one: the
+/// hostile one is skipped, the genuine one is found at either depth.
+#[test]
+fn codex_worktrees_skip_what_is_not_a_linked_worktree() {
+    use super::tests::Scratch;
+    let s = Scratch::new("codex-hostile");
+    let admin = s.admin("code/app", "w");
+    s.gitdir_file(".codex/worktrees/good/app", &admin.display().to_string());
+    s.file(".codex/worktrees/empty-git/app/.git", b"");
+    s.file(".codex/worktrees/empty-git/app/payload", b"x");
+    s.gitdir_file(".codex/worktrees/gone/app", &s.path("code/app/.git/worktrees/gone").display().to_string());
+    s.file(".codex/worktrees/loose-file", b"x");
+    s.file(".codex/worktrees/no-git/artifacts/a.zip", b"x");
+    assert_eq!(s.found("", Some("")), vec![(".codex/worktrees/good/app".to_string(), "git_worktree")]);
 }

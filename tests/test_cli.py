@@ -147,10 +147,14 @@ class AgentCLITests(unittest.TestCase):
         }
         self.assertEqual(self.relative_kinds(self.wins("--limit", "100")["candidates"]), expected)
         # The same folders under another HOME are ordinary folders: only the
-        # unanchored .cache rule applies, to the whole folder.
+        # unanchored .cache rule applies. A .cache is a container wherever it is,
+        # so its children are listed, never the whole folder, and
+        # huggingface/token stays out.
         self.env["HOME"] = str(self.root)
-        self.assertEqual(self.relative_kinds(self.wins("--root", str(self.home), "--limit", "100")["candidates"]),
-                         {".cache": "tool_caches"})
+        candidates = self.wins("--root", str(self.home), "--limit", "100")["candidates"]
+        self.assertEqual(self.relative_kinds(candidates), {
+            ".cache/pip": "tool_caches", ".cache/huggingface/hub/models--org--name": "ml_model"})
+        self.assert_none_inside(candidates, [self.home / ".cache/huggingface/token"])
 
     def protected_entries(self):
         return [".cargo/bin/cargo", ".cargo/config.toml", ".cargo/credentials.toml", ".cargo/env",
@@ -181,7 +185,7 @@ class AgentCLITests(unittest.TestCase):
         for path in self.protected_entries():
             self.file(path)
         for path in [".cargo/registry/file", ".cargo/git/file", ".gradle/caches/file", ".m2/repository/file",
-                     ".claude/projects/p/file", ".claude/debug/file", ".claude/local/node_modules/file",
+                     ".claude/projects/p/session.jsonl", ".claude/debug/file", ".claude/local/node_modules/file",
                      ".codex/archived_sessions/file", ".cache/huggingface/hub/models--m/file", ".cache/pip/file",
                      "lib/node_modules/npm/index.js"]:
             self.file(path)
@@ -194,12 +198,27 @@ class AgentCLITests(unittest.TestCase):
             self.assert_none_inside(candidates, protected)
             self.assertNotIn("lib/node_modules", {Path(c["path"]).relative_to(root).as_posix() for c in candidates})
 
+    def write(self, relative, text):
+        p = self.home / relative
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(text)
+        return p
+
+    def linked_worktree(self, repo, name, folder):
+        """A real linked worktree: the repo's admin directory and the folder's .git file."""
+        admin = self.home / repo / ".git/worktrees" / name
+        self.write(f"{repo}/.git/worktrees/{name}/commondir", "../..\n")
+        self.write(f"{repo}/.git/worktrees/{name}/HEAD", "ref: refs/heads/x\n")
+        self.write(f"{folder}/.git", f"gitdir: {admin}\n")
+        self.file(f"{folder}/file")
+
     def test_worktree_contents_are_listed_and_counted_once(self):
         self.file("repo/.git/HEAD")
-        self.file("repo/.claude/worktrees/feature/.git", size=64)
+        self.linked_worktree("repo", "feature", "repo/.claude/worktrees/feature")
         self.file("repo/.claude/worktrees/feature/package.json")
         self.file("repo/.claude/worktrees/feature/node_modules/file")
-        self.file("repo/sub/.git", size=64)
+        self.file("repo/.git/modules/sub/HEAD")
+        self.write("repo/sub/.git", "gitdir: ../.git/modules/sub\n")
         self.file("repo/sub/file")
         report = self.wins("--limit", "100")
         worktree = self.home / "repo/.claude/worktrees/feature"
@@ -213,6 +232,79 @@ class AgentCLITests(unittest.TestCase):
         self.assertEqual(report["displayed_allocated_bytes"], report["candidate_allocated_bytes"])
         nested_only = self.wins("--limit", "1")
         self.assertEqual(nested_only["displayed_allocated_bytes"], by_path[str(worktree)]["allocated_bytes"])
+
+    def test_submodules_and_separate_git_dirs_are_not_worktrees_from_any_root(self):
+        self.file("main/.git/modules/sub/HEAD")
+        self.write("main/vendor/sub/.git", "gitdir: ../../.git/modules/sub\n")
+        self.file("main/vendor/sub/file")
+        self.file("gitdirs/proj.git/HEAD")
+        self.write("loose/proj/.git", f"gitdir: {self.home / 'gitdirs/proj.git'}\n")
+        self.file("loose/proj/file")
+        self.assertEqual(self.wins("--root", str(self.home / "main/vendor"))["candidates"], [])
+        self.assertEqual(self.wins()["candidates"], [])
+        self.linked_worktree("main", "wt", "main/vendor/wt")
+        candidates = self.wins("--root", str(self.home / "main/vendor"))["candidates"]
+        self.assertEqual(self.relative_kinds(candidates), {"main/vendor/wt": "git_worktree"})
+        self.assertEqual(candidates[0]["verify"], "git_worktree")
+
+    def test_codex_worktrees_are_found_at_both_depths_and_user_folders_are_left_alone(self):
+        self.linked_worktree("Code/app", "w1", ".codex/worktrees/a1b2/app")
+        self.file(".codex/worktrees/a1b2/app/package.json")
+        self.file(".codex/worktrees/a1b2/app/node_modules/file")
+        self.linked_worktree("Code/lib", "w2", ".codex/worktrees/c3d4")
+        # Seen on a real install: release artifacts, no .git at either depth.
+        self.file(".codex/worktrees/git-client-release/artifacts/GitPulse.zip")
+        self.file(".codex/worktrees/git-client-release/evidence/a.json")
+        self.file(".codex/worktrees/full-clone/.git/HEAD")
+        self.file(".codex/worktrees/full-clone/file")
+        candidates = self.wins("--limit", "100")["candidates"]
+        fields = {Path(c["path"]).relative_to(self.home).as_posix():
+                  (c["category"], c["group"], c["section"], c["verify"], c["contained_in"] is None)
+                  for c in candidates}
+        self.assertEqual(fields, {
+            ".codex/worktrees/a1b2/app": ("git_worktree", "review", "worktrees", "git_worktree", True),
+            ".codex/worktrees/a1b2/app/node_modules": ("node_modules", "safe", "build", None, False),
+            ".codex/worktrees/c3d4": ("git_worktree", "review", "worktrees", "git_worktree", True),
+        })
+
+    def test_claude_project_memory_is_never_a_candidate(self):
+        session = "0b7e9a52-6c1d-4f3e-8a47-5d2c9e1f0a63"
+        self.file(f".claude/projects/clean/{session}.jsonl")
+        self.file(f".claude/projects/clean/{session}/subagents/a.jsonl")
+        self.file(f".claude/projects/with-memory/{session}.jsonl")
+        self.file(".claude/projects/with-memory/memory/MEMORY.md")
+        self.file(f".claude/projects/unknown/{session}.jsonl")
+        self.file(".claude/projects/unknown/notes/a.md")
+        candidates = self.wins("--limit", "100")["candidates"]
+        self.assertEqual(self.relative_kinds(candidates), {".claude/projects/clean": "agent_transcripts"})
+        self.assert_none_inside(candidates, [self.home / ".claude/projects/with-memory/memory/MEMORY.md"])
+
+    def test_cache_folders_are_containers_wherever_they_sit(self):
+        for path in ["proj/.cache/huggingface/token", "proj/.cache/huggingface/stored_tokens",
+                     "proj/.cache/huggingface/hub/models--a/file", "proj/.cache/pip/file"]:
+            self.file(path)
+        candidates = self.wins("--limit", "100")["candidates"]
+        self.assertEqual(self.relative_kinds(candidates), {
+            "proj/.cache/huggingface/hub/models--a": "ml_model", "proj/.cache/pip": "tool_caches"})
+
+    def test_build_tool_folders_need_their_project_files(self):
+        for path in ["a/.tox/file", "b/.nox/file", "c/.stack-work/file", "d/dist-newstyle/file",
+                     "e/.tox/file", "e/tox.ini", "f/.stack-work/file", "f/stack.yaml",
+                     "g/dist-newstyle/file", "g/app.cabal"]:
+            self.file(path)
+        self.assertEqual(self.relative_kinds(self.wins("--limit", "100")["candidates"]), {
+            "e/.tox": "python_test_environments", "f/.stack-work": "haskell_build",
+            "g/dist-newstyle": "haskell_build"})
+
+    def test_global_node_modules_and_gradle_credentials_are_never_candidates(self):
+        for path in [".nvm/versions/node/v20.1.0/lib/node_modules/codex/index.js",
+                     "opt/homebrew/lib/node_modules/npm/index.js",
+                     "usr/local/lib/node_modules/typescript/index.js",
+                     "proj/.gradle/gradle.properties", "proj/.gradle/caches/file"]:
+            self.file(path)
+        candidates = self.wins("--limit", "100")["candidates"]
+        self.assertEqual(self.relative_kinds(candidates), {"proj/.gradle/caches": "gradle_cache"})
+        self.assert_none_inside(candidates, [self.home / "proj/.gradle/gradle.properties"])
 
     def test_unrecognized_folders_and_trash_are_not_candidates(self):
         for path in ["unrelated/target/file", "unrelated/venv/file", "unrelated/.next/file",
