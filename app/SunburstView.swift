@@ -712,6 +712,8 @@ final class SunburstNSView: NSView {
     @discardableResult
     func updateHover(at point: CGPoint, force: Bool = false) -> [CGRect] {
         relayoutIfNeeded() // a tree swapped in since the last layout
+        // Mid-drag the layout is still for the old size; its arcs are not under this pointer.
+        guard bounds.size == lastSize else { return [] }
         let found = hit(point)
         var seg: Int?
         var onCenter = false

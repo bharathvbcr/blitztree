@@ -630,11 +630,19 @@ extension RenderingBench {
             let sb = SunburstNSView(frame: start), oldSB = LegacySunburstNSView(frame: start)
             tm.model = model; oldTM.model = model; sb.model = model; oldSB.model = model
             let (tmBitmap, sbBitmap) = (tm.bitmap, sb.bitmap)
+            var (oldTMBitmap, oldSBBitmap) = (oldTM.bitmap, oldSB.bitmap)
             for view in [tm, oldTM, sb, oldSB] as [NSView] { view.viewWillStartLiveResize() }
             for size in sizes {
                 for view in [tm, oldTM, sb, oldSB] as [NSView] { view.setFrameSize(size); view.layout() }
                 expect(tm.bitmap === tmBitmap && sb.bitmap === sbBitmap, "\(kind): a drag frame rendered")
-                expect(oldTM.bitmap !== tmBitmap, "\(kind): the baseline should render every frame")
+                // The baseline is the control: it remakes each map's bitmap on every frame.
+                expect(oldTM.bitmap !== oldTMBitmap && oldSB.bitmap !== oldSBBitmap,
+                       "\(kind): the baseline should render every frame")
+                (oldTMBitmap, oldSBBitmap) = (oldTM.bitmap, oldSB.bitmap)
+                // A pointer mid-drag is over a layout of the old size: it hovers nothing.
+                let middle = CGPoint(x: size.width / 2, y: size.height / 2)
+                expect(tm.hover(at: middle).isEmpty && sb.updateHover(at: middle).isEmpty && model.hovered == nil,
+                       "\(kind): hover mid-drag set \(String(describing: model.hovered))")
                 // Mid-drag draws show the stretched bitmap; they must not trap.
                 let context = canvas(size)
                 paint(tm, [CGRect(origin: .zero, size: size)], into: context)

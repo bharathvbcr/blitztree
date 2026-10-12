@@ -196,6 +196,11 @@ end, and the Core Animation scaling during the drag is on the GPU and cannot be
 timed offscreen. The check that goes with them asserts that no frame of a drag
 remakes either map's bitmap and that the end remakes it once, to the baseline's
 pixels. **Not measured:** a real drag in the app (frame pacing, how the scaled
-picture looks, whether AppKit calls `draw` mid-drag as expected). That needs an
-interactive session; see the QA notes in the commit message.
+picture looks, whether AppKit calls `draw` mid-drag as expected). A drag needs
+an interactive session; none was run. What was run in the built app (a QA copy
+under its own bundle ID) is the accessibility tree, read through the real AX
+server: the treemap list `Treemap of tests` with 22 rows such as
+`CleanupIntegrationChecks.swift, 57 kB, 14.1% of tests` (role AXButton,
+description `file`), AXPress on a file selecting it, AXPress on a folder
+zooming in, and the same on the rings.
 

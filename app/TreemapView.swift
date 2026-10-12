@@ -484,6 +484,8 @@ final class TreemapNSView: NSView {
     @discardableResult
     func hover(at p: CGPoint) -> [CGRect] {
         relayoutIfNeeded() // a tree swapped in since the last layout
+        // Mid-drag the layout is still for the old size; its rects are not under this pointer.
+        guard bounds.size == lastSize else { return [] }
         let lab = Scan.hit(labelHits, p)
         hoveredLabel = lab
         let leaf = lab == nil ? hit(p) : nil
