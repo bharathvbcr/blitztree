@@ -149,7 +149,7 @@ struct CleanupIntegrationChecks {
         try fm.createDirectory(at: trash, withIntermediateDirectories: true)
         func stage(_ relative: String) throws -> CleanupReceipt {
             let path = try directory(relative)
-            let target = try CleanupPathSafety.capture(path: path, root: home, home: home, check: CleanupCheck.none)
+            let target = try CleanupPathSafety.capture(path: path, root: home, home: home, check: CleanupCheck.policyOnly)
             return try CleanupOperations.trash(target) { source in
                 let destination = trash.appendingPathComponent(UUID().uuidString)
                 try fm.moveItem(at: source, to: destination)
@@ -157,7 +157,7 @@ struct CleanupIntegrationChecks {
             }
         }
         let replacedPath = try directory(".cache/replaced")
-        let stale = try CleanupPathSafety.capture(path: replacedPath, root: home, home: home, check: CleanupCheck.none)
+        let stale = try CleanupPathSafety.capture(path: replacedPath, root: home, home: home, check: CleanupCheck.policyOnly)
         try fm.moveItem(atPath: replacedPath, toPath: replacedPath + "-old")
         _ = try directory(".cache/replaced")
         var movedStale = false

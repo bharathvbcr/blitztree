@@ -281,8 +281,23 @@ enum CleanupSafetyChecks {
                                  ("/Volumes/Disk/Users/other/.ssh/id", ".ssh/id")] {
             precondition(CleanupPathSafety.otherHomeRelative(path) == relative, "\(path) is in another home")
         }
-        for path in ["/Users", "/Users/other", "/Applications/Foo.app", "/private/tmp/x/y", "/Volumes/Disk/data/y"] {
+        precondition(CleanupPathSafety.otherHomeRelative("/Users/other") == "", "another home itself")
+        precondition(CleanupPathSafety.otherHomeRelative("/Volumes/Disk/Users/other") == "", "another home on a disk")
+        for path in ["/Users", "/Applications/Foo.app", "/private/tmp/x/y", "/Volumes/Disk/data/y"] {
             precondition(CleanupPathSafety.otherHomeRelative(path) == nil, "\(path) is not inside a home")
+        }
+        // At the top of a volume nothing is offered: a planted tag or a
+        // dot entry must not make /Users/<name> or an app bundle a target.
+        for path in ["/Users", "/Users/Shared", "/System/Volumes/Data/Users/other", "/Applications/Foo.app",
+                     "/Volumes/Disk", "/Volumes/Disk/Photos", "/opt/homebrew", "/Volumes/Disk/Users/other"] {
+            precondition(CleanupPathSafety.isShallowOutsideHome(path), "\(path) is at the top of a volume")
+        }
+        for path in ["/Users/Shared/x", "/Applications/Foo.app/Contents", "/Volumes/Disk/Photos/2024/a",
+                     "/private/tmp/claude-501/p/s", "/System/Volumes/Data/Users/other/work/app"] {
+            precondition(!CleanupPathSafety.isShallowOutsideHome(path), "\(path) is deeper")
+        }
+        expectGitRejection("/Users/Shared under a whole-disk scan root", .tooBroad("/Users/Shared")) {
+            _ = try CleanupPathSafety.capture(path: "/Users/Shared", root: "/System/Volumes/Data", home: home.path)
         }
         for relative in [".aws", ".aws/credentials", ".zshrc", ".claude", ".gradle", ".claude/settings.json",
                          "Documents/a", "Desktop", ".ssh/id", "Library/LaunchAgents/x", ".nvm/v/lib/node_modules"] {

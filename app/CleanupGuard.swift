@@ -120,7 +120,7 @@ nonisolated enum CleanupGuard {
                 // a check; the capture runs it, and so does the trash boundary.
                 let normalized = try CleanupPathSafety.normalize(path)
                 let found = tree.node(at: normalized)
-                let check = found.map { tree.cleanupCheck(for: $0, path: normalized, indexByNode: indexByNode) } ?? .none
+                let check = found.map { tree.cleanupCheck(for: $0, path: normalized, indexByNode: indexByNode) } ?? .policyOnly
                 let target = try CleanupPathSafety.capture(path: path, root: root, home: home, check: check)
                 guard let node = found, node != 0 else {
                     throw CleanupOperations.failure(String(localized: "Path is not an item in this scan"))

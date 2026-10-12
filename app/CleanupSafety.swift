@@ -110,7 +110,7 @@ nonisolated struct CleanupCheck: Sendable, Equatable {
     let folder: String
 
     /// The engine recognised no rule around the path: only the path policy applies.
-    static let none = CleanupCheck(verify: "", folder: "")
+    static let policyOnly = CleanupCheck(verify: "", folder: "")
 }
 
 /// A captured path plus the roots and identity against which it can be
@@ -457,7 +457,7 @@ nonisolated enum CleanupPathSafety {
         guard let p = try? normalize(path), let h = try? normalize(home),
               let homeIdentity = try? identity(of: h) else { return nil }
         do {
-            try protectedPolicy(path: p, home: h, homeIdentity: homeIdentity)
+            try protectedPolicy(path: p, home: h, homeIdentity: homeIdentity, refuseShallow: false)
             try rejectGitComponents(p)
             if let marker = try? readStat((p as NSString).appendingPathComponent(".git")),
                UInt16(truncatingIfNeeded: marker.st_mode) & modeMask != modeRegular {
@@ -471,7 +471,8 @@ nonisolated enum CleanupPathSafety {
         return nil
     }
 
-    private static func protectedPolicy(path: String, home: String, homeIdentity: CleanupIdentity) throws {
+    private static func protectedPolicy(path: String, home: String, homeIdentity: CleanupIdentity,
+                                        refuseShallow: Bool = true) throws {
         // Retain the released app's exclusion for caches and containers
         // managed by macOS, including the Data-volume spelling.
         let lower = path.lowercased()
@@ -489,6 +490,8 @@ nonisolated enum CleanupPathSafety {
             // external disk) reaches other users' homes: the same policy
             // applies there, without the Codex chat exception.
             try homePolicy(relative: relative, path: path) { false }
+        } else if refuseShallow, isShallowOutsideHome(path) {
+            throw CleanupPathError.tooBroad(path)
         }
     }
 
@@ -517,12 +520,7 @@ nonisolated enum CleanupPathSafety {
     /// Whether `path` is, or is inside, a global `lib/node_modules` below one
     /// of `roots`, in either volume spelling and any letter case.
     static func isGlobalPackageFolder(_ path: String, roots: [String] = systemPackageRoots) -> Bool {
-        var components = Array((path as NSString).pathComponents.dropFirst())
-        let data = Array((dataRoot as NSString).pathComponents.dropFirst())
-        if components.count > data.count,
-           zip(components, data).allSatisfy({ $0.caseInsensitiveCompare($1) == .orderedSame }) {
-            components.removeFirst(data.count)
-        }
+        let components = componentsBelowDataRoot(path)
         return roots.contains { root in
             let prefix = Array((root as NSString).pathComponents.dropFirst())
             guard components.count > prefix.count,
@@ -541,20 +539,37 @@ nonisolated enum CleanupPathSafety {
         if isGlobalPackageFolder(path) { throw CleanupPathError.protectedPath(path) }
     }
 
-    /// `rest` of `/Users/<name>/rest`, `/Volumes/<disk>/Users/<name>/rest`
-    /// (either on the Data volume spelling): a home other than the user's.
-    static func otherHomeRelative(_ path: String) -> String? {
+    /// The components of an absolute path, minus the `/System/Volumes/Data` prefix.
+    private static func componentsBelowDataRoot(_ path: String) -> [String] {
         var components = Array((path as NSString).pathComponents.dropFirst())
         let data = Array((dataRoot as NSString).pathComponents.dropFirst())
         if components.count > data.count,
            zip(components, data).allSatisfy({ $0.caseInsensitiveCompare($1) == .orderedSame }) {
             components.removeFirst(data.count)
         }
+        return components
+    }
+
+    /// `rest` of `/Users/<name>/rest` or `/Volumes/<disk>/Users/<name>/rest`
+    /// (either on the Data volume spelling): a home other than the user's.
+    /// "" for the home folder itself.
+    static func otherHomeRelative(_ path: String) -> String? {
+        var components = componentsBelowDataRoot(path)
         if components.count >= 3, components[0].caseInsensitiveCompare("Volumes") == .orderedSame {
             components.removeFirst(2)
         }
-        guard components.count >= 3, components[0].caseInsensitiveCompare("Users") == .orderedSame else { return nil }
+        guard components.count >= 2, components[0].caseInsensitiveCompare("Users") == .orderedSame else { return nil }
         return components.dropFirst(2).joined(separator: "/")
+    }
+
+    /// A path at the top of a volume (`/Users/Shared`, `/Applications/Foo.app`,
+    /// `/Volumes/Disk/Photos`, `/opt/homebrew`): nothing a cleanup offers lives
+    /// there, outside the user's own home.
+    static func isShallowOutsideHome(_ path: String) -> Bool {
+        let components = componentsBelowDataRoot(path)
+        let stripped = components.count >= 3 && components[0].caseInsensitiveCompare("Volumes") == .orderedSame
+            ? Array(components.dropFirst(2)) : components
+        return stripped.count <= 2
     }
 
     /// The policy for a path inside a home, as the part below that home.

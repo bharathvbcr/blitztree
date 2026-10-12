@@ -199,12 +199,6 @@ nonisolated enum AgentSessions {
         return activity.complete ? .unused : .unknown
     }
 
-    /// `usage` as a yes/no for callers with no use for the difference: an
-    /// unreadable log counts as work, since the folder cannot be shown unused.
-    static func worked(in folder: String, root: URL, since: Date, folders: ((String) -> Bool)? = nil) -> Bool {
-        usage(in: folder, root: root, since: since, folders: folders) != .unused
-    }
-
     /// Whether Claude Code worked at or inside `folder` since `since`. Claude
     /// Code files each session under a folder named after the working folder
     /// it started in, with separators turned into "-"; subagent and worktree
@@ -218,10 +212,6 @@ nonisolated enum AgentSessions {
             let name = claudeFolderKey($0)
             return name.hasPrefix(key) || key.hasPrefix(name)
         }
-    }
-
-    static func claudeWorked(in folder: String, since: Date) -> Bool {
-        claudeUsage(in: folder, since: since) != .unused
     }
 
     enum SessionState: Equatable { case running, ended, unknown }

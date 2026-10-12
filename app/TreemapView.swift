@@ -712,7 +712,6 @@ final class NodeMenu: NSObject {
         }
         let refused = refusals(targets)
         if !refused.isEmpty {
-            alert.alertStyle = .warning
             var lines = refused.prefix(listedPaths).map { "\($0.target.displayPath): \($0.reason)" }
             if refused.count > listedPaths {
                 lines.append(String(localized: "and \(refused.count - listedPaths) more"))

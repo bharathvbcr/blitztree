@@ -61,6 +61,14 @@ enum WorktreeChecks {
         fixture.write(env + "/docs/.env", "SECRET=2\n")
         expectBlocked("ignored .env next to rebuildable folders", env, .ignoredFiles(env))
         try fm.removeItem(atPath: env + "/docs")
+        fixture.write(env + "/.gitignore", "node_modules/\n.env\ndata/\n.DS_Store\n")
+        fixture.run(["add", ".gitignore"], in: env)
+        fixture.run(["commit", "-q", "-m", "ignore Finder files"], in: env)
+        fixture.write(env + "/.DS_Store", "finder\n")
+        try fm.createDirectory(atPath: env + "/docs", withIntermediateDirectories: true)
+        fixture.write(env + "/docs/.DS_Store", "finder\n")
+        _ = expectVerified("Finder's .DS_Store is not a file worth keeping", env)
+        try fm.removeItem(atPath: env + "/docs")
         fixture.write(env + "/node_modules/.env", "INSIDE=1\n")
         _ = expectVerified("an ignored file inside node_modules is part of it", env)
         fixture.write(env + "/stray.txt", "untracked\n")
@@ -294,7 +302,7 @@ enum WorktreeChecks {
                 fatalError("\(label): captured")
             } catch { precondition(failedCheck(error), "\(label): \(error)") }
         }
-        let moved = try CleanupOperations.trash(try capture(unchecked, CleanupCheck.none), move: move)
+        let moved = try CleanupOperations.trash(try capture(unchecked, CleanupCheck.policyOnly), move: move)
         precondition(!fm.fileExists(atPath: unchecked) && fm.fileExists(atPath: moved.url.path), "no rule, only the path policy")
 
         // recent_activity (what ~/.claude/projects/<x> carries), through the capture.
@@ -354,6 +362,9 @@ enum WorktreeChecks {
             return
         }
         defer { _ = hdiutil(["detach", mountpoint.path, "-force", "-quiet"]) }
+        // The mounted volume's root is as old as an external disk's would be:
+        // only the mount itself can block.
+        try fm.setAttributes([.modificationDate: old], ofItemAtPath: mountpoint.path)
         let reason = CleanupVerify.blockReason(verify: "recent_activity", path: folder.path)
         precondition(reason?.english.hasPrefix("Another volume is mounted inside") == true,
                      "a mount inside blocks: \(String(describing: reason))")
@@ -430,8 +441,6 @@ enum WorktreeChecks {
         expectBlocked("unreadable Claude Code projects folder", clean, .sessionsUnreadable(clean),
                       within: GitWorktree.recentWindow)
         precondition(AgentSessions.claudeUsage(in: clean, since: Date().addingTimeInterval(-86400)) == .unknown)
-        precondition(AgentSessions.claudeWorked(in: clean, since: Date().addingTimeInterval(-86400)),
-                     "the yes/no form fails closed")
         try fm.setAttributes([.posixPermissions: 0o755], ofItemAtPath: projects.path)
         // An unreadable log.
         let cleanKey = String(String.UnicodeScalarView(clean.unicodeScalars.map {

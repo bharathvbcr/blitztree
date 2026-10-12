@@ -152,10 +152,13 @@ nonisolated enum GitWorktree {
         // A session found anywhere is use; logs that could not be read leave the
         // question open, which blocks with its own reason, not as "unused".
         var unreadable = false
+        let reads: [(String) -> AgentSessions.Usage] = [
+            { AgentSessions.claudeUsage(in: $0, since: cutoff) },
+            { AgentSessions.usage(in: $0, root: AgentSessions.codex, since: cutoff) },
+        ]
         for spelling in spellings(of: path, real: layout.realPath) {
-            for usage in [AgentSessions.claudeUsage(in: spelling, since: cutoff),
-                          AgentSessions.usage(in: spelling, root: AgentSessions.codex, since: cutoff)] {
-                switch usage {
+            for read in reads {
+                switch read(spelling) {
                 case .used: throw GitWorktreeError.recentlyUsed(path)
                 case .unknown: unreadable = true
                 case .unused: break
@@ -176,8 +179,11 @@ nonisolated enum GitWorktree {
         if status.overflow { throw GitWorktreeError.changes(path) }
         for entry in status.stdout.split(separator: 0, omittingEmptySubsequences: true) {
             guard entry.count > 3, entry.starts(with: Array("!! ".utf8)) else { throw GitWorktreeError.changes(path) }
-            let ignored = String(decoding: entry.dropFirst(3), as: UTF8.self)
-            if !ignored.split(separator: "/").contains(where: { CleanupPathSafety.rebuildable.contains(String($0)) }) {
+            let parts = String(decoding: entry.dropFirst(3), as: UTF8.self).split(separator: "/").map(String.init)
+            // Finder writes .DS_Store into every folder it opens, and most
+            // global gitignores list it: it holds nothing worth keeping.
+            if parts.last == ".DS_Store" { continue }
+            if !parts.contains(where: { CleanupPathSafety.rebuildable.contains($0) }) {
                 throw GitWorktreeError.ignoredFiles(path)
             }
         }

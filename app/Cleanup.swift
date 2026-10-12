@@ -46,15 +46,15 @@ extension Tree {
     /// The check of the innermost folder the engine recognised at or around
     /// `node` (`indexByNode` is `cleanupIndexByNode()`): a planned path inside
     /// a recognised folder answers to that folder's check, run on that folder.
-    /// `.none` when no rule recognised the path or any folder above it, which
+    /// `.policyOnly` when no rule recognised the path or any folder above it, which
     /// leaves only the path policy; a rule the engine gave no verifier answer
     /// for blocks. `path` is `node`'s path in the spelling the caller will trash.
     func cleanupCheck(for node: Int, path: String, indexByNode: [Int: Int]) -> CleanupCheck {
         let chain = ancestry(node)
         guard let offset = chain.lastIndex(where: { indexByNode[$0] != nil }),
-              let index = indexByNode[chain[offset]] else { return .none }
+              let index = indexByNode[chain[offset]] else { return .policyOnly }
         let verify = cleanupVerify(index) ?? CleanupVerify.unavailable
-        guard !verify.isEmpty else { return .none }
+        guard !verify.isEmpty else { return .policyOnly }
         var folder = path as NSString
         for _ in 0..<(chain.count - 1 - offset) { folder = folder.deletingLastPathComponent as NSString }
         return CleanupCheck(verify: verify, folder: folder as String)
