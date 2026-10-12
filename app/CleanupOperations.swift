@@ -69,9 +69,22 @@ nonisolated enum CleanupOperations {
     }
 
     /// Both manual and agent cleanup use this boundary, immediately before I/O.
-    /// Revalidating the target runs the path policy and the check the engine's
-    /// rule names for it (cache tag, recent activity, worktree...), so no caller
-    /// can skip either.
+    /// Revalidating the target runs the path policy and the check recorded in
+    /// `target.check` (cache tag, recent activity, worktree...) as they are now,
+    /// so a caller cannot skip either once the target exists.
+    ///
+    /// The contract, exactly: the boundary runs the check the target carries,
+    /// not the check the engine's rule would name for the path. It cannot look
+    /// the rule up itself, because the rule belongs to the scan (the `Tree`),
+    /// which this layer neither has nor should. Whoever captures the target
+    /// supplies the `CleanupCheck` (`Tree.cleanupCheck(for:path:indexByNode:)`,
+    /// or the candidate's own verifier in `CleanupItem`), and `.policyOnly`
+    /// is a statement that no rule recognised the path. What the boundary does
+    /// guarantee: a check that names a verifier nobody knows, one the engine
+    /// gave no answer for (`CleanupVerify.unavailable`), or one that belongs to
+    /// another folder, blocks rather than passes; the check cannot be dropped
+    /// from a target (`CleanupTarget.check` is not optional); and the folder
+    /// is re-verified here, fresh, not trusted from the capture.
     static func trash(_ target: CleanupTarget,
                       move: (URL) throws -> URL = systemTrash) throws -> CleanupReceipt {
         // A linked worktree is re-verified here (clean, unused, nothing
