@@ -26,7 +26,7 @@ impl Tree {
 
         // Each task scans a run of nodes with its own counter and selection;
         // the selections merge in any order to the same top `limit`.
-        let (total, top) = crate::pool::run(|| {
+        let (total, top) = crate::pool::run(crate::pool::Role::Query, || {
             (0..(self.len() - 1).div_ceil(SCAN_CHUNK))
                 .into_par_iter()
                 .map(|chunk| {

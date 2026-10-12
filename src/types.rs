@@ -124,7 +124,7 @@ impl Tree {
         let mut totals = Totals::default();
         if root < self.len() {
             if self.is_dir(root) {
-                totals = crate::pool::run(|| self.totals_under(root));
+                totals = crate::pool::run(crate::pool::Role::Query, || self.totals_under(root));
             } else {
                 totals.add(self.name_bytes(root), self.alloc[root]);
             }

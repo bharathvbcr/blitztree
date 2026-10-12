@@ -73,7 +73,7 @@ engine scan plus about 0.15 s to hand the tree to the UI.
   with unchecked record parsing; it is in git history before the removal.
 - Thread count sweet spot is about the core count. 32+ threads regress ~40%.
 - Scan, search and file-type threads (and the scan's coordinator thread) run
-  at `QOS_CLASS_USER_INITIATED`, on one shared pool (see the last section). At a GUI app's default
+  at `QOS_CLASS_USER_INITIATED`, on two lazily built pools, one for scans and one for queries (see the last section). At a GUI app's default
   QoS they land on efficiency cores and the scan takes twice as long.
   `QOS_CLASS_USER_INTERACTIVE` scanned no faster (home folder in the app:
   8.8–9.6 s vs 9.3–9.4 s) but outranked the UI and the compositor, so the
@@ -161,34 +161,38 @@ the folder's bytes and file count. Raw output:
 These are engine times only; the app copies the rows and redraws the list
 after them.
 
-## One shared USER_INITIATED pool, and the arena lock (2026-10-12)
+## USER_INITIATED scan and query pools, and the arena lock (2026-10-12)
 
-Scan, search and the type breakdown now run on one lazily built pool of
-USER_INITIATED workers (`src/pool.rs`); before, only the scan did, on a pool it
-built again for every scan, while search and types ran on rayon's global pool
-at the app's default QoS. The scan coordinator thread is USER_INITIATED too
-(it was USER_INTERACTIVE, the class that made the window skip frames).
+Scan, search and the type breakdown now run on lazily built pools of
+USER_INITIATED workers (`src/pool.rs`): a scan pool (`bz-scan-N`) for the walk
+and a query pool (`bz-query-N`) for search and types. Before, only the scan had
+such a pool, and it built a new one for every scan, while search and types ran
+on rayon's global pool at the app's default QoS. The scan coordinator thread is
+USER_INITIATED too (it was USER_INTERACTIVE, the class that made the window
+skip frames).
 
 Method: M5 Pro, 18 cores, macOS 27, release builds of `4286e7e` (base) and the
-change, three arms per round (`base`, `new`, and `base2` = the base binary
-again as the A/A control), run interleaved with the starting arm rotated each
-round (`benchmarks/ab.sh`), min and median over the rounds. **The machine was
-not quiet: the load average was 260–490 (other agents' builds and tests)
-throughout, so absolute times are inflated and only same-round comparisons
-mean anything.** Raw samples:
-[benchmarks/results/2026-10-12-shared-pool](benchmarks/results/2026-10-12-shared-pool).
+change, three arms per round (`base`, `two` = the final two-pool build, and
+`base2` = the base binary again as the A/A control), run interleaved with the
+starting arm rotated each round (`benchmarks/ab.sh`), min and median over the
+rounds. **The machine was not quiet: the load average was 165-185 for the table
+below and up to 490 for the earlier single-pool and arena-lock runs (other
+agents' builds and tests), so absolute times are inflated and only same-round
+comparisons mean anything.** Raw samples:
+[benchmarks/results/2026-10-12-shared-pool](benchmarks/results/2026-10-12-shared-pool)
+(files with `two-pools` in the name are this table).
 
-| measurement (ms unless noted) | base min / median | base2 (A/A) | new |
+| measurement (ms unless noted) | base min / median | base2 (A/A) | two pools |
 |---|---|---|---|
-| `search-synth` 1M entries, `'photo'` (9 rounds) | 2.73 / 3.27 | 2.74 / 3.28 | 2.91 / 3.32 |
-| `'entry_0000001'` | 2.06 / 2.42 | 2.08 / 2.41 | 2.01 / 2.47 |
-| `'*.png'` | 2.82 / 3.19 | 2.59 / 3.21 | 2.99 / 3.12 |
-| `'entry_*_photo.jpg'` | 2.70 / 3.17 | 2.59 / 3.12 | 2.43 / 3.04 |
-| `types` of a 500k-file tree (9 rounds) | 0.39 / 1.53 | 0.78 / 1.13 | 0.45 / 1.06 |
-| `scan-repeat`, small folder, 11 scans per process (21 rounds): min of scans | 0.242 | 0.256 | **0.101** |
-| the same, median across processes of each process's min | 0.298 | 0.301 | **0.171** |
-| the same, first scan in the process | 0.470 | 0.502 | 0.439 |
-| `bulk` walk of a 505k-entry tree (9 rounds, seconds) | 1.018 / 1.061 | 1.025 / 1.070 | 1.026 / 1.038 |
+| `search-synth` 1M entries, `'photo'` (9 rounds) | 2.37 / 3.38 | 2.47 / 2.83 | 2.77 / 2.96 |
+| `'entry_0000001'` | 1.71 / 2.41 | 1.73 / 1.95 | 1.75 / 2.50 |
+| `'*.png'` | 2.29 / 3.11 | 2.34 / 3.22 | 2.32 / 2.86 |
+| `'entry_*_photo.jpg'` | 2.22 / 3.19 | 2.31 / 3.22 | 2.25 / 2.72 |
+| `types` of a 500k-file tree, min of 11 in each process (9 rounds) | 0.36 / 0.60 | 0.38 / 0.45 | 0.40 / 0.47 |
+| `scan-repeat`, small folder, 11 scans per process (21 rounds): min of scans | 0.249 | 0.260 | **0.107** |
+| the same, median across processes of each process's min | 0.323 | 0.357 | **0.169** |
+| the same, first scan in the process (median) | 0.577 | 0.517 | 0.509 |
+| `bulk` walk of a 505k-entry tree (9 rounds, seconds) | 0.217 / 0.233 | 0.208 / 0.225 | 0.199 / 0.228 |
 
 What this shows, and what it does not:
 
@@ -209,17 +213,37 @@ What this shows, and what it does not:
   mechanism: work run through the pool executes on `bz-worker-N` threads whose
   QoS reads back as USER_INITIATED, and the coordinator thread reads back
   USER_INITIATED where it read USER_INTERACTIVE.
-- **One thing got worse, by design of a single pool.** rayon runs a worker's own
-  spawned jobs before work injected from outside, so a search issued while a
-  scan is still walking waits until the walk has little left. `bench
-  search-during-scan` (a 1M-entry tree searched back to back while a 505k-entry
-  scan runs, 7 rounds): on the base, 17–32 searches completed during the scan
-  with a median of 29–63 ms and a worst case of 89–249 ms; on the shared pool 1–3
-  completed, the worst case was 1.09–1.70 s, about the whole scan. The app does
-  not do this (`Model.swift` drops the tree when a scan starts), and the
-  library's callers that need it can use their own pool; it is documented in
-  `src/pool.rs`. If the app ever searches during a scan, give search and types a
-  second pool of the same class instead of sharing the scan's.
+- **A single shared pool was worse, so there are two.** The first version of
+  this change ran scan, search and types on one pool (`e757ee9`). rayon runs a
+  worker's own spawned jobs before work injected from outside, so a search
+  issued while a scan was walking waited until the walk had little left. `bench
+  search-during-scan` searches a 1M-entry tree back to back while a 505k-entry
+  scan runs (7 interleaved rounds, base / single pool / two pools / base A/A):
+
+  | | base | single pool | two pools | base A/A |
+  |---|---|---|---|---|
+  | searches completed during the scan, min / median | 7 / 14 | **1 / 2** | 10 / 11 | 7 / 12 |
+  | worst search during the scan, ms, min / median | 33 / 47 | **222 / 255** | 30 / 39 | 33 / 42 |
+  | median search during the scan, ms, median | 21 | **255** | 25 | 28 |
+  | idle search, ms, min | 3.21 | 3.73 | 3.23 | 3.29 |
+  | scan time, ms, median | 279 | 260 | 277 | 262 |
+
+  The single pool's worst search was about the length of the scan; with a
+  query pool of its own it is back to the base's, and the scan time is
+  unchanged. That regression is resolved. The earlier measurement of the same
+  effect at load 300+ (single pool: 1-3 searches, 1.09-1.70 s worst case, base:
+  17-32 searches, 89-249 ms) is in `search-during-scan.tsv`; the table above is
+  `search-during-scan-two-pools.tsv`, at load 165-215.
+  The behaviour is also a test with no timing in it
+  (`queries_finish_while_every_scan_worker_is_blocked`): it parks every scan
+  worker on a latch, then asserts a search and a type breakdown still finish;
+  on the single-pool commit that test hangs until its 120 s watchdog fires.
+- **The query pool has rayon's default size.** `BZ_SYNTH_COUNT=1000000 bench
+  search-synth <dir> N` (N sets `RAYON_NUM_THREADS`; 7 rounds, min of rounds, ms): 18 workers 2.5-3.3,
+  9 workers 3.9-4.0, 6 workers 4.9-5.1, 3 workers 8.6-9.1 (`photo`, `*.png`,
+  `entry_*_photo.jpg`; `query-pool-size.tsv`). Search scales with the worker
+  count, and idle workers cost nothing, so there is no reason to cap it.
+  `RAYON_NUM_THREADS` sets both pools.
 
 ### Does the arena lock contend on hard-link-heavy trees?
 

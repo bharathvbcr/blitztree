@@ -1244,7 +1244,7 @@ fn scan_at(
                 .map_err(|_| "The scan root contains a NUL byte".to_string())
         });
         match target {
-            Ok(path) => pool::run(|| rayon::scope(|s| walk(s, &shared, path, 0))),
+            Ok(path) => pool::run(pool::Role::Scan, || rayon::scope(|s| walk(s, &shared, path, 0))),
             Err(reason) => {
                 progress.errors.fetch_add(1, Ordering::Relaxed);
                 shared.mark_incomplete(0);
