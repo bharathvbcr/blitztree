@@ -19,7 +19,11 @@
 //! Nothing run on the pool may block on another job that needs a free worker.
 //! One consequence: rayon serves a worker's own spawned jobs before work
 //! injected from outside, so a search or breakdown issued while a scan is
-//! walking waits for the walk to run low on work.
+//! walking waits until the walk has little left (measured with
+//! `bench search-during-scan`: a search that takes 6-30 ms idle waited about
+//! as long as the scan, ~1.2 s, where on the global pool it took 30-60 ms).
+//! The app holds no tree while it scans, so it never asks; a caller that must
+//! search a finished tree while another is scanning needs its own pool.
 
 use std::ffi::c_int;
 use std::io::Write;
