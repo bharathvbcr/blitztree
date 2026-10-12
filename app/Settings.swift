@@ -415,7 +415,7 @@ struct ProviderFormView: View {
         request.timeoutInterval = 15
         if !key.isEmpty { request.setValue("Bearer \(key)", forHTTPHeaderField: "Authorization") }
         do {
-            let (data, response) = try await URLSession.shared.data(for: request)
+            let (data, response) = try await ProviderHTTP.data(for: request)
             guard let http = response as? HTTPURLResponse else { return }
             let body = String(decoding: data, as: UTF8.self)
             guard (200..<300).contains(http.statusCode) else {

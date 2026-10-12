@@ -163,6 +163,18 @@ struct PlannerFallbackChecks {
             precondition(failure.localizedDescription.contains(String(errSecInteractionNotAllowed)), failure.localizedDescription)
         } catch { preconditionFailure("wrong error: \(error)") }
 
+        // Another writer added the item between the update and the add: update once more.
+        let sequence = KeychainSequence(updates: [errSecItemNotFound, errSecSuccess], adds: [errSecDuplicateItem])
+        try! ProviderStore.setKey("k", for: "acme", keychain: sequence.client)
+        precondition(sequence.log == ["update", "add", "update"], "duplicate on add retries as an update: \(sequence.log)")
+        let stillFailing = KeychainSequence(updates: [errSecItemNotFound, errSecAuthFailed], adds: [errSecDuplicateItem])
+        do {
+            try ProviderStore.setKey("k", for: "acme", keychain: stillFailing.client)
+            preconditionFailure("a failed retry must propagate")
+        } catch let failure as KeychainFailure {
+            precondition(failure.status == errSecAuthFailed && stillFailing.log == ["update", "add", "update"], "\(stillFailing.log)")
+        } catch { preconditionFailure("\(error)") }
+
         (client, calls) = make(update: errSecAuthFailed, add: errSecSuccess)
         do {
             try ProviderStore.setKey("k", for: "acme", keychain: client)
@@ -205,6 +217,26 @@ struct PlannerFallbackChecks {
             precondition(store.providers == [good] && ProviderStore(defaults: defaults).providers == [good])
         }
         print("PASS Keychain failures propagate; a refused key or URL saves nothing")
+    }
+}
+
+/// A Keychain stand-in that answers each call from a script, in order.
+private nonisolated final class KeychainSequence: @unchecked Sendable {
+    private let lock = NSLock()
+    private var updates: [OSStatus], adds: [OSStatus]
+    private var calls: [String] = []
+
+    init(updates: [OSStatus], adds: [OSStatus]) {
+        self.updates = updates
+        self.adds = adds
+    }
+
+    var log: [String] { lock.lock(); defer { lock.unlock() }; return calls }
+
+    var client: KeychainClient {
+        KeychainClient(
+            update: { [self] _, _ in lock.lock(); defer { lock.unlock() }; calls.append("update"); return updates.removeFirst() },
+            add: { [self] _ in lock.lock(); defer { lock.unlock() }; calls.append("add"); return adds.removeFirst() })
     }
 }
 

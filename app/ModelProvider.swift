@@ -50,9 +50,15 @@ nonisolated enum ProviderURL {
         case unsupportedScheme(String)
         /// http to a host that is not on this Mac.
         case insecure(host: String)
+        /// The server answered with a redirect to another origin (or to an
+        /// address this rule refuses); the request was stopped before it was
+        /// repeated there.
+        case redirected(host: String)
 
         var errorDescription: String? {
             switch self {
+            case .redirected(let host):
+                return String(localized: "The server redirected the request to “\(host)”, which is a different address, so it was stopped before your API key and folder paths were sent there. Use the final address as the base URL.")
             case .empty, .unreadable:
                 return String(localized: "Enter a full URL, such as https://gateway.example/v1.")
             case .noHost:
@@ -84,6 +90,17 @@ nonisolated enum ProviderURL {
         return nil
     }
 
+    /// Same scheme, host and (effective) port: a redirect inside this origin
+    /// repeats the request, key header included, to the same place.
+    static func sameOrigin(_ a: URL, _ b: URL) -> Bool {
+        guard let x = URLComponents(url: a, resolvingAgainstBaseURL: false),
+              let y = URLComponents(url: b, resolvingAgainstBaseURL: false),
+              let schemeA = x.scheme?.lowercased(), let schemeB = y.scheme?.lowercased(),
+              let hostA = x.host, let hostB = y.host else { return false }
+        func port(_ c: URLComponents, _ scheme: String) -> Int { c.port ?? (scheme == "https" ? 443 : 80) }
+        return schemeA == schemeB && bareHost(hostA) == bareHost(hostB) && port(x, schemeA) == port(y, schemeB)
+    }
+
     /// URLComponents keeps the brackets of an IPv6 literal; the name is
     /// compared in lower case without them.
     private static func bareHost(_ host: String) -> String {
@@ -111,6 +128,50 @@ nonisolated enum ProviderURL {
         guard host.contains(":"), inet_pton(AF_INET6, host, &address) == 1 else { return false }
         var loopback = in6addr_loopback
         return memcmp(&address, &loopback, MemoryLayout<in6_addr>.size) == 0
+    }
+}
+
+/// Refuses every redirect that leaves the origin it started on, and any that
+/// lands on an address `ProviderURL` refuses. URLSession drops Authorization
+/// when it follows a redirect but repeats custom headers such as `x-api-key`,
+/// and the body, so following one would hand the key and the prompt to
+/// whoever the server named. Refusing returns the 3xx itself.
+nonisolated final class RedirectGuard: NSObject, URLSessionTaskDelegate, @unchecked Sendable {
+    private let lock = NSLock()
+    private var host: String?
+
+    /// The host a redirect was refused for, once one has been.
+    var refused: String? { lock.lock(); defer { lock.unlock() }; return host }
+
+    func urlSession(_ session: URLSession, task: URLSessionTask, willPerformHTTPRedirection response: HTTPURLResponse,
+                    newRequest request: URLRequest, completionHandler: @escaping @Sendable (URLRequest?) -> Void) {
+        if let from = response.url, let to = request.url, ProviderURL.sameOrigin(from, to),
+           ProviderURL.problem(for: to) == nil {
+            completionHandler(request)
+            return
+        }
+        lock.lock()
+        host = request.url?.host ?? "?"
+        lock.unlock()
+        completionHandler(nil)
+    }
+}
+
+/// The requests that carry a provider's key. Every one goes through here so
+/// none follows a redirect off its origin.
+nonisolated enum ProviderHTTP {
+    static func data(for request: URLRequest) async throws -> (Data, URLResponse) {
+        let guardian = RedirectGuard()
+        let result = try await URLSession.shared.data(for: request, delegate: guardian)
+        if let host = guardian.refused { throw ProviderURL.Problem.redirected(host: host) }
+        return result
+    }
+
+    static func bytes(for request: URLRequest) async throws -> (URLSession.AsyncBytes, URLResponse) {
+        let guardian = RedirectGuard()
+        let result = try await URLSession.shared.bytes(for: request, delegate: guardian)
+        if let host = guardian.refused { throw ProviderURL.Problem.redirected(host: host) }
+        return result
     }
 }
 
@@ -210,7 +271,12 @@ final class ProviderStore {
         var add = base
         add[kSecValueData as String] = value
         let added = keychain.add(add as CFDictionary)
-        guard added == errSecSuccess else { throw KeychainFailure(status: added) }
+        if added == errSecSuccess { return }
+        // The item appeared between the update and the add (another writer):
+        // update it once more rather than fail.
+        guard added == errSecDuplicateItem else { throw KeychainFailure(status: added) }
+        let retried = keychain.update(base as CFDictionary, [kSecValueData as String: value] as CFDictionary)
+        guard retried == errSecSuccess else { throw KeychainFailure(status: retried) }
     }
 
     nonisolated static func getKey(for id: String) -> String? {
@@ -364,7 +430,7 @@ final class LLMPlanClient {
         }
         request.httpBody = try JSONSerialization.data(withJSONObject: body)
 
-        let (bytes, response) = try await URLSession.shared.bytes(for: request)
+        let (bytes, response) = try await ProviderHTTP.bytes(for: request)
         if let http = response as? HTTPURLResponse, !(200..<300).contains(http.statusCode) {
             // Read the error body for the message endpoints usually send.
             var data = Data()

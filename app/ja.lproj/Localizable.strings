@@ -308,3 +308,4 @@
 "“%@://” isn't supported. Use https://." = "「%@://」はサポートされていません。https:// を使用してください。";
 "“%@” is reached over plain http, so your API key and folder paths would cross the network unencrypted. Use https://. Plain http is allowed only for localhost, 127.0.0.1 and ::1." = "「%@」には暗号化されていない http で接続するため、API キーとフォルダのパスがネットワーク上に平文で流れます。https:// を使用してください。平文の http は localhost、127.0.0.1、::1 にのみ許可されます。";
 "Couldn't save the API key to the Keychain: %@ (%@)." = "API キーをキーチェーンに保存できませんでした: %@ (%@)。";
+"The server redirected the request to “%@”, which is a different address, so it was stopped before your API key and folder paths were sent there. Use the final address as the base URL." = "サーバーがリクエストを別のアドレス「%@」にリダイレクトしたため、API キーとフォルダのパスを送信する前に停止しました。最終的なアドレスをベース URL として使用してください。";

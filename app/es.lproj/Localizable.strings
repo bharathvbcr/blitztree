@@ -308,3 +308,4 @@
 "“%@://” isn't supported. Use https://." = "«%@://» no es compatible. Usa https://.";
 "“%@” is reached over plain http, so your API key and folder paths would cross the network unencrypted. Use https://. Plain http is allowed only for localhost, 127.0.0.1 and ::1." = "«%@» se alcanza por http sin cifrar, así que tu clave de API y las rutas de carpetas viajarían por la red sin cifrar. Usa https://. El http sin cifrar solo se permite para localhost, 127.0.0.1 y ::1.";
 "Couldn't save the API key to the Keychain: %@ (%@)." = "No se pudo guardar la clave de API en el Llavero: %@ (%@).";
+"The server redirected the request to “%@”, which is a different address, so it was stopped before your API key and folder paths were sent there. Use the final address as the base URL." = "El servidor redirigió la solicitud a «%@», que es una dirección distinta, así que se detuvo antes de enviar allí tu clave de API y las rutas de carpetas. Usa la dirección final como URL base.";

@@ -308,3 +308,4 @@
 "“%@://” isn't supported. Use https://." = "不支持“%@://”。请使用 https://。";
 "“%@” is reached over plain http, so your API key and folder paths would cross the network unencrypted. Use https://. Plain http is allowed only for localhost, 127.0.0.1 and ::1." = "“%@”通过未加密的 http 访问，你的 API 密钥和文件夹路径将以明文在网络上传输。请使用 https://。仅 localhost、127.0.0.1 和 ::1 允许使用纯 http。";
 "Couldn't save the API key to the Keychain: %@ (%@)." = "无法将 API 密钥保存到钥匙串：%@ (%@)。";
+"The server redirected the request to “%@”, which is a different address, so it was stopped before your API key and folder paths were sent there. Use the final address as the base URL." = "服务器将请求重定向到了另一个地址“%@”，因此在你的 API 密钥和文件夹路径发送过去之前已停止。请使用最终地址作为基础 URL。";

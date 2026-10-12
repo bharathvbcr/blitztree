@@ -11,7 +11,13 @@ actually produce:
 5. plain http to a remote host is refused before any request (loopback http,
    like this mock, is the one allowed exception)
 
-    python3 tests/provider-pipeline/server.py &   # port 18080
+`tests/run-cleanup.sh` runs it: the mock picks free loopback ports and writes
+them to a file, which the harness reads. By hand:
+
+    python3 tests/provider-pipeline/server.py "$DIR/ports.json" &
     swiftc -parse-as-library app/PlanParsing.swift app/ModelProvider.swift \
-        tests/provider-pipeline/main.swift -o /tmp/bz-prov-harness
-    /tmp/bz-prov-harness
+        tests/provider-pipeline/main.swift -o "$DIR/harness"
+    "$DIR/harness" "$DIR/ports.json"
+
+6. a redirect to another origin (host or port) is refused and the key and
+   prompt never reach the second listener; a same-origin redirect is followed

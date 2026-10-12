@@ -207,7 +207,7 @@ nonisolated enum Manvi {
             request.setValue(key, forHTTPHeaderField: "x-api-key")
             request.setValue("2023-06-01", forHTTPHeaderField: "anthropic-version")
             if let workspace { request.setValue(workspace, forHTTPHeaderField: "anthropic-workspace-id") }
-            let (data, response) = try await URLSession.shared.data(for: request)
+            let (data, response) = try await ProviderHTTP.data(for: request)
             let page = try parseClaudeModels(data, status: (response as? HTTPURLResponse)?.statusCode ?? 0)
             models += page.models
             guard page.more, let last = page.models.last?.id else { break }

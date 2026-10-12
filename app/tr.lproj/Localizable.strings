@@ -308,3 +308,4 @@
 "“%@://” isn't supported. Use https://." = "“%@://” desteklenmiyor. https:// kullanın.";
 "“%@” is reached over plain http, so your API key and folder paths would cross the network unencrypted. Use https://. Plain http is allowed only for localhost, 127.0.0.1 and ::1." = "“%@” şifresiz http üzerinden erişiliyor; API anahtarınız ve klasör yolları ağ üzerinden şifrelenmeden geçerdi. https:// kullanın. Düz http yalnızca localhost, 127.0.0.1 ve ::1 için izinlidir.";
 "Couldn't save the API key to the Keychain: %@ (%@)." = "API anahtarı Anahtar Zinciri'ne kaydedilemedi: %@ (%@).";
+"The server redirected the request to “%@”, which is a different address, so it was stopped before your API key and folder paths were sent there. Use the final address as the base URL." = "Sunucu isteği başka bir adres olan “%@” adresine yönlendirdi; API anahtarınız ve klasör yolları oraya gönderilmeden istek durduruldu. Temel URL olarak nihai adresi kullanın.";

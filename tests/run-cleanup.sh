@@ -3,7 +3,9 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 CLEANUP_TEST_TMP=$(mktemp -d /tmp/blitztree-cleanup-checks.XXXXXX)
-trap 'rm -rf "$CLEANUP_TEST_TMP"' EXIT
+PROVIDER_MOCK=""
+# Only the mock this script started (by PID) is stopped on the way out.
+trap '[[ -n "$PROVIDER_MOCK" ]] && kill "$PROVIDER_MOCK" 2>/dev/null; rm -rf "$CLEANUP_TEST_TMP"' EXIT
 FLAGS=(-parse-as-library -swift-version 6 -default-isolation MainActor -target arm64-apple-macos14.0)
 swiftc app/CleanupCommand.swift tests/CleanupCommandChecks.swift "${FLAGS[@]}" -o "$CLEANUP_TEST_TMP/commands"
 "$CLEANUP_TEST_TMP/commands"
@@ -66,4 +68,14 @@ swiftc "${SOURCES[@]}" tests/SubprocessChecks.swift "${FLAGS[@]}" \
   -import-objc-header app/bz.h -L target/release -lblitztree \
   -framework AppKit -framework SwiftUI -o "$CLEANUP_TEST_TMP/subprocess"
 "$CLEANUP_TEST_TMP/subprocess"
+# The custom-provider pipeline against a local mock: stream shapes, errors,
+# refused http, and that a redirect never carries the key to another origin.
+# The mock picks free loopback ports and reports them in a file.
+swiftc -parse-as-library app/PlanParsing.swift app/ModelProvider.swift tests/provider-pipeline/main.swift \
+  -o "$CLEANUP_TEST_TMP/provider-pipeline"
+python3 tests/provider-pipeline/server.py "$CLEANUP_TEST_TMP/ports.json" &
+PROVIDER_MOCK=$!
+for _ in {1..100}; do [[ -s "$CLEANUP_TEST_TMP/ports.json" ]] && break; sleep 0.1; done
+[[ -s "$CLEANUP_TEST_TMP/ports.json" ]] || { echo "provider mock did not start" >&2; exit 1; }
+"$CLEANUP_TEST_TMP/provider-pipeline" "$CLEANUP_TEST_TMP/ports.json"
 

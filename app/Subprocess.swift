@@ -247,7 +247,17 @@ nonisolated enum Subprocess {
             var childEnds: [Int32] = []
             func fail(_ message: String) -> StartError {
                 for fd in owned + childEnds { Darwin.close(fd) }
+                // The number may be handed to someone else's file at once; a
+                // later write or closeInput must find nothing to act on.
+                inputFD = -1
                 return .launch(message)
+            }
+
+            // A terminal is the child's stdin; a separate input has nowhere to go.
+            if spec.terminal {
+                guard case .none = spec.input else {
+                    throw StartError.launch("A terminal run takes no separate input.")
+                }
             }
 
             Subprocess.spawnLock.lock()
@@ -267,14 +277,6 @@ nonisolated enum Subprocess {
                 childEnds.append(pty.slave)
                 owned.append(pty.master)
                 readFDs.append((pty.master, outSink, outBuffer))
-                // A separate descriptor to write through, so closing input
-                // never closes the end being read.
-                let writer = Darwin.dup(pty.master)
-                if writer >= 0 {
-                    Self.prepareWriteEnd(writer)
-                    owned.append(writer)
-                    inputFD = writer
-                }
             } else {
                 switch spec.input {
                 case .none:
@@ -461,10 +463,21 @@ nonisolated enum Subprocess {
             let target = pid
             if target <= 0 { terminateRequested = true; lock.unlock(); return }
             lock.unlock()
-            Darwin.kill(target, SIGTERM)
+            // Foundation starts a child as the leader of its own process
+            // group, so one signal reaches its descendants too (a shell's
+            // `curl`, a tool's workers). Only a group the child leads is
+            // signalled, never BlitzTree's own; otherwise just the child.
+            let group = getpgid(target)
+            let signalsGroup = group == target && group != getpgrp() && group > 1
+            func send(_ signal: Int32) {
+                if signalsGroup, Darwin.kill(-group, signal) == 0 { return }
+                if stillRunning { Darwin.kill(target, signal) }
+            }
+            send(SIGTERM)
             queue.asyncAfter(deadline: .now() + killGrace) { [self] in
-                guard stillRunning else { return }
-                Darwin.kill(target, SIGKILL)
+                // A descendant that ignores SIGTERM can outlive the leader, so
+                // the group still gets SIGKILL after the leader is gone.
+                if signalsGroup { Darwin.kill(-group, SIGKILL) } else if stillRunning { Darwin.kill(target, SIGKILL) }
                 queue.asyncAfter(deadline: .now() + killGrace) { [self] in
                     guard stillRunning else { return }
                     abandon()

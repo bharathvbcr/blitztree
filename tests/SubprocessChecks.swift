@@ -24,6 +24,9 @@ struct SubprocessChecks {
         await cancelReapsChild(base)
         await commandCancelAndTimeout(base)
         await timeoutIsBounded(base)
+        await descendantsStop(base)
+        await failedStartLeavesNoDanglingInput(base)
+        await terminalTakesNoInput()
         await outputs(base)
         await grandchildHoldingPipe()
         await terminal()
@@ -57,6 +60,17 @@ struct SubprocessChecks {
 
     private static func gone(_ pid: pid_t) -> Bool {
         kill(pid, 0) == -1 && errno == ESRCH
+    }
+
+    /// Polls for the process to disappear (a worker killed with its group is
+    /// reparented and reaped by launchd a moment later).
+    private static func goneSoon(_ pid: pid_t, seconds: Double = 3) async -> Bool {
+        let deadline = Date().addingTimeInterval(seconds)
+        while Date() < deadline {
+            if gone(pid) { return true }
+            try? await Task.sleep(for: .milliseconds(20))
+        }
+        return gone(pid)
     }
 
     private static func waitForFile(_ url: URL, seconds: Double = 5) async -> String? {
@@ -122,17 +136,34 @@ struct SubprocessChecks {
             ("term", "echo $$ > PIDFILE; exec sleep 60"),
             // Ignores SIGTERM: only the SIGKILL escalation ends it.
             ("stubborn", "trap '' TERM; echo $$ > PIDFILE; while :; do sleep 0.2; done"),
+            // A shell with two background workers: they must die with it.
+            ("group", "echo $$ > PIDFILE; /bin/sleep 60 & echo $! > GPID1; /bin/sleep 61 & echo $! > GPID2; wait"),
+            // Workers that also ignore SIGTERM (inherited), killed with the group.
+            ("stubborn group", "trap '' TERM; echo $$ > PIDFILE; /bin/sleep 62 & echo $! > GPID1; /bin/sleep 63 & echo $! > GPID2; while :; do /bin/sleep 0.2; done"),
         ] {
-            let pidFile = base.appendingPathComponent("pid-\(name)")
+            let tag = name.replacingOccurrences(of: " ", with: "-")
+            let pidFile = base.appendingPathComponent("pid-\(tag)")
+            let grand1 = base.appendingPathComponent("gpid1-\(tag)"), grand2 = base.appendingPathComponent("gpid2-\(tag)")
             let task = Task {
                 await Subprocess.run(
-                    Subprocess.Spec("/bin/sh", ["-c", script.replacingOccurrences(of: "PIDFILE", with: pidFile.path)]),
+                    Subprocess.Spec("/bin/sh", ["-c", script.replacingOccurrences(of: "PIDFILE", with: pidFile.path)
+                        .replacingOccurrences(of: "GPID1", with: grand1.path)
+                        .replacingOccurrences(of: "GPID2", with: grand2.path)]),
                     timeout: 120)
             }
             let text = await waitForFile(pidFile)
             precondition(text != nil, "\(name): the child started")
             let pid = pid_t(text!.trimmingCharacters(in: .whitespacesAndNewlines))!
             precondition(kill(pid, 0) == 0, "\(name): running before cancel")
+            var grandchildren: [pid_t] = []
+            if name.contains("group") {
+                for file in [grand1, grand2] {
+                    let text = await waitForFile(file)
+                    precondition(text != nil, "\(name): a worker started")
+                    grandchildren.append(pid_t(text!.trimmingCharacters(in: .whitespacesAndNewlines))!)
+                }
+                precondition(grandchildren.allSatisfy { kill($0, 0) == 0 }, "\(name): workers running before cancel")
+            }
             let began = Date()
             task.cancel()
             let outcome = await task.value
@@ -140,7 +171,11 @@ struct SubprocessChecks {
             precondition(outcome.cancelled && outcome.started, "\(name): reported cancelled: \(outcome)")
             precondition(gone(pid), "\(name): the child is gone and reaped, not a zombie (kill 0 -> ESRCH)")
             precondition(took < 6, "\(name): cancellation is bounded, took \(took)s")
-            print("PASS cancel \(name): child \(pid) terminated and reaped in \(String(format: "%.2f", took))s")
+            for worker in grandchildren {
+                let dead = await goneSoon(worker)
+                precondition(dead, "\(name): worker \(worker) outlived its cancelled parent")
+            }
+            print("PASS cancel \(name): child \(pid) \(grandchildren.isEmpty ? "" : "and workers \(grandchildren) ")terminated and reaped in \(String(format: "%.2f", took))s")
         }
         // Cancelled before it ever started: nothing is spawned.
         let early = Task {
@@ -179,6 +214,83 @@ struct SubprocessChecks {
         precondition(gone(pid), "cancelling runCommand terminates and reaps the tool")
         precondition(Date().timeIntervalSince(cancelAt) < 5, "prompt cancellation")
         print("PASS runCommand: injected timeout bounded (\(String(format: "%.2f", took))s), cancel reaps \(pid)")
+    }
+
+    /// The limit and Cancel stop the whole tree, not just the shell: an
+    /// installer's `curl`, a tool's workers.
+    private static func descendantsStop(_ base: URL) async {
+        let g1 = base.appendingPathComponent("tree-1"), g2 = base.appendingPathComponent("tree-2")
+        let script = "/bin/sleep 30 & echo $! > \(g1.path); /bin/sleep 31 & echo $! > \(g2.path); wait"
+        let began = Date()
+        let timed = await Subprocess.run(Subprocess.Spec("/bin/sh", ["-c", script]), timeout: 1)
+        precondition(timed.timedOut && Date().timeIntervalSince(began) < 5, "\(timed)")
+        for file in [g1, g2] {
+            let pid = pid_t((try! String(contentsOf: file, encoding: .utf8)).trimmingCharacters(in: .whitespacesAndNewlines))!
+            let dead = await goneSoon(pid)
+            precondition(dead, "a worker (\(pid)) outlived the timeout of its parent shell")
+        }
+        // The install script is the same kind of tree (curl under bash).
+        let g3 = base.appendingPathComponent("tree-3")
+        let install = Task { await AgentSetup.runInstall("/bin/sleep 40 & echo $! > \(g3.path); wait") }
+        let text = await waitForFile(g3)
+        precondition(text != nil)
+        let worker = pid_t(text!.trimmingCharacters(in: .whitespacesAndNewlines))!
+        install.cancel()
+        let error = await install.value
+        precondition(error == "cancelled", "\(error ?? "nil")")
+        let dead = await goneSoon(worker)
+        precondition(dead, "cancelling an install left its download running (\(worker))")
+        print("PASS timeout and cancel stop the whole process tree, installer included")
+    }
+
+    /// A start that fails halfway closes what it opened; nothing may later
+    /// write to a descriptor number that now belongs to someone else.
+    private static func failedStartLeavesNoDanglingInput(_ base: URL) async {
+        var limit = rlimit()
+        getrlimit(RLIMIT_NOFILE, &limit)
+        let original = limit
+        var restore = original
+        defer { setrlimit(RLIMIT_NOFILE, &restore) }
+        let highest = ((try? FileManager.default.contentsOfDirectory(atPath: "/dev/fd")) ?? []).compactMap { Int($0) }.max() ?? 3
+        var failures = 0
+        for spare in 0...4 {
+            var squeezed = original
+            squeezed.rlim_cur = rlim_t(highest + 1 + spare)
+            setrlimit(RLIMIT_NOFILE, &squeezed)
+            let job = Subprocess.Job(Subprocess.Spec("/bin/cat", input: .open), stdout: .capture(cap: 100))
+            var failed = false
+            do { try job.start() } catch { failed = true }
+            setrlimit(RLIMIT_NOFILE, &restore)
+            guard failed else { job.terminate(); continue }
+            failures += 1
+            // The freed numbers are reused by these files; the dead job must
+            // not write to or close any of them.
+            var files: [(URL, FileHandle)] = []
+            for index in 0..<4 {
+                let file = base.appendingPathComponent("reused-\(spare)-\(index)")
+                FileManager.default.createFile(atPath: file.path, contents: nil)
+                files.append((file, try! FileHandle(forWritingTo: file)))
+            }
+            job.write(Data("intruder".utf8))
+            job.closeInput()
+            try? await Task.sleep(for: .milliseconds(100))
+            for (file, handle) in files {
+                precondition(fcntl(handle.fileDescriptor, F_GETFD) != -1, "the dead job closed someone else's descriptor (spare \(spare))")
+                try? handle.close()
+                let content = try! String(contentsOf: file, encoding: .utf8)
+                precondition(content.isEmpty, "the dead job wrote into a reused descriptor: \(content)")
+            }
+        }
+        precondition(failures > 0, "no squeezed limit made a start fail; the check did not run")
+        print("PASS a failed start leaves no input descriptor to misuse (\(failures) partial failures)")
+    }
+
+    private static func terminalTakesNoInput() async {
+        let outcome = await Subprocess.run(
+            Subprocess.Spec("/bin/cat", input: .data(Data("x".utf8)), terminal: true), timeout: 5)
+        precondition(!outcome.started && outcome.launchError?.contains("no separate input") == true,
+                     "terminal plus input is refused loudly: \(outcome)")
+        print("PASS a terminal run with separate input is refused, not silently ignored")
     }
 
     private static func timeoutIsBounded(_ base: URL) async {

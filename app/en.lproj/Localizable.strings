@@ -299,3 +299,4 @@
 "“%@://” isn't supported. Use https://." = "“%@://” isn't supported. Use https://.";
 "“%@” is reached over plain http, so your API key and folder paths would cross the network unencrypted. Use https://. Plain http is allowed only for localhost, 127.0.0.1 and ::1." = "“%@” is reached over plain http, so your API key and folder paths would cross the network unencrypted. Use https://. Plain http is allowed only for localhost, 127.0.0.1 and ::1.";
 "Couldn't save the API key to the Keychain: %@ (%@)." = "Couldn't save the API key to the Keychain: %@ (%@).";
+"The server redirected the request to “%@”, which is a different address, so it was stopped before your API key and folder paths were sent there. Use the final address as the base URL." = "The server redirected the request to “%@”, which is a different address, so it was stopped before your API key and folder paths were sent there. Use the final address as the base URL.";
