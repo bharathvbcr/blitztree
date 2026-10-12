@@ -295,7 +295,7 @@ struct ListIntegrationChecks {
         precondition(staleModel.searchResults.contains(node("folder2/one.bin")), "the search lists the fixture's .bin files")
         let folder2Path = tree.path(node("folder2"))
         staleModel.cleanup = [CleanupItem(node: node("folder2"), path: folder2Path, display: "folder2",
-                                          kind: "test", bytes: tree.alloc[node("folder2")])]
+                                          kind: "test", bytes: tree.alloc[node("folder2")], verify: "")]
         let mapFrame = NSRect(x: 0, y: 0, width: 400, height: 300)
         let map = TreemapNSView(frame: mapFrame)
         map.model = staleModel
@@ -324,8 +324,8 @@ struct ListIntegrationChecks {
         let emile = root + "/Émile", other = root + "/other"
         try fm.createDirectory(atPath: other, withIntermediateDirectories: true)
         let pickedAs = node("Émile")
-        let relisted = [CleanupItem(node: pickedAs, path: other, display: "other", kind: "test", bytes: 1, root: root),
-                        CleanupItem(node: renumbered.count, path: emile, display: "Émile", kind: "test", bytes: 1, root: root)]
+        let relisted = [CleanupItem(node: pickedAs, path: other, display: "other", kind: "test", bytes: 1, root: root, verify: ""),
+                        CleanupItem(node: renumbered.count, path: emile, display: "Émile", kind: "test", bytes: 1, root: root, verify: "")]
         precondition(relisted.allSatisfy { $0.target != nil }, "both folders can be moved: \(relisted.compactMap(\.blocked))")
         precondition(Cleanup.picked([emile], in: relisted).map(\.path) == [emile],
                      "the pick is the folder chosen, not whatever holds its old number")

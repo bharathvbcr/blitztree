@@ -198,9 +198,103 @@ enum CleanupSafetyChecks {
             print("SKIP cloud-only flag (filesystem denied chflags)")
         }
 
+        try dotEntryPolicy(home: home)
         try worktreeGuard(home: home, outside: outside)
 
         print("PASS CleanupSafetyChecks")
+    }
+
+    /// Top-level dot entries of a home are not blanket-allowed: credentials and
+    /// settings folders are refused, the folders that mix them with caches
+    /// (`.claude`, `.codex`, `.gradle`...) give up only the children the engine
+    /// names, and global Node installs are refused wherever they live.
+    private static func dotEntryPolicy(home: URL) throws {
+        func make(_ relative: String, file: Bool = false) throws -> String {
+            let url = home.appendingPathComponent(relative)
+            if file {
+                try fm.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+                try Data([1]).write(to: url)
+            } else {
+                try fm.createDirectory(at: url, withIntermediateDirectories: true)
+            }
+            return url.path
+        }
+        func capture(_ path: String) throws {
+            _ = try CleanupPathSafety.capture(path: path, root: home.path, home: home.path)
+        }
+        for relative in [".aws", ".kube", ".docker", ".netrc", ".zshrc"] {
+            let path = try make(relative, file: relative.hasPrefix(".n") || relative.hasPrefix(".z"))
+            expectGitRejection("~/\(relative)", .protectedPath(path)) { try capture(path) }
+        }
+        for relative in [".aws/credentials", ".kube/config", ".docker/config.json"] {
+            let path = try make(relative, file: true)
+            expectGitRejection("~/\(relative)", .protectedPath(path)) { try capture(path) }
+        }
+        for relative in [".claude", ".codex", ".gradle"] {
+            let path = try make(relative)
+            expectGitRejection("~/\(relative) is not a cleanup target", .tooBroad(path)) { try capture(path) }
+        }
+        expectGitRejection("~/.zprofile is not on the allowlist", .tooBroad(try make(".zprofile", file: true))) {
+            try capture(home.path + "/.zprofile")
+        }
+        for relative in [".claude/settings.json", ".codex/auth.json", ".gradle/gradle.properties",
+                         ".cargo/credentials.toml", ".m2/settings.xml", ".ollama/id_ed25519"] {
+            let path = try make(relative, file: true)
+            expectGitRejection("~/\(relative) holds settings or credentials", .protectedPath(path)) { try capture(path) }
+        }
+        let nvm = try make(".nvm/versions/node/v20.0.0/lib/node_modules")
+        for path in [nvm, nvm + "/npm"] {
+            try fm.createDirectory(atPath: path, withIntermediateDirectories: true)
+            expectGitRejection("global Node install under .nvm", .protectedPath(path)) { try capture(path) }
+        }
+        // What the engine's rules emit under these folders stays allowed.
+        for relative in [".npm", ".claude/projects/-Users-me-work", ".claude/file-history", ".codex/sessions/2026",
+                         ".codex/worktrees/abcd", ".gradle/caches", ".cargo/registry", ".m2/repository",
+                         ".ollama/models", ".rustup/toolchains/stable", ".cache/pip"] {
+            let path = try make(relative)
+            expectAllowed("~/\(relative)") { try capture(path) }
+        }
+
+        // Global package installs, and other users' homes (a whole-disk scan
+        // reaches both), on values: /opt/homebrew cannot be built in a fixture.
+        for path in ["/opt/homebrew/lib/node_modules", "/opt/homebrew/lib/node_modules/npm/bin",
+                     "/usr/local/lib/node_modules", "/System/Volumes/Data/opt/homebrew/lib/node_modules",
+                     "/OPT/Homebrew/Lib/Node_Modules", "/opt/homebrew/Cellar/node/22.1.0/lib/node_modules"] {
+            precondition(CleanupPathSafety.isGlobalPackageFolder(path), "\(path) is a global install")
+        }
+        for path in ["/opt/homebrew/bin", "/opt/homebrew/lib", "/usr/local/lib/python3", "/Users/me/work/node_modules",
+                     "/opt/homebrew", "/opt/homebrewed/lib/node_modules", "/usr/local/src/app/node_modules"] {
+            precondition(!CleanupPathSafety.isGlobalPackageFolder(path), "\(path) is not a global install")
+        }
+        precondition(CleanupPathSafety.isGlobalPackageFolder(fm.temporaryDirectory.path + "/p/lib/node_modules",
+                                                             roots: [fm.temporaryDirectory.path + "/p"]),
+                     "the roots are a parameter")
+        if fm.fileExists(atPath: "/opt/homebrew/lib/node_modules") {
+            expectGitRejection("the machine's global Node install", .protectedPath("/opt/homebrew/lib/node_modules")) {
+                _ = try CleanupPathSafety.capture(path: "/opt/homebrew/lib/node_modules",
+                                                  root: "/System/Volumes/Data", home: home.path)
+            }
+        } else {
+            print("SKIP /opt/homebrew/lib/node_modules capture (not installed here)")
+        }
+        for (path, relative) in [("/Users/other/.aws", ".aws"), ("/System/Volumes/Data/Users/other/Documents/a", "Documents/a"),
+                                 ("/Volumes/Disk/Users/other/.ssh/id", ".ssh/id")] {
+            precondition(CleanupPathSafety.otherHomeRelative(path) == relative, "\(path) is in another home")
+        }
+        for path in ["/Users", "/Users/other", "/Applications/Foo.app", "/private/tmp/x/y", "/Volumes/Disk/data/y"] {
+            precondition(CleanupPathSafety.otherHomeRelative(path) == nil, "\(path) is not inside a home")
+        }
+        for relative in [".aws", ".aws/credentials", ".zshrc", ".claude", ".gradle", ".claude/settings.json",
+                         "Documents/a", "Desktop", ".ssh/id", "Library/LaunchAgents/x", ".nvm/v/lib/node_modules"] {
+            let path = "/Users/other/" + relative
+            do {
+                try CleanupPathSafety.homePolicy(relative: relative, path: path) { false }
+                fatalError("another user's ~/\(relative) unexpectedly accepted")
+            } catch is CleanupPathError {}
+        }
+        for relative in [".npm", ".claude/projects/x", ".cache/pip", "work/app/node_modules"] {
+            try CleanupPathSafety.homePolicy(relative: relative, path: "/Users/other/" + relative) { false }
+        }
     }
 
     /// A linked worktree is allowed only while it verifies as clean and

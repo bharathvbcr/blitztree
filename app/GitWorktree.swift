@@ -46,6 +46,10 @@ nonisolated enum GitWorktreeError: Error, LocalizedError, Equatable, Sendable {
     case recentlyUsed(String)
     case inUse(String)
     case processCheckFailed(String)
+    /// Ignored files git status leaves out that a build would not recreate.
+    case ignoredFiles(String)
+    /// The agents' session logs could not all be read, so use cannot be ruled out.
+    case sessionsUnreadable(String)
 
     var errorDescription: String? {
         switch self {
@@ -61,6 +65,8 @@ nonisolated enum GitWorktreeError: Error, LocalizedError, Equatable, Sendable {
         case .recentlyUsed(let path): return String(localized: "Git worktree used in the last 2 days: \(path)")
         case .inUse(let path): return String(localized: "A running process is working in this git worktree: \(path)")
         case .processCheckFailed(let path): return String(localized: "Could not check for processes using this git worktree: \(path)")
+        case .ignoredFiles(let path): return String(localized: "Git worktree has ignored files that a build would not recreate (such as .env): \(path)")
+        case .sessionsUnreadable(let path): return String(localized: "Could not read the coding agents' session logs to check whether this git worktree is in use: \(path)")
         }
     }
 
@@ -78,6 +84,8 @@ nonisolated enum GitWorktreeError: Error, LocalizedError, Equatable, Sendable {
         case .recentlyUsed(let path): return "Git worktree used in the last 2 days: \(path)"
         case .inUse(let path): return "A running process is working in this git worktree: \(path)"
         case .processCheckFailed(let path): return "Could not check for processes using this git worktree: \(path)"
+        case .ignoredFiles(let path): return "Git worktree has ignored files that a build would not recreate (such as .env): \(path)"
+        case .sessionsUnreadable(let path): return "Could not read the coding agents' session logs to check whether this git worktree is in use: \(path)"
         }
     }
 }
@@ -141,19 +149,38 @@ nonisolated enum GitWorktree {
         guard let lastUsed = dates.max() else { throw GitWorktreeError.notWorktree(path) }
         let cutoff = now.addingTimeInterval(-recentWithin)
         if lastUsed > cutoff { throw GitWorktreeError.recentlyUsed(path) }
+        // A session found anywhere is use; logs that could not be read leave the
+        // question open, which blocks with its own reason, not as "unused".
+        var unreadable = false
         for spelling in spellings(of: path, real: layout.realPath) {
-            if AgentSessions.claudeWorked(in: spelling, since: cutoff)
-                || AgentSessions.worked(in: spelling, root: AgentSessions.codex, since: cutoff) {
-                throw GitWorktreeError.recentlyUsed(path)
+            for usage in [AgentSessions.claudeUsage(in: spelling, since: cutoff),
+                          AgentSessions.usage(in: spelling, root: AgentSessions.codex, since: cutoff)] {
+                switch usage {
+                case .used: throw GitWorktreeError.recentlyUsed(path)
+                case .unknown: unreadable = true
+                case .unused: break
+                }
             }
         }
+        if unreadable { throw GitWorktreeError.sessionsUnreadable(path) }
 
         guard let git = locateGit(lookup ?? self.lookup) else { throw GitWorktreeError.gitMissing(path) }
         let runner = GitRunner(git: git, layout: layout, deadline: Date().addingTimeInterval(gitBudget))
 
+        // Ignored files count too: git status leaves them out, yet `.env` files,
+        // local databases and data kept under an ignored path are not recreated
+        // by a build. Only what a build recreates (an ignored `node_modules`...)
+        // may be there.
         let status = try runner.run(["status", "--porcelain=v1", "-z", "--untracked-files=all",
-                                     "--ignore-submodules=none", "--no-renames"], cap: statusCap)
-        if status.overflow || !status.stdout.isEmpty { throw GitWorktreeError.changes(path) }
+                                     "--ignore-submodules=none", "--no-renames", "--ignored=matching"], cap: statusCap)
+        if status.overflow { throw GitWorktreeError.changes(path) }
+        for entry in status.stdout.split(separator: 0, omittingEmptySubsequences: true) {
+            guard entry.count > 3, entry.starts(with: Array("!! ".utf8)) else { throw GitWorktreeError.changes(path) }
+            let ignored = String(decoding: entry.dropFirst(3), as: UTF8.self)
+            if !ignored.split(separator: "/").contains(where: { CleanupPathSafety.rebuildable.contains(String($0)) }) {
+                throw GitWorktreeError.ignoredFiles(path)
+            }
+        }
 
         // Assume-unchanged (lowercase tag) and skip-worktree ("S") entries are
         // invisible to status, so only plain tracked entries ("H") pass.

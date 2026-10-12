@@ -57,6 +57,10 @@ The agent runs headless and read-only: it only writes a plan from the scan Blitz
 - Codex chats and projects you used in the last 2 days (including ones Claude Code worked in) are left alone
 - Caches of apps that are open are skipped until you quit them
 - "Delete for good" removes only what this cleanup moved to the Trash
+- Every folder is checked by the rule that recognised it (a valid `CACHEDIR.TAG`, no recent activity, a clean unused git worktree…) at the moment it moves to the Trash, whoever asked for it: the panel, an agent's plan or any later caller. A folder inside a recognised one answers to that folder's check. A worktree with ignored files a build would not recreate (a `.env`, a local database) stays; so does a folder when the agents' session logs cannot be read, or another volume is mounted inside it
+- Hidden folders in your home are not blanket-allowed: `~/.aws`, `~/.kube`, `~/.docker`, `~/.zshrc` and similar are never touched, and from `~/.claude`, `~/.codex`, `~/.gradle`, `~/.cargo`, `~/.m2`, `~/.ollama` and `~/.rustup` only the cache folders the scan recognises can go. Globally installed Node tools (`/opt/homebrew/lib/node_modules`, `/usr/local/lib/node_modules`, `~/.nvm/versions/node/*/lib/node_modules`) are never offered
+
+Move to Trash in the treemap, outline and list menus is your own choice and works like Finder: it does not apply these checks. The confirmation does say so when Clean Up would have refused the item (a protected folder, a `.git` repository) and why, so the choice is informed.
 
 ## Trust & permissions
 

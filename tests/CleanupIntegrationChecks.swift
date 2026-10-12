@@ -149,7 +149,7 @@ struct CleanupIntegrationChecks {
         try fm.createDirectory(at: trash, withIntermediateDirectories: true)
         func stage(_ relative: String) throws -> CleanupReceipt {
             let path = try directory(relative)
-            let target = try CleanupPathSafety.capture(path: path, root: home, home: home)
+            let target = try CleanupPathSafety.capture(path: path, root: home, home: home, check: CleanupCheck.none)
             return try CleanupOperations.trash(target) { source in
                 let destination = trash.appendingPathComponent(UUID().uuidString)
                 try fm.moveItem(at: source, to: destination)
@@ -157,7 +157,7 @@ struct CleanupIntegrationChecks {
             }
         }
         let replacedPath = try directory(".cache/replaced")
-        let stale = try CleanupPathSafety.capture(path: replacedPath, root: home, home: home)
+        let stale = try CleanupPathSafety.capture(path: replacedPath, root: home, home: home, check: CleanupCheck.none)
         try fm.moveItem(atPath: replacedPath, toPath: replacedPath + "-old")
         _ = try directory(".cache/replaced")
         var movedStale = false
@@ -338,6 +338,27 @@ struct CleanupIntegrationChecks {
             precondition(alertWithDisplay.informativeText == wdDisplayPath, "trashAlert with displayPath shows displayPath")
             let alertFallback = NodeMenu.trashAlert(path: wdPath)
             precondition(alertFallback.informativeText == wdDisplayPath, "trashAlert without displayPath removes /System/Volumes/Data prefix")
+
+            // Manual Move to Trash works like Finder, but the confirmation warns
+            // about what Clean Up would refuse: protected folders and git repositories.
+            let protectedPath = NSHomeDirectory() + "/.ssh/id_fixture"
+            let protectedAlert = NodeMenu.trashAlert(path: protectedPath)
+            precondition(protectedAlert.informativeText.hasPrefix(protectedPath)
+                         && protectedAlert.informativeText.contains("Clean Up would not remove these")
+                         && protectedAlert.informativeText.contains("Protected path"),
+                         "trashAlert warns for a protected folder: \(protectedAlert.informativeText)")
+            let repository = fixture.appendingPathComponent("warned-repo")
+            try fm.createDirectory(at: repository.appendingPathComponent(".git"), withIntermediateDirectories: true)
+            let repositoryAlert = NodeMenu.trashAlert(path: repository.path)
+            precondition(repositoryAlert.informativeText.contains("Git metadata path is protected"),
+                         "trashAlert warns for a git repository: \(repositoryAlert.informativeText)")
+            let linkedMarker = fixture.appendingPathComponent("maybe-worktree")
+            try fm.createDirectory(at: linkedMarker, withIntermediateDirectories: true)
+            try Data("gitdir: /nowhere\n".utf8).write(to: linkedMarker.appendingPathComponent(".git"))
+            precondition(NodeMenu.refusals([.init(path: linkedMarker.path)]).isEmpty,
+                         "a .git file is not judged without running git")
+            precondition(!alertFallback.informativeText.contains("Clean Up would not"),
+                         "no warning for an ordinary folder: \(alertFallback.informativeText)")
 
             // Test file node under whole-disk scan: Open, Reveal, and Trash act on the same file
             let wdFileNode = wdTree.node(at: "/System/Volumes/Data" + askedFile)!
@@ -669,6 +690,61 @@ struct CleanupIntegrationChecks {
         let missing = CleanupItem(node: genuine.node, path: tagged.path, display: "state", kind: "fixture",
                                   bytes: 1, root: tagged.deletingLastPathComponent().path, verify: nil)
         precondition(missing.target == nil && missing.blocked != nil, "no answer from the engine blocks")
+
+        // The agent path runs the same rule check at planning and at the Trash
+        // boundary: the verifier does not belong to the panel.
+        func agentCard(_ tree: Tree, _ path: String, home: String) -> PlanItem {
+            PlanItem(spec: PlanItemSpec(title: "Agent card", detail: "Fixture", group: "safe", bytes: 1,
+                                        paths: [path], action: "trash", command: ""),
+                     tree: tree, home: home)
+        }
+        try Data("Signature: not the cache tag signature\n".utf8).write(to: tag)
+        let forgedCard = agentCard(taggedTree, tagged.path, home: fixture.path)
+        precondition(forgedCard.blocked != nil && forgedCard.cleanupTargets.isEmpty && !forgedCard.selected,
+                     "an agent card for a tag without the signature is blocked: \(String(describing: forgedCard.blocked))")
+        try Data((CleanupVerify.cacheSignature + "\n").utf8).write(to: tag)
+        let signedCard = agentCard(taggedTree, tagged.path, home: fixture.path)
+        precondition(signedCard.blocked == nil && signedCard.cleanupTargets.count == 1 && signedCard.selected,
+                     "a signed tag plans: \(String(describing: signedCard.blocked))")
+        try Data("Signature: forged after the card was made\n".utf8).write(to: tag)
+        let agentOutcome = await AgentRun.trash(signedCard.cleanupTargets)
+        precondition(agentOutcome.moved.isEmpty && agentOutcome.error != nil && fm.fileExists(atPath: tagged.path),
+                     "Agent.trash refuses a tag forged after planning: \(String(describing: agentOutcome.error))")
+
+        // ~/.claude/projects/<project> answers to recent_activity for an agent card too.
+        let claudeHome = fixture.appendingPathComponent("claude-home")
+        let projectDir = claudeHome.appendingPathComponent(".claude/projects/-Users-me-work")
+        try fm.createDirectory(at: projectDir, withIntermediateDirectories: true)
+        try Data(repeating: 5, count: 51_000_000).write(to: projectDir.appendingPathComponent("session.jsonl"))
+        let realHome = ProcessInfo.processInfo.environment["HOME"]
+        setenv("HOME", claudeHome.path, 1)
+
+        guard let claudeHandle = bz_scan_start(claudeHome.path) else { fatalError("claude scan failed") }
+        done = 0
+        while done == 0 {
+            bz_progress(claudeHandle, &files, &dirs, &bytes, &done)
+            if done == 0 { try await Task.sleep(for: .milliseconds(5)) }
+        }
+        guard let claudeTree = Tree(handle: claudeHandle) else { bz_free(claudeHandle); fatalError("claude tree failed") }
+        if let realHome { setenv("HOME", realHome, 1) } else { unsetenv("HOME") }
+        let projectNode = claudeTree.node(at: projectDir.path)!
+        let projectIndex = (0..<claudeTree.cleanupCount).first { Int(claudeTree.cleanupNodes[$0]) == projectNode }
+        precondition(projectIndex.flatMap(claudeTree.cleanupVerify) == "recent_activity",
+                     "the project folder is a candidate whose rule names recent_activity")
+        let todayCard = agentCard(claudeTree, projectDir.path, home: claudeHome.path)
+        precondition(todayCard.blocked != nil && todayCard.cleanupTargets.isEmpty && !todayCard.selected,
+                     "an agent card for a project folder touched today is blocked: \(String(describing: todayCard.blocked))")
+        let oldDate = Date().addingTimeInterval(-5 * 86400)
+        for path in [projectDir.appendingPathComponent("session.jsonl").path, projectDir.path] {
+            try fm.setAttributes([.modificationDate: oldDate], ofItemAtPath: path)
+        }
+        let quietCard = agentCard(claudeTree, projectDir.path, home: claudeHome.path)
+        precondition(quietCard.blocked == nil && quietCard.cleanupTargets.count == 1,
+                     "the same folder untouched for days plans: \(String(describing: quietCard.blocked))")
+        try Data("a new transcript\n".utf8).write(to: projectDir.appendingPathComponent("new.jsonl"))
+        let lateOutcome = await AgentRun.trash(quietCard.cleanupTargets)
+        precondition(lateOutcome.moved.isEmpty && lateOutcome.error != nil && fm.fileExists(atPath: projectDir.path),
+                     "a project used after the card was made is refused at the Trash")
         try Data("changed after the scan\n".utf8).write(to: tag)
         let batch = CleanupTrashBatch()
         var movedNow: [CleanupItem] = [], failedNow: [String] = []
