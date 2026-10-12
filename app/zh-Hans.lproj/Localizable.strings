@@ -311,3 +311,36 @@
 "“%@” is reached over plain http, so your API key and folder paths would cross the network unencrypted. Use https://. Plain http is allowed only for localhost, 127.0.0.1 and ::1." = "“%@”通过未加密的 http 访问，你的 API 密钥和文件夹路径将以明文在网络上传输。请使用 https://。仅 localhost、127.0.0.1 和 ::1 允许使用纯 http。";
 "Couldn't save the API key to the Keychain: %@ (%@)." = "无法将 API 密钥保存到钥匙串：%@ (%@)。";
 "The server redirected the request to “%@”, which is a different address, so it was stopped before your API key and folder paths were sent there. Use the final address as the base URL." = "服务器将请求重定向到了另一个地址“%@”，因此在你的 API 密钥和文件夹路径发送过去之前已停止。请使用最终地址作为基础 URL。";
+
+/* Worktree, rule-check and boundary messages */
+"Not a linked git worktree: %@" = "不是已链接的 Git 工作树：%@";
+"The repository of this git worktree can't be reached (is its drive connected?): %@" = "无法访问此 Git 工作树的仓库(磁盘是否已连接?)：%@";
+"Git worktree is locked: %@" = "Git 工作树已锁定：%@";
+"Git worktree has submodules: %@" = "Git 工作树包含子模块：%@";
+"Git is not available to check this worktree: %@" = "无法使用 Git 检查此工作树：%@";
+"Git could not check %@: %@" = "Git 无法检查 %1$@：%2$@";
+"Checking this git worktree took too long: %@" = "检查此 Git 工作树耗时过长：%@";
+"Git worktree has uncommitted or untracked changes: %@" = "Git 工作树有未提交或未跟踪的更改：%@";
+"Git worktree has files hidden from git status: %@" = "Git 工作树中有 git status 看不到的文件：%@";
+"Git worktree has commits on no branch or tag: %@" = "Git 工作树中有不在任何分支或标签上的提交：%@";
+"Git worktree used in the last 2 days: %@" = "最近 2 天内使用过的 Git 工作树：%@";
+"A running process is working in this git worktree: %@" = "有正在运行的进程在此 Git 工作树中工作：%@";
+"Could not check for processes using this git worktree: %@" = "无法检查是否有进程在使用此 Git 工作树：%@";
+"Git worktree has ignored files that a build would not recreate (such as .env): %@" = "Git 工作树中有构建不会重新生成的被忽略文件(如 .env)：%@";
+"Could not read the coding agents' session logs to check whether this git worktree is in use: %@" = "无法读取编程代理的会话日志，因此无法确认此 Git 工作树是否在使用中：%@";
+"Left git worktree metadata in place because it changed: %@" = "由于元数据已更改，已保留 Git 工作树元数据：%@";
+"Left git worktree metadata in place because the worktree exists again: %@" = "由于工作树再次存在，已保留 Git 工作树元数据：%@";
+"Left git worktree metadata in place because it is locked: %@" = "由于元数据已锁定，已保留 Git 工作树元数据：%@";
+"Could not remove git worktree metadata: %@" = "无法移除 Git 工作树元数据：%@";
+"Unknown check %@ for %@" = "%2$@ 的未知检查 %1$@";
+"No valid cache directory tag in %@" = "%@ 中没有有效的缓存目录标记";
+"Could not check every file in %@" = "无法检查 %@ 中的所有文件";
+"Too many files to check in %@" = "%@ 中要检查的文件过多";
+"Another volume is mounted inside %@" = "%@ 内挂载了另一个卷";
+"Changed in the last 2 days: %@" = "最近 2 天内有更改：%@";
+"The check does not belong to this folder: %@" = "此检查不属于该文件夹：%@";
+"Not a folder the scan recognised as removable" = "不是扫描识别为可移除的文件夹";
+"Couldn't read the coding agents' session logs to check recent use" = "无法读取编程代理的会话日志，因此无法确认近期使用情况";
+"Clean Up would not remove these. Move to Trash works like Finder and does not apply its checks:" = "“清理”不会移除这些项目。“移到废纸篓”的行为与访达相同，不会应用这些检查：";
+"Cleanup incomplete" = "清理未完成";
+"Dismiss" = "关闭";

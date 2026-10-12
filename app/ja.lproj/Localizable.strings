@@ -311,3 +311,36 @@
 "“%@” is reached over plain http, so your API key and folder paths would cross the network unencrypted. Use https://. Plain http is allowed only for localhost, 127.0.0.1 and ::1." = "「%@」には暗号化されていない http で接続するため、API キーとフォルダのパスがネットワーク上に平文で流れます。https:// を使用してください。平文の http は localhost、127.0.0.1、::1 にのみ許可されます。";
 "Couldn't save the API key to the Keychain: %@ (%@)." = "API キーをキーチェーンに保存できませんでした: %@ (%@)。";
 "The server redirected the request to “%@”, which is a different address, so it was stopped before your API key and folder paths were sent there. Use the final address as the base URL." = "サーバーがリクエストを別のアドレス「%@」にリダイレクトしたため、API キーとフォルダのパスを送信する前に停止しました。最終的なアドレスをベース URL として使用してください。";
+
+/* Worktree, rule-check and boundary messages */
+"Not a linked git worktree: %@" = "リンクされたGit worktreeではありません: %@";
+"The repository of this git worktree can't be reached (is its drive connected?): %@" = "このGit worktreeのリポジトリにアクセスできません(ドライブは接続されていますか?): %@";
+"Git worktree is locked: %@" = "Git worktreeはロックされています: %@";
+"Git worktree has submodules: %@" = "Git worktreeにサブモジュールがあります: %@";
+"Git is not available to check this worktree: %@" = "このworktreeを確認するためのGitが利用できません: %@";
+"Git could not check %@: %@" = "Gitは%1$@を確認できませんでした: %2$@";
+"Checking this git worktree took too long: %@" = "このGit worktreeの確認に時間がかかりすぎました: %@";
+"Git worktree has uncommitted or untracked changes: %@" = "Git worktreeにコミットされていない変更または未追跡の変更があります: %@";
+"Git worktree has files hidden from git status: %@" = "Git worktreeにgit statusに表示されないファイルがあります: %@";
+"Git worktree has commits on no branch or tag: %@" = "Git worktreeにどのブランチにもタグにも含まれないコミットがあります: %@";
+"Git worktree used in the last 2 days: %@" = "過去2日間に使用されたGit worktree: %@";
+"A running process is working in this git worktree: %@" = "実行中のプロセスがこのGit worktree内で動作しています: %@";
+"Could not check for processes using this git worktree: %@" = "このGit worktreeを使用しているプロセスを確認できませんでした: %@";
+"Git worktree has ignored files that a build would not recreate (such as .env): %@" = "ビルドでは再作成されない無視されたファイル(.envなど)がGit worktreeにあります: %@";
+"Could not read the coding agents' session logs to check whether this git worktree is in use: %@" = "このGit worktreeが使用中か確認するためのコーディングエージェントのセッションログを読み取れませんでした: %@";
+"Left git worktree metadata in place because it changed: %@" = "変更されていたため、Git worktreeのメタデータはそのまま残しました: %@";
+"Left git worktree metadata in place because the worktree exists again: %@" = "worktreeが再び存在するため、Git worktreeのメタデータはそのまま残しました: %@";
+"Left git worktree metadata in place because it is locked: %@" = "ロックされているため、Git worktreeのメタデータはそのまま残しました: %@";
+"Could not remove git worktree metadata: %@" = "Git worktreeのメタデータを削除できませんでした: %@";
+"Unknown check %@ for %@" = "%2$@に対する不明なチェック%1$@";
+"No valid cache directory tag in %@" = "%@に有効なキャッシュディレクトリタグがありません";
+"Could not check every file in %@" = "%@内のすべてのファイルを確認できませんでした";
+"Too many files to check in %@" = "%@内のファイルが多すぎて確認できません";
+"Another volume is mounted inside %@" = "%@の中に別のボリュームがマウントされています";
+"Changed in the last 2 days: %@" = "過去2日間に変更されました: %@";
+"The check does not belong to this folder: %@" = "このチェックはこのフォルダに属していません: %@";
+"Not a folder the scan recognised as removable" = "スキャンが削除可能と認識したフォルダではありません";
+"Couldn't read the coding agents' session logs to check recent use" = "最近の使用を確認するためのコーディングエージェントのセッションログを読み取れませんでした";
+"Clean Up would not remove these. Move to Trash works like Finder and does not apply its checks:" = "クリーンアップではこれらを削除しません。ゴミ箱に移動はFinderと同じ動作で、これらのチェックは適用されません:";
+"Cleanup incomplete" = "クリーンアップが完了していません";
+"Dismiss" = "閉じる";

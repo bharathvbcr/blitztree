@@ -311,3 +311,36 @@
 "“%@” is reached over plain http, so your API key and folder paths would cross the network unencrypted. Use https://. Plain http is allowed only for localhost, 127.0.0.1 and ::1." = "«%@» se alcanza por http sin cifrar, así que tu clave de API y las rutas de carpetas viajarían por la red sin cifrar. Usa https://. El http sin cifrar solo se permite para localhost, 127.0.0.1 y ::1.";
 "Couldn't save the API key to the Keychain: %@ (%@)." = "No se pudo guardar la clave de API en el Llavero: %@ (%@).";
 "The server redirected the request to “%@”, which is a different address, so it was stopped before your API key and folder paths were sent there. Use the final address as the base URL." = "El servidor redirigió la solicitud a «%@», que es una dirección distinta, así que se detuvo antes de enviar allí tu clave de API y las rutas de carpetas. Usa la dirección final como URL base.";
+
+/* Worktree, rule-check and boundary messages */
+"Not a linked git worktree: %@" = "No es un worktree de Git vinculado: %@";
+"The repository of this git worktree can't be reached (is its drive connected?): %@" = "No se puede acceder al repositorio de este worktree de Git (¿está conectado su disco?): %@";
+"Git worktree is locked: %@" = "El worktree de Git está bloqueado: %@";
+"Git worktree has submodules: %@" = "El worktree de Git tiene submódulos: %@";
+"Git is not available to check this worktree: %@" = "Git no está disponible para comprobar este worktree: %@";
+"Git could not check %@: %@" = "Git no pudo comprobar %1$@: %2$@";
+"Checking this git worktree took too long: %@" = "La comprobación de este worktree de Git tardó demasiado: %@";
+"Git worktree has uncommitted or untracked changes: %@" = "El worktree de Git tiene cambios sin confirmar o sin seguimiento: %@";
+"Git worktree has files hidden from git status: %@" = "El worktree de Git tiene archivos ocultos para git status: %@";
+"Git worktree has commits on no branch or tag: %@" = "El worktree de Git tiene commits que no están en ninguna rama ni etiqueta: %@";
+"Git worktree used in the last 2 days: %@" = "Worktree de Git usado en los últimos 2 días: %@";
+"A running process is working in this git worktree: %@" = "Un proceso en ejecución está trabajando en este worktree de Git: %@";
+"Could not check for processes using this git worktree: %@" = "No se pudo comprobar si hay procesos usando este worktree de Git: %@";
+"Git worktree has ignored files that a build would not recreate (such as .env): %@" = "El worktree de Git tiene archivos ignorados que una compilación no volvería a crear (como .env): %@";
+"Could not read the coding agents' session logs to check whether this git worktree is in use: %@" = "No se pudieron leer los registros de sesión de los agentes de programación para comprobar si este worktree de Git está en uso: %@";
+"Left git worktree metadata in place because it changed: %@" = "Los metadatos del worktree de Git se dejaron en su sitio porque cambiaron: %@";
+"Left git worktree metadata in place because the worktree exists again: %@" = "Los metadatos del worktree de Git se dejaron en su sitio porque el worktree existe de nuevo: %@";
+"Left git worktree metadata in place because it is locked: %@" = "Los metadatos del worktree de Git se dejaron en su sitio porque están bloqueados: %@";
+"Could not remove git worktree metadata: %@" = "No se pudieron eliminar los metadatos del worktree de Git: %@";
+"Unknown check %@ for %@" = "Comprobación desconocida %1$@ para %2$@";
+"No valid cache directory tag in %@" = "No hay una etiqueta de directorio de caché válida en %@";
+"Could not check every file in %@" = "No se pudieron comprobar todos los archivos de %@";
+"Too many files to check in %@" = "Demasiados archivos para comprobar en %@";
+"Another volume is mounted inside %@" = "Hay otro volumen montado dentro de %@";
+"Changed in the last 2 days: %@" = "Modificado en los últimos 2 días: %@";
+"The check does not belong to this folder: %@" = "La comprobación no pertenece a esta carpeta: %@";
+"Not a folder the scan recognised as removable" = "No es una carpeta que el escaneo reconociera como eliminable";
+"Couldn't read the coding agents' session logs to check recent use" = "No se pudieron leer los registros de sesión de los agentes de programación para comprobar el uso reciente";
+"Clean Up would not remove these. Move to Trash works like Finder and does not apply its checks:" = "Limpiar no eliminaría esto. Mover a la Papelera funciona como el Finder y no aplica sus comprobaciones:";
+"Cleanup incomplete" = "Limpieza incompleta";
+"Dismiss" = "Descartar";

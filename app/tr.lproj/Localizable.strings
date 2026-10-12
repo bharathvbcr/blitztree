@@ -311,3 +311,36 @@
 "“%@” is reached over plain http, so your API key and folder paths would cross the network unencrypted. Use https://. Plain http is allowed only for localhost, 127.0.0.1 and ::1." = "“%@” şifresiz http üzerinden erişiliyor; API anahtarınız ve klasör yolları ağ üzerinden şifrelenmeden geçerdi. https:// kullanın. Düz http yalnızca localhost, 127.0.0.1 ve ::1 için izinlidir.";
 "Couldn't save the API key to the Keychain: %@ (%@)." = "API anahtarı Anahtar Zinciri'ne kaydedilemedi: %@ (%@).";
 "The server redirected the request to “%@”, which is a different address, so it was stopped before your API key and folder paths were sent there. Use the final address as the base URL." = "Sunucu isteği başka bir adres olan “%@” adresine yönlendirdi; API anahtarınız ve klasör yolları oraya gönderilmeden istek durduruldu. Temel URL olarak nihai adresi kullanın.";
+
+/* Worktree, rule-check and boundary messages */
+"Not a linked git worktree: %@" = "Bağlı bir Git worktree değil: %@";
+"The repository of this git worktree can't be reached (is its drive connected?): %@" = "Bu Git worktree'nin deposuna erişilemiyor (sürücü bağlı mı?): %@";
+"Git worktree is locked: %@" = "Git worktree kilitli: %@";
+"Git worktree has submodules: %@" = "Git worktree alt modüller içeriyor: %@";
+"Git is not available to check this worktree: %@" = "Bu worktree'yi denetlemek için Git kullanılamıyor: %@";
+"Git could not check %@: %@" = "Git %1$@ yolunu denetleyemedi: %2$@";
+"Checking this git worktree took too long: %@" = "Bu Git worktree'nin denetlenmesi çok uzun sürdü: %@";
+"Git worktree has uncommitted or untracked changes: %@" = "Git worktree'de işlenmemiş veya izlenmeyen değişiklikler var: %@";
+"Git worktree has files hidden from git status: %@" = "Git worktree'de git status'un göstermediği dosyalar var: %@";
+"Git worktree has commits on no branch or tag: %@" = "Git worktree'de hiçbir dalda veya etikette olmayan işlemeler var: %@";
+"Git worktree used in the last 2 days: %@" = "Son 2 gün içinde kullanılan Git worktree: %@";
+"A running process is working in this git worktree: %@" = "Çalışan bir işlem bu Git worktree içinde çalışıyor: %@";
+"Could not check for processes using this git worktree: %@" = "Bu Git worktree'yi kullanan işlemler denetlenemedi: %@";
+"Git worktree has ignored files that a build would not recreate (such as .env): %@" = "Git worktree'de bir derlemenin yeniden oluşturmayacağı yok sayılan dosyalar var (.env gibi): %@";
+"Could not read the coding agents' session logs to check whether this git worktree is in use: %@" = "Bu Git worktree'nin kullanımda olup olmadığını denetlemek için kodlama ajanlarının oturum günlükleri okunamadı: %@";
+"Left git worktree metadata in place because it changed: %@" = "Değiştikleri için Git worktree meta verileri yerinde bırakıldı: %@";
+"Left git worktree metadata in place because the worktree exists again: %@" = "Worktree yeniden var olduğu için Git worktree meta verileri yerinde bırakıldı: %@";
+"Left git worktree metadata in place because it is locked: %@" = "Kilitli oldukları için Git worktree meta verileri yerinde bırakıldı: %@";
+"Could not remove git worktree metadata: %@" = "Git worktree meta verileri kaldırılamadı: %@";
+"Unknown check %@ for %@" = "%2$@ için bilinmeyen denetim %1$@";
+"No valid cache directory tag in %@" = "%@ içinde geçerli bir önbellek dizini etiketi yok";
+"Could not check every file in %@" = "%@ içindeki tüm dosyalar denetlenemedi";
+"Too many files to check in %@" = "%@ içinde denetlenecek çok fazla dosya var";
+"Another volume is mounted inside %@" = "%@ içine başka bir birim bağlanmış";
+"Changed in the last 2 days: %@" = "Son 2 gün içinde değiştirildi: %@";
+"The check does not belong to this folder: %@" = "Bu denetim bu klasöre ait değil: %@";
+"Not a folder the scan recognised as removable" = "Taramanın kaldırılabilir olarak tanıdığı bir klasör değil";
+"Couldn't read the coding agents' session logs to check recent use" = "Son kullanımı denetlemek için kodlama ajanlarının oturum günlükleri okunamadı";
+"Clean Up would not remove these. Move to Trash works like Finder and does not apply its checks:" = "Temizle bunları kaldırmazdı. Çöp Kutusu'na Taşı, Finder gibi çalışır ve bu denetimleri uygulamaz:";
+"Cleanup incomplete" = "Temizleme tamamlanmadı";
+"Dismiss" = "Kapat";

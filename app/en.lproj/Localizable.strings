@@ -302,3 +302,36 @@
 "“%@” is reached over plain http, so your API key and folder paths would cross the network unencrypted. Use https://. Plain http is allowed only for localhost, 127.0.0.1 and ::1." = "“%@” is reached over plain http, so your API key and folder paths would cross the network unencrypted. Use https://. Plain http is allowed only for localhost, 127.0.0.1 and ::1.";
 "Couldn't save the API key to the Keychain: %@ (%@)." = "Couldn't save the API key to the Keychain: %@ (%@).";
 "The server redirected the request to “%@”, which is a different address, so it was stopped before your API key and folder paths were sent there. Use the final address as the base URL." = "The server redirected the request to “%@”, which is a different address, so it was stopped before your API key and folder paths were sent there. Use the final address as the base URL.";
+
+/* Worktree, rule-check and boundary messages */
+"Not a linked git worktree: %@" = "Not a linked git worktree: %@";
+"The repository of this git worktree can't be reached (is its drive connected?): %@" = "The repository of this git worktree can't be reached (is its drive connected?): %@";
+"Git worktree is locked: %@" = "Git worktree is locked: %@";
+"Git worktree has submodules: %@" = "Git worktree has submodules: %@";
+"Git is not available to check this worktree: %@" = "Git is not available to check this worktree: %@";
+"Git could not check %@: %@" = "Git could not check %1$@: %2$@";
+"Checking this git worktree took too long: %@" = "Checking this git worktree took too long: %@";
+"Git worktree has uncommitted or untracked changes: %@" = "Git worktree has uncommitted or untracked changes: %@";
+"Git worktree has files hidden from git status: %@" = "Git worktree has files hidden from git status: %@";
+"Git worktree has commits on no branch or tag: %@" = "Git worktree has commits on no branch or tag: %@";
+"Git worktree used in the last 2 days: %@" = "Git worktree used in the last 2 days: %@";
+"A running process is working in this git worktree: %@" = "A running process is working in this git worktree: %@";
+"Could not check for processes using this git worktree: %@" = "Could not check for processes using this git worktree: %@";
+"Git worktree has ignored files that a build would not recreate (such as .env): %@" = "Git worktree has ignored files that a build would not recreate (such as .env): %@";
+"Could not read the coding agents' session logs to check whether this git worktree is in use: %@" = "Could not read the coding agents' session logs to check whether this git worktree is in use: %@";
+"Left git worktree metadata in place because it changed: %@" = "Left git worktree metadata in place because it changed: %@";
+"Left git worktree metadata in place because the worktree exists again: %@" = "Left git worktree metadata in place because the worktree exists again: %@";
+"Left git worktree metadata in place because it is locked: %@" = "Left git worktree metadata in place because it is locked: %@";
+"Could not remove git worktree metadata: %@" = "Could not remove git worktree metadata: %@";
+"Unknown check %@ for %@" = "Unknown check %1$@ for %2$@";
+"No valid cache directory tag in %@" = "No valid cache directory tag in %@";
+"Could not check every file in %@" = "Could not check every file in %@";
+"Too many files to check in %@" = "Too many files to check in %@";
+"Another volume is mounted inside %@" = "Another volume is mounted inside %@";
+"Changed in the last 2 days: %@" = "Changed in the last 2 days: %@";
+"The check does not belong to this folder: %@" = "The check does not belong to this folder: %@";
+"Not a folder the scan recognised as removable" = "Not a folder the scan recognised as removable";
+"Couldn't read the coding agents' session logs to check recent use" = "Couldn't read the coding agents' session logs to check recent use";
+"Clean Up would not remove these. Move to Trash works like Finder and does not apply its checks:" = "Clean Up would not remove these. Move to Trash works like Finder and does not apply its checks:";
+"Cleanup incomplete" = "Cleanup incomplete";
+"Dismiss" = "Dismiss";
