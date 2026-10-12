@@ -516,85 +516,19 @@ nonisolated enum BoundedProcess {
         }
     }
 
-    /// Nil when the program could not be started.
+    /// Nil when the program could not be started. The synchronous face of
+    /// `Subprocess`: callers here are themselves synchronous (the guard's
+    /// git checks), so the thread waits, bounded by `timeout`, and the helper
+    /// does the spawning, draining and killing.
     static func run(_ executable: String, _ arguments: [String], environment: [String: String],
                     timeout: TimeInterval, cap: Int) -> Outcome? {
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: executable)
-        process.arguments = arguments
-        process.environment = environment
-        process.currentDirectoryURL = URL(fileURLWithPath: "/")
-        process.standardInput = FileHandle.nullDevice
-        let out = Pipe(), err = Pipe()
-        process.standardOutput = out
-        process.standardError = err
-        let outBuffer = Capped(cap: cap), errBuffer = Capped(cap: 64 * 1024)
-        let drained = DispatchGroup()
-        for (pipe, buffer) in [(out, outBuffer), (err, errBuffer)] {
-            drained.enter()
-            pipe.fileHandleForReading.readabilityHandler = { handle in
-                let data = handle.availableData
-                if data.isEmpty {
-                    handle.readabilityHandler = nil
-                    if buffer.finish() { drained.leave() }
-                } else {
-                    buffer.append(data)
-                }
-            }
-        }
-        let exited = DispatchSemaphore(value: 0)
-        process.terminationHandler = { _ in exited.signal() }
-        do {
-            try process.run()
-        } catch {
-            out.fileHandleForReading.readabilityHandler = nil
-            err.fileHandleForReading.readabilityHandler = nil
-            return nil
-        }
-        var timedOut = false
-        if exited.wait(timeout: .now() + max(0, timeout)) == .timedOut {
-            timedOut = true
-            process.terminate()
-            if exited.wait(timeout: .now() + 1) == .timedOut {
-                kill(process.processIdentifier, SIGKILL)
-                _ = exited.wait(timeout: .now() + 1)
-            }
-        }
-        // A descendant left running can hold the pipes open; do not wait on it.
-        if drained.wait(timeout: .now() + 2) == .timedOut {
-            timedOut = true
-            out.fileHandleForReading.readabilityHandler = nil
-            err.fileHandleForReading.readabilityHandler = nil
-        }
-        let status = process.isRunning ? -1 : process.terminationStatus
-        return Outcome(status: status, stdout: outBuffer.data, stderr: errBuffer.data,
-                       timedOut: timedOut, overflow: outBuffer.overflow)
-    }
-
-    private final class Capped: @unchecked Sendable {
-        private let lock = NSLock()
-        private let cap: Int
-        private var stored = Data()
-        private var over = false
-        private var done = false
-        init(cap: Int) { self.cap = cap }
-
-        func append(_ chunk: Data) {
-            lock.lock(); defer { lock.unlock() }
-            let room = cap - stored.count
-            if chunk.count > room { over = true }
-            if room > 0 { stored.append(chunk.prefix(room)) }
-        }
-
-        /// True exactly once, on the first end of file.
-        func finish() -> Bool {
-            lock.lock(); defer { lock.unlock() }
-            if done { return false }
-            done = true
-            return true
-        }
-
-        var data: Data { lock.lock(); defer { lock.unlock() }; return stored }
-        var overflow: Bool { lock.lock(); defer { lock.unlock() }; return over }
+        let spec = Subprocess.Spec(executable, arguments, environment: environment, directory: "/")
+        let outcome = Subprocess.runBlocking(spec, stdout: .capture(cap: cap), stderr: .capture(cap: 64 * 1024),
+                                             timeout: timeout)
+        guard outcome.started else { return nil }
+        // A descendant left running can hold the pipes open (`leaked`): the
+        // output may be cut short, which callers treat like a timeout.
+        return Outcome(status: outcome.status, stdout: outcome.stdout, stderr: outcome.stderr,
+                       timedOut: outcome.timedOut || outcome.leaked, overflow: outcome.overflow)
     }
 }

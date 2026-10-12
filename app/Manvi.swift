@@ -189,6 +189,12 @@ nonisolated enum Manvi {
     /// message when the request is refused.
     static func claudeModels(key: String, workspace: String?, baseURL: String?) async throws -> [CloudModel] {
         var base = (baseURL ?? "https://api.anthropic.com").trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+        // The key goes in a header of every request below, so the shell's
+        // ANTHROPIC_BASE_URL gets the same https-or-loopback rule as a
+        // custom provider's.
+        if case .failure(let problem) = ProviderURL.validate(base) {
+            throw ModelListError(message: problem.errorDescription ?? "ANTHROPIC_BASE_URL is not allowed")
+        }
         if !base.hasSuffix("/v1") { base += "/v1" }
         var models: [CloudModel] = []
         var after: String?
@@ -201,7 +207,7 @@ nonisolated enum Manvi {
             request.setValue(key, forHTTPHeaderField: "x-api-key")
             request.setValue("2023-06-01", forHTTPHeaderField: "anthropic-version")
             if let workspace { request.setValue(workspace, forHTTPHeaderField: "anthropic-workspace-id") }
-            let (data, response) = try await URLSession.shared.data(for: request)
+            let (data, response) = try await ProviderHTTP.data(for: request)
             let page = try parseClaudeModels(data, status: (response as? HTTPURLResponse)?.statusCode ?? 0)
             models += page.models
             guard page.more, let last = page.models.last?.id else { break }
@@ -311,15 +317,14 @@ nonisolated enum Manvi {
     /// Models the local servers offer, through `manvi serve`'s `local.scan`
     /// (the only JSON listing MANVI has). Empty when none answer.
     static func localModels(path: String, envPath: String, shell: [String: String]) async -> [String] {
-        await Task.detached(priority: .userInitiated) {
-            let env = environment(base: ProcessInfo.processInfo.environment, path: envPath, shell: shell,
-                                  route: Route(provider: "local", model: nil))
-            let request = #"{"id":"1","op":"hello","params":{"protocol":1}}"# + "\n"
-                + #"{"id":"2","op":"local.scan","params":{}}"# + "\n"
-            let out = AgentLocator.run(path, ["serve"], environment: env, directory: prepared().work,
-                                       input: Data(request.utf8), timeout: 10).out
-            return parseLocalScan(out)
-        }.value
+        let env = environment(base: ProcessInfo.processInfo.environment, path: envPath, shell: shell,
+                              route: Route(provider: "local", model: nil))
+        let request = #"{"id":"1","op":"hello","params":{"protocol":1}}"# + "\n"
+            + #"{"id":"2","op":"local.scan","params":{}}"# + "\n"
+        let spec = Subprocess.Spec(path, ["serve"], environment: env, directory: prepared().work.path,
+                                   input: .data(Data(request.utf8)))
+        let outcome = await Subprocess.run(spec, timeout: 10)
+        return outcome.finished ? parseLocalScan(outcome.output) : []
     }
 
     /// The model ids in a `local.scan` reply, in server order, without repeats.

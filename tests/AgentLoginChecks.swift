@@ -117,6 +117,54 @@ struct AgentLoginChecks {
         precondition(rejectedResult.detail == "sign-in failed",
                      "the CLI's own error is kept, got \(rejectedResult.detail ?? "nil")")
         precondition(rejectedResult.detail?.contains("https://") != true, "the error must not repeat a URL")
+
+        // A grandchild that keeps the terminal open after the CLI exits used to
+        // hold the wait until the grandchild died (group.wait had no bound).
+        let held = OpenBox()
+        let heldStart = Date()
+        let heldResult = await AgentLogin.run(
+            executable: "/bin/sh",
+            arguments: ["-c", "sleep 6 & echo 'https://auth.openai.com/oauth/authorize?held=1'"],
+            environmentPath: "/usr/bin:/bin",
+            currentDirectory: directory,
+            open: { held.add($0) })
+        let heldFor = Date().timeIntervalSince(heldStart)
+        precondition(heldResult.status == 0 && held.urls.count == 1, "the URL was still opened: \(heldResult)")
+        precondition(heldFor < 5, "the wait after exit is bounded, took \(heldFor)s")
+
+        // A sign-in nobody finishes is cut off at the injected limit.
+        let hungStart = Date()
+        let hung = await AgentLogin.run(
+            executable: "/bin/sh", arguments: ["-c", "sleep 30"], environmentPath: "/usr/bin:/bin",
+            currentDirectory: directory, open: { _ in }, timeout: 1)
+        precondition(hung.status == -1 && hung.detail?.contains("timed out") == true, "\(hung)")
+        precondition(Date().timeIntervalSince(hungStart) < 6, "bounded by the injected timeout")
+
+        // Cancelling the task (Cancel in the panel) ends the CLI.
+        let pidFile = URL(fileURLWithPath: directory).appendingPathComponent("login-pid-\(UUID().uuidString)")
+        let cancelled = Task { @MainActor in
+            await AgentLogin.run(
+                executable: "/bin/sh", arguments: ["-c", "echo $$ > \(pidFile.path); exec sleep 60"],
+                environmentPath: "/usr/bin:/bin", currentDirectory: directory, open: { _ in })
+        }
+        var pid: pid_t?
+        for _ in 0..<250 {
+            if let text = try? String(contentsOf: pidFile, encoding: .utf8),
+               let value = pid_t(text.trimmingCharacters(in: .whitespacesAndNewlines)) { pid = value; break }
+            try? await Task.sleep(for: .milliseconds(20))
+        }
+        precondition(pid != nil, "the CLI started")
+        cancelled.cancel()
+        let cancelledResult = await cancelled.value
+        try? FileManager.default.removeItem(at: pidFile)
+        precondition(cancelledResult.status == -1, "\(cancelledResult)")
+        precondition(kill(pid!, 0) == -1 && errno == ESRCH, "the cancelled CLI is gone and reaped")
+
+        // A CLI that is not there fails cleanly.
+        let missing = await AgentLogin.run(
+            executable: directory + "/no-such-cli", arguments: [], environmentPath: "/usr/bin:/bin",
+            currentDirectory: directory, open: { _ in })
+        precondition(missing.status == -1 && missing.detail != nil, "\(missing)")
     }
 }
 
