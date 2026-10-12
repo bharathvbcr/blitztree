@@ -1,180 +1,324 @@
 ### round=1 mode=varied which=base
 Building synthetic tree with 3600000 entries...
 Synthetic tree ready. Benchmarking search queries (min of 5 runs each):
-  'photo'              ->     7.60 ms  ( 359999 matches, top 1000 returned)   473684211 entries/s
-  'entry_0000001'      ->     5.75 ms  (      1 matches, top    1 returned)   625996269 entries/s
-  '*.png'              ->     8.36 ms  ( 327272 matches, top 1000 returned)   430710006 entries/s
-  'entry_*_photo.jpg'  ->     7.66 ms  (  32727 matches, top 1000 returned)   470065940 entries/s
-  '*münchen*'          ->    16.13 ms  ( 327272 matches, top 1000 returned)   223174502 entries/s
-  '東京*'                ->    12.39 ms  (      0 matches, top    0 returned)   290576437 entries/s
+  'photo'              ->    72.27 ms  ( 359999 matches, top 1000 returned)    49811506 entries/s
+  'entry_0000001'      ->    62.76 ms  (      1 matches, top    1 returned)    57358749 entries/s
+  '*.png'              ->    84.34 ms  ( 327272 matches, top 1000 returned)    42685870 entries/s
+  'entry_*_photo.jpg'  ->    88.90 ms  (  32727 matches, top 1000 returned)    40493553 entries/s
+  '*münchen*'          ->   207.21 ms  ( 327272 matches, top 1000 returned)    17373899 entries/s
+  '東京*'                ->   175.23 ms  (      0 matches, top    0 returned)    20544545 entries/s
 ### round=1 mode=varied which=new
 Building synthetic tree with 3600000 entries...
 Synthetic tree ready. Benchmarking search queries (min of 5 runs each):
-  'photo'              ->     7.80 ms  ( 359999 matches, top 1000 returned)   461794995 entries/s
-  'entry_0000001'      ->     5.80 ms  (      1 matches, top    1 returned)   620658408 entries/s
-  '*.png'              ->     7.87 ms  ( 327272 matches, top 1000 returned)   457392143 entries/s
-  'entry_*_photo.jpg'  ->     7.46 ms  (  32727 matches, top 1000 returned)   482635706 entries/s
-  '*münchen*'          ->    16.03 ms  ( 327272 matches, top 1000 returned)   224637884 entries/s
-  '東京*'                ->    12.77 ms  (      0 matches, top    0 returned)   281908874 entries/s
+  'photo'              ->    81.64 ms  ( 359999 matches, top 1000 returned)    44098304 entries/s
+  'entry_0000001'      ->    71.80 ms  (      1 matches, top    1 returned)    50139043 entries/s
+  '*.png'              ->    92.79 ms  ( 327272 matches, top 1000 returned)    38797075 entries/s
+  'entry_*_photo.jpg'  ->    91.83 ms  (  32727 matches, top 1000 returned)    39202608 entries/s
+  '*münchen*'          ->   201.18 ms  ( 327272 matches, top 1000 returned)    17894638 entries/s
+  '東京*'                ->   165.48 ms  (      0 matches, top    0 returned)    21754692 entries/s
 ### round=1 mode=ties which=base
 Building synthetic tree with 3600000 entries...
 Synthetic tree ready. Benchmarking search queries (min of 5 runs each):
-  'photo'              ->     6.89 ms  ( 359999 matches, top 1000 returned)   522275257 entries/s
-  'entry_0000001'      ->     5.89 ms  (      1 matches, top    1 returned)   611110291 entries/s
-  '*.png'              ->     7.80 ms  ( 327272 matches, top 1000 returned)   461442328 entries/s
-  'entry_*_photo.jpg'  ->     7.96 ms  (  32727 matches, top 1000 returned)   452325234 entries/s
-  '*münchen*'          ->    15.29 ms  ( 327272 matches, top 1000 returned)   235425540 entries/s
-  '東京*'                ->    13.74 ms  (      0 matches, top    0 returned)   262004767 entries/s
+  'photo'              ->    69.56 ms  ( 359999 matches, top 1000 returned)    51751339 entries/s
+  'entry_0000001'      ->    61.27 ms  (      1 matches, top    1 returned)    58754407 entries/s
+  '*.png'              ->    76.55 ms  ( 327272 matches, top 1000 returned)    47026960 entries/s
+  'entry_*_photo.jpg'  ->    86.84 ms  (  32727 matches, top 1000 returned)    41453721 entries/s
+  '*münchen*'          ->   196.90 ms  ( 327272 matches, top 1000 returned)    18282959 entries/s
+  '東京*'                ->   189.39 ms  (      0 matches, top    0 returned)    19008893 entries/s
 ### round=1 mode=ties which=new
 Building synthetic tree with 3600000 entries...
 Synthetic tree ready. Benchmarking search queries (min of 5 runs each):
-  'photo'              ->     6.97 ms  ( 359999 matches, top 1000 returned)   516693877 entries/s
-  'entry_0000001'      ->     5.62 ms  (      1 matches, top    1 returned)   640631178 entries/s
-  '*.png'              ->     6.94 ms  ( 327272 matches, top 1000 returned)   518679074 entries/s
-  'entry_*_photo.jpg'  ->     7.81 ms  (  32727 matches, top 1000 returned)   460696804 entries/s
-  '*münchen*'          ->    15.82 ms  ( 327272 matches, top 1000 returned)   227572638 entries/s
-  '東京*'                ->    13.40 ms  (      0 matches, top    0 returned)   268624141 entries/s
+  'photo'              ->    76.11 ms  ( 359999 matches, top 1000 returned)    47297578 entries/s
+  'entry_0000001'      ->    72.30 ms  (      1 matches, top    1 returned)    49794798 entries/s
+  '*.png'              ->    82.45 ms  ( 327272 matches, top 1000 returned)    43661216 entries/s
+  'entry_*_photo.jpg'  ->    88.42 ms  (  32727 matches, top 1000 returned)    40715538 entries/s
+  '*münchen*'          ->   199.17 ms  ( 327272 matches, top 1000 returned)    18075200 entries/s
+  '東京*'                ->   170.93 ms  (      0 matches, top    0 returned)    21061689 entries/s
 ### round=2 mode=varied which=base
 Building synthetic tree with 3600000 entries...
 Synthetic tree ready. Benchmarking search queries (min of 5 runs each):
-  'photo'              ->     7.46 ms  ( 359999 matches, top 1000 returned)   482646512 entries/s
-  'entry_0000001'      ->     6.38 ms  (      1 matches, top    1 returned)   564480798 entries/s
-  '*.png'              ->     9.36 ms  ( 327272 matches, top 1000 returned)   384704409 entries/s
-  'entry_*_photo.jpg'  ->     9.28 ms  (  32727 matches, top 1000 returned)   388086102 entries/s
-  '*münchen*'          ->    20.13 ms  ( 327272 matches, top 1000 returned)   178872362 entries/s
-  '東京*'                ->    13.52 ms  (      0 matches, top    0 returned)   266186880 entries/s
+  'photo'              ->    73.43 ms  ( 359999 matches, top 1000 returned)    49025088 entries/s
+  'entry_0000001'      ->    63.30 ms  (      1 matches, top    1 returned)    56873760 entries/s
+  '*.png'              ->    83.15 ms  ( 327272 matches, top 1000 returned)    43294078 entries/s
+  'entry_*_photo.jpg'  ->    95.92 ms  (  32727 matches, top 1000 returned)    37530852 entries/s
+  '*münchen*'          ->   221.11 ms  ( 327272 matches, top 1000 returned)    16281305 entries/s
+  '東京*'                ->   177.80 ms  (      0 matches, top    0 returned)    20247033 entries/s
 ### round=2 mode=varied which=new
 Building synthetic tree with 3600000 entries...
 Synthetic tree ready. Benchmarking search queries (min of 5 runs each):
-  'photo'              ->     9.03 ms  ( 359999 matches, top 1000 returned)   398540545 entries/s
-  'entry_0000001'      ->     5.65 ms  (      1 matches, top    1 returned)   637671281 entries/s
-  '*.png'              ->     8.07 ms  ( 327272 matches, top 1000 returned)   446280973 entries/s
-  'entry_*_photo.jpg'  ->     7.15 ms  (  32727 matches, top 1000 returned)   503669653 entries/s
-  '*münchen*'          ->    14.43 ms  ( 327272 matches, top 1000 returned)   249419044 entries/s
-  '東京*'                ->    11.52 ms  (      0 matches, top    0 returned)   312608545 entries/s
+  'photo'              ->    75.50 ms  ( 359999 matches, top 1000 returned)    47680329 entries/s
+  'entry_0000001'      ->    64.73 ms  (      1 matches, top    1 returned)    55616171 entries/s
+  '*.png'              ->    85.55 ms  ( 327272 matches, top 1000 returned)    42082540 entries/s
+  'entry_*_photo.jpg'  ->    87.90 ms  (  32727 matches, top 1000 returned)    40957573 entries/s
+  '*münchen*'          ->   201.15 ms  ( 327272 matches, top 1000 returned)    17896880 entries/s
+  '東京*'                ->   170.96 ms  (      0 matches, top    0 returned)    21056998 entries/s
 ### round=2 mode=ties which=base
 Building synthetic tree with 3600000 entries...
 Synthetic tree ready. Benchmarking search queries (min of 5 runs each):
-  'photo'              ->     6.66 ms  ( 359999 matches, top 1000 returned)   540253217 entries/s
-  'entry_0000001'      ->     5.46 ms  (      1 matches, top    1 returned)   659053983 entries/s
-  '*.png'              ->     6.93 ms  ( 327272 matches, top 1000 returned)   519836829 entries/s
-  'entry_*_photo.jpg'  ->     7.38 ms  (  32727 matches, top 1000 returned)   487540628 entries/s
-  '*münchen*'          ->    14.45 ms  ( 327272 matches, top 1000 returned)   249094714 entries/s
-  '東京*'                ->    11.80 ms  (      0 matches, top    0 returned)   305139697 entries/s
+  'photo'              ->    69.58 ms  ( 359999 matches, top 1000 returned)    51742196 entries/s
+  'entry_0000001'      ->    61.85 ms  (      1 matches, top    1 returned)    58206512 entries/s
+  '*.png'              ->    76.94 ms  ( 327272 matches, top 1000 returned)    46792519 entries/s
+  'entry_*_photo.jpg'  ->    88.89 ms  (  32727 matches, top 1000 returned)    40497823 entries/s
+  '*münchen*'          ->   211.49 ms  ( 327272 matches, top 1000 returned)    17021884 entries/s
+  '東京*'                ->   179.32 ms  (      0 matches, top    0 returned)    20076369 entries/s
 ### round=2 mode=ties which=new
 Building synthetic tree with 3600000 entries...
 Synthetic tree ready. Benchmarking search queries (min of 5 runs each):
-  'photo'              ->     6.71 ms  ( 359999 matches, top 1000 returned)   536849339 entries/s
-  'entry_0000001'      ->     5.58 ms  (      1 matches, top    1 returned)   644968609 entries/s
-  '*.png'              ->     6.80 ms  ( 327272 matches, top 1000 returned)   529606473 entries/s
-  'entry_*_photo.jpg'  ->     7.15 ms  (  32727 matches, top 1000 returned)   503305881 entries/s
-  '*münchen*'          ->    14.03 ms  ( 327272 matches, top 1000 returned)   256570156 entries/s
-  '東京*'                ->    11.22 ms  (      0 matches, top    0 returned)   320756758 entries/s
+  'photo'              ->    71.81 ms  ( 359999 matches, top 1000 returned)    50132497 entries/s
+  'entry_0000001'      ->    68.77 ms  (      1 matches, top    1 returned)    52351230 entries/s
+  '*.png'              ->    93.82 ms  ( 327272 matches, top 1000 returned)    38370463 entries/s
+  'entry_*_photo.jpg'  ->   103.36 ms  (  32727 matches, top 1000 returned)    34829876 entries/s
+  '*münchen*'          ->   222.27 ms  ( 327272 matches, top 1000 returned)    16196806 entries/s
+  '東京*'                ->   204.43 ms  (      0 matches, top    0 returned)    17609987 entries/s
 ### round=3 mode=varied which=base
 Building synthetic tree with 3600000 entries...
 Synthetic tree ready. Benchmarking search queries (min of 5 runs each):
-  'photo'              ->     7.47 ms  ( 359999 matches, top 1000 returned)   482051418 entries/s
-  'entry_0000001'      ->     5.34 ms  (      1 matches, top    1 returned)   673999532 entries/s
-  '*.png'              ->     7.29 ms  ( 327272 matches, top 1000 returned)   494140659 entries/s
-  'entry_*_photo.jpg'  ->     7.21 ms  (  32727 matches, top 1000 returned)   499046959 entries/s
-  '*münchen*'          ->    15.28 ms  ( 327272 matches, top 1000 returned)   235628448 entries/s
-  '東京*'                ->    12.37 ms  (      0 matches, top    0 returned)   290994332 entries/s
+  'photo'              ->   104.42 ms  ( 359999 matches, top 1000 returned)    34477653 entries/s
+  'entry_0000001'      ->    89.57 ms  (      1 matches, top    1 returned)    40194085 entries/s
+  '*.png'              ->   113.85 ms  ( 327272 matches, top 1000 returned)    31619801 entries/s
+  'entry_*_photo.jpg'  ->   116.11 ms  (  32727 matches, top 1000 returned)    31004681 entries/s
+  '*münchen*'          ->   231.65 ms  ( 327272 matches, top 1000 returned)    15540781 entries/s
+  '東京*'                ->   187.72 ms  (      0 matches, top    0 returned)    19177792 entries/s
 ### round=3 mode=varied which=new
 Building synthetic tree with 3600000 entries...
 Synthetic tree ready. Benchmarking search queries (min of 5 runs each):
-  'photo'              ->     6.95 ms  ( 359999 matches, top 1000 returned)   517824155 entries/s
-  'entry_0000001'      ->     5.58 ms  (      1 matches, top    1 returned)   645344369 entries/s
-  '*.png'              ->     7.67 ms  ( 327272 matches, top 1000 returned)   469521838 entries/s
-  'entry_*_photo.jpg'  ->     7.39 ms  (  32727 matches, top 1000 returned)   486908715 entries/s
-  '*münchen*'          ->    14.59 ms  ( 327272 matches, top 1000 returned)   246738004 entries/s
-  '東京*'                ->    12.26 ms  (      0 matches, top    0 returned)   293749668 entries/s
+  'photo'              ->   105.73 ms  ( 359999 matches, top 1000 returned)    34047638 entries/s
+  'entry_0000001'      ->    91.44 ms  (      1 matches, top    1 returned)    39370796 entries/s
+  '*.png'              ->   111.55 ms  ( 327272 matches, top 1000 returned)    32271149 entries/s
+  'entry_*_photo.jpg'  ->   119.78 ms  (  32727 matches, top 1000 returned)    30054139 entries/s
+  '*münchen*'          ->   237.29 ms  ( 327272 matches, top 1000 returned)    15171616 entries/s
+  '東京*'                ->   185.23 ms  (      0 matches, top    0 returned)    19434890 entries/s
 ### round=3 mode=ties which=base
 Building synthetic tree with 3600000 entries...
 Synthetic tree ready. Benchmarking search queries (min of 5 runs each):
-  'photo'              ->     6.57 ms  ( 359999 matches, top 1000 returned)   548233842 entries/s
-  'entry_0000001'      ->     5.42 ms  (      1 matches, top    1 returned)   663599608 entries/s
-  '*.png'              ->     7.24 ms  ( 327272 matches, top 1000 returned)   496948735 entries/s
-  'entry_*_photo.jpg'  ->     7.37 ms  (  32727 matches, top 1000 returned)   488792862 entries/s
-  '*münchen*'          ->    14.14 ms  ( 327272 matches, top 1000 returned)   254654663 entries/s
-  '東京*'                ->    11.75 ms  (      0 matches, top    0 returned)   306439494 entries/s
+  'photo'              ->    75.27 ms  ( 359999 matches, top 1000 returned)    47828270 entries/s
+  'entry_0000001'      ->    67.89 ms  (      1 matches, top    1 returned)    53029592 entries/s
+  '*.png'              ->    84.65 ms  ( 327272 matches, top 1000 returned)    42527156 entries/s
+  'entry_*_photo.jpg'  ->    95.85 ms  (  32727 matches, top 1000 returned)    37558767 entries/s
+  '*münchen*'          ->   206.89 ms  ( 327272 matches, top 1000 returned)    17400488 entries/s
+  '東京*'                ->   181.17 ms  (      0 matches, top    0 returned)    19871114 entries/s
 ### round=3 mode=ties which=new
 Building synthetic tree with 3600000 entries...
 Synthetic tree ready. Benchmarking search queries (min of 5 runs each):
-  'photo'              ->     6.93 ms  ( 359999 matches, top 1000 returned)   519374321 entries/s
-  'entry_0000001'      ->     5.61 ms  (      1 matches, top    1 returned)   641501627 entries/s
-  '*.png'              ->     7.12 ms  ( 327272 matches, top 1000 returned)   505724521 entries/s
-  'entry_*_photo.jpg'  ->     7.27 ms  (  32727 matches, top 1000 returned)   495100567 entries/s
-  '*münchen*'          ->    13.66 ms  ( 327272 matches, top 1000 returned)   263606720 entries/s
-  '東京*'                ->    11.75 ms  (      0 matches, top    0 returned)   306396017 entries/s
+  'photo'              ->    71.46 ms  ( 359999 matches, top 1000 returned)    50380772 entries/s
+  'entry_0000001'      ->    63.51 ms  (      1 matches, top    1 returned)    56683615 entries/s
+  '*.png'              ->    79.09 ms  ( 327272 matches, top 1000 returned)    45517333 entries/s
+  'entry_*_photo.jpg'  ->   102.22 ms  (  32727 matches, top 1000 returned)    35217425 entries/s
+  '*münchen*'          ->   230.03 ms  ( 327272 matches, top 1000 returned)    15649980 entries/s
+  '東京*'                ->   186.01 ms  (      0 matches, top    0 returned)    19354171 entries/s
 ### round=4 mode=varied which=base
 Building synthetic tree with 3600000 entries...
 Synthetic tree ready. Benchmarking search queries (min of 5 runs each):
-  'photo'              ->     7.01 ms  ( 359999 matches, top 1000 returned)   513405590 entries/s
-  'entry_0000001'      ->     5.15 ms  (      1 matches, top    1 returned)   699232786 entries/s
-  '*.png'              ->     7.33 ms  ( 327272 matches, top 1000 returned)   490881200 entries/s
-  'entry_*_photo.jpg'  ->     6.88 ms  (  32727 matches, top 1000 returned)   523021443 entries/s
-  '*münchen*'          ->    15.09 ms  ( 327272 matches, top 1000 returned)   238615363 entries/s
-  '東京*'                ->    11.31 ms  (      0 matches, top    0 returned)   318366905 entries/s
+  'photo'              ->    79.59 ms  ( 359999 matches, top 1000 returned)    45230605 entries/s
+  'entry_0000001'      ->    70.70 ms  (      1 matches, top    1 returned)    50921598 entries/s
+  '*.png'              ->    86.89 ms  ( 327272 matches, top 1000 returned)    41434060 entries/s
+  'entry_*_photo.jpg'  ->    91.12 ms  (  32727 matches, top 1000 returned)    39506281 entries/s
+  '*münchen*'          ->   211.13 ms  ( 327272 matches, top 1000 returned)    17051456 entries/s
+  '東京*'                ->   179.36 ms  (      0 matches, top    0 returned)    20071034 entries/s
 ### round=4 mode=varied which=new
 Building synthetic tree with 3600000 entries...
 Synthetic tree ready. Benchmarking search queries (min of 5 runs each):
-  'photo'              ->     7.32 ms  ( 359999 matches, top 1000 returned)   491509514 entries/s
-  'entry_0000001'      ->     5.11 ms  (      1 matches, top    1 returned)   703823738 entries/s
-  '*.png'              ->     7.45 ms  ( 327272 matches, top 1000 returned)   483078239 entries/s
-  'entry_*_photo.jpg'  ->     6.77 ms  (  32727 matches, top 1000 returned)   532140943 entries/s
-  '*münchen*'          ->    14.76 ms  ( 327272 matches, top 1000 returned)   243980956 entries/s
-  '東京*'                ->    12.06 ms  (      0 matches, top    0 returned)   298427041 entries/s
+  'photo'              ->    79.95 ms  ( 359999 matches, top 1000 returned)    45026664 entries/s
+  'entry_0000001'      ->    64.84 ms  (      1 matches, top    1 returned)    55520783 entries/s
+  '*.png'              ->    87.29 ms  ( 327272 matches, top 1000 returned)    41242330 entries/s
+  'entry_*_photo.jpg'  ->    95.30 ms  (  32727 matches, top 1000 returned)    37775248 entries/s
+  '*münchen*'          ->   221.31 ms  ( 327272 matches, top 1000 returned)    16266726 entries/s
+  '東京*'                ->   183.67 ms  (      0 matches, top    0 returned)    19600819 entries/s
 ### round=4 mode=ties which=base
 Building synthetic tree with 3600000 entries...
 Synthetic tree ready. Benchmarking search queries (min of 5 runs each):
-  'photo'              ->     6.67 ms  ( 359999 matches, top 1000 returned)   539780714 entries/s
-  'entry_0000001'      ->     5.42 ms  (      1 matches, top    1 returned)   664743220 entries/s
-  '*.png'              ->     6.95 ms  ( 327272 matches, top 1000 returned)   517954534 entries/s
-  'entry_*_photo.jpg'  ->     6.80 ms  (  32727 matches, top 1000 returned)   529327384 entries/s
-  '*münchen*'          ->    13.71 ms  ( 327272 matches, top 1000 returned)   262523827 entries/s
-  '東京*'                ->    11.91 ms  (      0 matches, top    0 returned)   302242666 entries/s
+  'photo'              ->    79.48 ms  ( 359999 matches, top 1000 returned)    45296622 entries/s
+  'entry_0000001'      ->    79.01 ms  (      1 matches, top    1 returned)    45562651 entries/s
+  '*.png'              ->    90.33 ms  ( 327272 matches, top 1000 returned)    39852270 entries/s
+  'entry_*_photo.jpg'  ->    98.12 ms  (  32727 matches, top 1000 returned)    36688708 entries/s
+  '*münchen*'          ->   213.28 ms  ( 327272 matches, top 1000 returned)    16879236 entries/s
+  '東京*'                ->   178.69 ms  (      0 matches, top    0 returned)    20146613 entries/s
 ### round=4 mode=ties which=new
 Building synthetic tree with 3600000 entries...
 Synthetic tree ready. Benchmarking search queries (min of 5 runs each):
-  'photo'              ->     9.75 ms  ( 359999 matches, top 1000 returned)   369120374 entries/s
-  'entry_0000001'      ->     8.17 ms  (      1 matches, top    1 returned)   440748847 entries/s
-  '*.png'              ->    11.70 ms  ( 327272 matches, top 1000 returned)   307580580 entries/s
-  'entry_*_photo.jpg'  ->     9.57 ms  (  32727 matches, top 1000 returned)   376085477 entries/s
-  '*münchen*'          ->    17.99 ms  ( 327272 matches, top 1000 returned)   200112096 entries/s
-  '東京*'                ->    13.23 ms  (      0 matches, top    0 returned)   272094282 entries/s
+  'photo'              ->    73.22 ms  ( 359999 matches, top 1000 returned)    49167930 entries/s
+  'entry_0000001'      ->    70.90 ms  (      1 matches, top    1 returned)    50777232 entries/s
+  '*.png'              ->    86.79 ms  ( 327272 matches, top 1000 returned)    41477959 entries/s
+  'entry_*_photo.jpg'  ->    97.53 ms  (  32727 matches, top 1000 returned)    36911514 entries/s
+  '*münchen*'          ->   217.97 ms  ( 327272 matches, top 1000 returned)    16515747 entries/s
+  '東京*'                ->   183.64 ms  (      0 matches, top    0 returned)    19603279 entries/s
 ### round=5 mode=varied which=base
 Building synthetic tree with 3600000 entries...
 Synthetic tree ready. Benchmarking search queries (min of 5 runs each):
-  'photo'              ->     8.00 ms  ( 359999 matches, top 1000 returned)   449918002 entries/s
-  'entry_0000001'      ->     5.61 ms  (      1 matches, top    1 returned)   641154077 entries/s
-  '*.png'              ->     7.70 ms  ( 327272 matches, top 1000 returned)   467707098 entries/s
-  'entry_*_photo.jpg'  ->     7.77 ms  (  32727 matches, top 1000 returned)   463295599 entries/s
-  '*münchen*'          ->    15.23 ms  ( 327272 matches, top 1000 returned)   236424738 entries/s
-  '東京*'                ->    11.98 ms  (      0 matches, top    0 returned)   300585516 entries/s
+  'photo'              ->    76.77 ms  ( 359999 matches, top 1000 returned)    46895659 entries/s
+  'entry_0000001'      ->    66.56 ms  (      1 matches, top    1 returned)    54088367 entries/s
+  '*.png'              ->   104.64 ms  ( 327272 matches, top 1000 returned)    34402492 entries/s
+  'entry_*_photo.jpg'  ->   128.19 ms  (  32727 matches, top 1000 returned)    28083697 entries/s
+  '*münchen*'          ->   240.91 ms  ( 327272 matches, top 1000 returned)    14943097 entries/s
+  '東京*'                ->   199.48 ms  (      0 matches, top    0 returned)    18046907 entries/s
 ### round=5 mode=varied which=new
 Building synthetic tree with 3600000 entries...
 Synthetic tree ready. Benchmarking search queries (min of 5 runs each):
-  'photo'              ->     7.05 ms  ( 359999 matches, top 1000 returned)   510680601 entries/s
-  'entry_0000001'      ->     5.51 ms  (      1 matches, top    1 returned)   653006970 entries/s
-  '*.png'              ->     7.67 ms  ( 327272 matches, top 1000 returned)   469363718 entries/s
-  'entry_*_photo.jpg'  ->     7.25 ms  (  32727 matches, top 1000 returned)   496834406 entries/s
-  '*münchen*'          ->    15.83 ms  ( 327272 matches, top 1000 returned)   227365439 entries/s
-  '東京*'                ->    12.63 ms  (      0 matches, top    0 returned)   285111817 entries/s
+  'photo'              ->   113.39 ms  ( 359999 matches, top 1000 returned)    31747560 entries/s
+  'entry_0000001'      ->    97.67 ms  (      1 matches, top    1 returned)    36857065 entries/s
+  '*.png'              ->   115.00 ms  ( 327272 matches, top 1000 returned)    31304790 entries/s
+  'entry_*_photo.jpg'  ->   135.24 ms  (  32727 matches, top 1000 returned)    26618942 entries/s
+  '*münchen*'          ->   266.14 ms  ( 327272 matches, top 1000 returned)    13526923 entries/s
+  '東京*'                ->   192.50 ms  (      0 matches, top    0 returned)    18701254 entries/s
 ### round=5 mode=ties which=base
 Building synthetic tree with 3600000 entries...
 Synthetic tree ready. Benchmarking search queries (min of 5 runs each):
-  'photo'              ->     6.74 ms  ( 359999 matches, top 1000 returned)   534372391 entries/s
-  'entry_0000001'      ->     5.39 ms  (      1 matches, top    1 returned)   667929300 entries/s
-  '*.png'              ->     7.05 ms  ( 327272 matches, top 1000 returned)   510813424 entries/s
-  'entry_*_photo.jpg'  ->     7.76 ms  (  32727 matches, top 1000 returned)   464171744 entries/s
-  '*münchen*'          ->    14.70 ms  ( 327272 matches, top 1000 returned)   244889630 entries/s
-  '東京*'                ->    11.97 ms  (      0 matches, top    0 returned)   300630472 entries/s
+  'photo'              ->   105.65 ms  ( 359999 matches, top 1000 returned)    34075138 entries/s
+  'entry_0000001'      ->    91.47 ms  (      1 matches, top    1 returned)    39358547 entries/s
+  '*.png'              ->   109.86 ms  ( 327272 matches, top 1000 returned)    32767835 entries/s
+  'entry_*_photo.jpg'  ->   114.37 ms  (  32727 matches, top 1000 returned)    31476167 entries/s
+  '*münchen*'          ->   218.82 ms  ( 327272 matches, top 1000 returned)    16451847 entries/s
+  '東京*'                ->   188.44 ms  (      0 matches, top    0 returned)    19104228 entries/s
 ### round=5 mode=ties which=new
 Building synthetic tree with 3600000 entries...
 Synthetic tree ready. Benchmarking search queries (min of 5 runs each):
-  'photo'              ->     6.85 ms  ( 359999 matches, top 1000 returned)   525700935 entries/s
-  'entry_0000001'      ->     5.06 ms  (      1 matches, top    1 returned)   711608991 entries/s
-  '*.png'              ->     6.78 ms  ( 327272 matches, top 1000 returned)   530621269 entries/s
-  'entry_*_photo.jpg'  ->     6.80 ms  (  32727 matches, top 1000 returned)   529424767 entries/s
-  '*münchen*'          ->    14.02 ms  ( 327272 matches, top 1000 returned)   256695931 entries/s
-  '東京*'                ->    12.41 ms  (      0 matches, top    0 returned)   290002969 entries/s
+  'photo'              ->    98.23 ms  ( 359999 matches, top 1000 returned)    36649070 entries/s
+  'entry_0000001'      ->    75.78 ms  (      1 matches, top    1 returned)    47504946 entries/s
+  '*.png'              ->    86.52 ms  ( 327272 matches, top 1000 returned)    41607454 entries/s
+  'entry_*_photo.jpg'  ->    97.63 ms  (  32727 matches, top 1000 returned)    36873377 entries/s
+  '*münchen*'          ->   223.33 ms  ( 327272 matches, top 1000 returned)    16119866 entries/s
+  '東京*'                ->   195.59 ms  (      0 matches, top    0 returned)    18405727 entries/s
+### round=6 mode=varied which=base
+Building synthetic tree with 3600000 entries...
+Synthetic tree ready. Benchmarking search queries (min of 5 runs each):
+  'photo'              ->    86.77 ms  ( 359999 matches, top 1000 returned)    41487360 entries/s
+  'entry_0000001'      ->    70.12 ms  (      1 matches, top    1 returned)    51338972 entries/s
+  '*.png'              ->    90.02 ms  ( 327272 matches, top 1000 returned)    39991798 entries/s
+  'entry_*_photo.jpg'  ->   106.11 ms  (  32727 matches, top 1000 returned)    33928309 entries/s
+  '*münchen*'          ->   230.78 ms  ( 327272 matches, top 1000 returned)    15599404 entries/s
+  '東京*'                ->   189.42 ms  (      0 matches, top    0 returned)    19004937 entries/s
+### round=6 mode=varied which=new
+Building synthetic tree with 3600000 entries...
+Synthetic tree ready. Benchmarking search queries (min of 5 runs each):
+  'photo'              ->    95.12 ms  ( 359999 matches, top 1000 returned)    37848539 entries/s
+  'entry_0000001'      ->    76.88 ms  (      1 matches, top    1 returned)    46828939 entries/s
+  '*.png'              ->    92.45 ms  ( 327272 matches, top 1000 returned)    38940353 entries/s
+  'entry_*_photo.jpg'  ->   100.00 ms  (  32727 matches, top 1000 returned)    35999430 entries/s
+  '*münchen*'          ->   230.09 ms  ( 327272 matches, top 1000 returned)    15645981 entries/s
+  '東京*'                ->   182.09 ms  (      0 matches, top    0 returned)    19770787 entries/s
+### round=6 mode=ties which=base
+Building synthetic tree with 3600000 entries...
+Synthetic tree ready. Benchmarking search queries (min of 5 runs each):
+  'photo'              ->    75.16 ms  ( 359999 matches, top 1000 returned)    47899810 entries/s
+  'entry_0000001'      ->    69.43 ms  (      1 matches, top    1 returned)    51851843 entries/s
+  '*.png'              ->    83.42 ms  ( 327272 matches, top 1000 returned)    43152963 entries/s
+  'entry_*_photo.jpg'  ->    96.50 ms  (  32727 matches, top 1000 returned)    37305103 entries/s
+  '*münchen*'          ->   215.17 ms  ( 327272 matches, top 1000 returned)    16730827 entries/s
+  '東京*'                ->   184.93 ms  (      0 matches, top    0 returned)    19467242 entries/s
+### round=6 mode=ties which=new
+Building synthetic tree with 3600000 entries...
+Synthetic tree ready. Benchmarking search queries (min of 5 runs each):
+  'photo'              ->    81.26 ms  ( 359999 matches, top 1000 returned)    44300877 entries/s
+  'entry_0000001'      ->    73.68 ms  (      1 matches, top    1 returned)    48861510 entries/s
+  '*.png'              ->    85.51 ms  ( 327272 matches, top 1000 returned)    42101878 entries/s
+  'entry_*_photo.jpg'  ->    95.68 ms  (  32727 matches, top 1000 returned)    37625467 entries/s
+  '*münchen*'          ->   220.30 ms  ( 327272 matches, top 1000 returned)    16341659 entries/s
+  '東京*'                ->   189.33 ms  (      0 matches, top    0 returned)    19014361 entries/s
+### round=7 mode=varied which=base
+Building synthetic tree with 3600000 entries...
+Synthetic tree ready. Benchmarking search queries (min of 5 runs each):
+  'photo'              ->   105.17 ms  ( 359999 matches, top 1000 returned)    34231718 entries/s
+  'entry_0000001'      ->   131.32 ms  (      1 matches, top    1 returned)    27414690 entries/s
+  '*.png'              ->   108.90 ms  ( 327272 matches, top 1000 returned)    33057940 entries/s
+  'entry_*_photo.jpg'  ->   115.93 ms  (  32727 matches, top 1000 returned)    31053824 entries/s
+  '*münchen*'          ->   225.28 ms  ( 327272 matches, top 1000 returned)    15980016 entries/s
+  '東京*'                ->   188.93 ms  (      0 matches, top    0 returned)    19054180 entries/s
+### round=7 mode=varied which=new
+Building synthetic tree with 3600000 entries...
+Synthetic tree ready. Benchmarking search queries (min of 5 runs each):
+  'photo'              ->    89.28 ms  ( 359999 matches, top 1000 returned)    40324312 entries/s
+  'entry_0000001'      ->    80.11 ms  (      1 matches, top    1 returned)    44935709 entries/s
+  '*.png'              ->   100.11 ms  ( 327272 matches, top 1000 returned)    35961970 entries/s
+  'entry_*_photo.jpg'  ->   107.62 ms  (  32727 matches, top 1000 returned)    33450241 entries/s
+  '*münchen*'          ->   226.24 ms  ( 327272 matches, top 1000 returned)    15912405 entries/s
+  '東京*'                ->   179.96 ms  (      0 matches, top    0 returned)    20004316 entries/s
+### round=7 mode=ties which=base
+Building synthetic tree with 3600000 entries...
+Synthetic tree ready. Benchmarking search queries (min of 5 runs each):
+  'photo'              ->    74.91 ms  ( 359999 matches, top 1000 returned)    48057830 entries/s
+  'entry_0000001'      ->    71.13 ms  (      1 matches, top    1 returned)    50614432 entries/s
+  '*.png'              ->    85.39 ms  ( 327272 matches, top 1000 returned)    42158413 entries/s
+  'entry_*_photo.jpg'  ->    94.07 ms  (  32727 matches, top 1000 returned)    38269069 entries/s
+  '*münchen*'          ->   220.36 ms  ( 327272 matches, top 1000 returned)    16337017 entries/s
+  '東京*'                ->   180.38 ms  (      0 matches, top    0 returned)    19957466 entries/s
+### round=7 mode=ties which=new
+Building synthetic tree with 3600000 entries...
+Synthetic tree ready. Benchmarking search queries (min of 5 runs each):
+  'photo'              ->    76.59 ms  ( 359999 matches, top 1000 returned)    47001480 entries/s
+  'entry_0000001'      ->    65.74 ms  (      1 matches, top    1 returned)    54764304 entries/s
+  '*.png'              ->    84.38 ms  ( 327272 matches, top 1000 returned)    42663843 entries/s
+  'entry_*_photo.jpg'  ->    91.18 ms  (  32727 matches, top 1000 returned)    39480574 entries/s
+  '*münchen*'          ->   209.43 ms  ( 327272 matches, top 1000 returned)    17189538 entries/s
+  '東京*'                ->   187.34 ms  (      0 matches, top    0 returned)    19216317 entries/s
+### round=8 mode=varied which=base
+Building synthetic tree with 3600000 entries...
+Synthetic tree ready. Benchmarking search queries (min of 5 runs each):
+  'photo'              ->    76.80 ms  ( 359999 matches, top 1000 returned)    46873754 entries/s
+  'entry_0000001'      ->    82.98 ms  (      1 matches, top    1 returned)    43381857 entries/s
+  '*.png'              ->   100.64 ms  ( 327272 matches, top 1000 returned)    35771672 entries/s
+  'entry_*_photo.jpg'  ->   103.31 ms  (  32727 matches, top 1000 returned)    34846072 entries/s
+  '*münchen*'          ->   225.61 ms  ( 327272 matches, top 1000 returned)    15957002 entries/s
+  '東京*'                ->   189.49 ms  (      0 matches, top    0 returned)    18997971 entries/s
+### round=8 mode=varied which=new
+Building synthetic tree with 3600000 entries...
+Synthetic tree ready. Benchmarking search queries (min of 5 runs each):
+  'photo'              ->   102.46 ms  ( 359999 matches, top 1000 returned)    35136263 entries/s
+  'entry_0000001'      ->    73.70 ms  (      1 matches, top    1 returned)    48846261 entries/s
+  '*.png'              ->    94.78 ms  ( 327272 matches, top 1000 returned)    37983432 entries/s
+  'entry_*_photo.jpg'  ->   108.46 ms  (  32727 matches, top 1000 returned)    33193120 entries/s
+  '*münchen*'          ->   234.94 ms  ( 327272 matches, top 1000 returned)    15323368 entries/s
+  '東京*'                ->   184.15 ms  (      0 matches, top    0 returned)    19549373 entries/s
+### round=8 mode=ties which=base
+Building synthetic tree with 3600000 entries...
+Synthetic tree ready. Benchmarking search queries (min of 5 runs each):
+  'photo'              ->    92.46 ms  ( 359999 matches, top 1000 returned)    38937265 entries/s
+  'entry_0000001'      ->    87.58 ms  (      1 matches, top    1 returned)    41105647 entries/s
+  '*.png'              ->    97.77 ms  ( 327272 matches, top 1000 returned)    36822146 entries/s
+  'entry_*_photo.jpg'  ->   112.52 ms  (  32727 matches, top 1000 returned)    31995023 entries/s
+  '*münchen*'          ->   221.63 ms  ( 327272 matches, top 1000 returned)    16243401 entries/s
+  '東京*'                ->   189.75 ms  (      0 matches, top    0 returned)    18972236 entries/s
+### round=8 mode=ties which=new
+Building synthetic tree with 3600000 entries...
+Synthetic tree ready. Benchmarking search queries (min of 5 runs each):
+  'photo'              ->    85.13 ms  ( 359999 matches, top 1000 returned)    42287623 entries/s
+  'entry_0000001'      ->    78.33 ms  (      1 matches, top    1 returned)    45958522 entries/s
+  '*.png'              ->    92.65 ms  ( 327272 matches, top 1000 returned)    38857552 entries/s
+  'entry_*_photo.jpg'  ->   105.35 ms  (  32727 matches, top 1000 returned)    34171497 entries/s
+  '*münchen*'          ->   225.62 ms  ( 327272 matches, top 1000 returned)    15955864 entries/s
+  '東京*'                ->   188.72 ms  (      0 matches, top    0 returned)    19076019 entries/s
+### round=9 mode=varied which=base
+Building synthetic tree with 3600000 entries...
+Synthetic tree ready. Benchmarking search queries (min of 5 runs each):
+  'photo'              ->    86.79 ms  ( 359999 matches, top 1000 returned)    41478995 entries/s
+  'entry_0000001'      ->    75.30 ms  (      1 matches, top    1 returned)    47809320 entries/s
+  '*.png'              ->    99.95 ms  ( 327272 matches, top 1000 returned)    36016703 entries/s
+  'entry_*_photo.jpg'  ->   107.14 ms  (  32727 matches, top 1000 returned)    33600988 entries/s
+  '*münchen*'          ->   228.33 ms  ( 327272 matches, top 1000 returned)    15766789 entries/s
+  '東京*'                ->   188.52 ms  (      0 matches, top    0 returned)    19095703 entries/s
+### round=9 mode=varied which=new
+Building synthetic tree with 3600000 entries...
+Synthetic tree ready. Benchmarking search queries (min of 5 runs each):
+  'photo'              ->    85.90 ms  ( 359999 matches, top 1000 returned)    41907794 entries/s
+  'entry_0000001'      ->    73.89 ms  (      1 matches, top    1 returned)    48719286 entries/s
+  '*.png'              ->    94.51 ms  ( 327272 matches, top 1000 returned)    38090569 entries/s
+  'entry_*_photo.jpg'  ->   101.11 ms  (  32727 matches, top 1000 returned)    35605667 entries/s
+  '*münchen*'          ->   223.83 ms  ( 327272 matches, top 1000 returned)    16083563 entries/s
+  '東京*'                ->   187.62 ms  (      0 matches, top    0 returned)    19188176 entries/s
+### round=9 mode=ties which=base
+Building synthetic tree with 3600000 entries...
+Synthetic tree ready. Benchmarking search queries (min of 5 runs each):
+  'photo'              ->    78.27 ms  ( 359999 matches, top 1000 returned)    45996985 entries/s
+  'entry_0000001'      ->    72.76 ms  (      1 matches, top    1 returned)    49479634 entries/s
+  '*.png'              ->    86.70 ms  ( 327272 matches, top 1000 returned)    41520376 entries/s
+  'entry_*_photo.jpg'  ->   101.09 ms  (  32727 matches, top 1000 returned)    35612213 entries/s
+  '*münchen*'          ->   222.42 ms  ( 327272 matches, top 1000 returned)    16185877 entries/s
+  '東京*'                ->   192.13 ms  (      0 matches, top    0 returned)    18737638 entries/s
+### round=9 mode=ties which=new
+Building synthetic tree with 3600000 entries...
+Synthetic tree ready. Benchmarking search queries (min of 5 runs each):
+  'photo'              ->    88.95 ms  ( 359999 matches, top 1000 returned)    40471872 entries/s
+  'entry_0000001'      ->    83.42 ms  (      1 matches, top    1 returned)    43153955 entries/s
+  '*.png'              ->    98.03 ms  ( 327272 matches, top 1000 returned)    36722359 entries/s
+  'entry_*_photo.jpg'  ->   117.37 ms  (  32727 matches, top 1000 returned)    30672527 entries/s
+  '*münchen*'          ->   223.47 ms  ( 327272 matches, top 1000 returned)    16109284 entries/s
+  '東京*'                ->   185.16 ms  (      0 matches, top    0 returned)    19442268 entries/s

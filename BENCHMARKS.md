@@ -107,27 +107,36 @@ which of them came back depended on how the work was split. It now selects
 with `ranking::top_by_alloc`'s ordering (size, then path, then node index; one
 `ranking::TopK` for both callers), so the result is the same on every run.
 
-Before/after, same synthetic 3.6M-entry tree, limit 1,000, M5 Pro (18 cores),
-load from other work present. 12 interleaved base/new process runs per cell,
-each the min of 5 in-process runs; the table shows the min over the 12. An
-A/A control (the base binary against itself, 5 rounds) moved ±2–6%. Base is
-70472bb with only the `BZ_SYNTH_TIES` bench switch added. "varied" is the
-default tree (sizes mostly distinct); "all tied" is `BZ_SYNTH_TIES=1`, every
-entry the same size, so every match reaches the path tie-break:
+The same change rewrote the Unicode lowercasing step the non-ASCII queries
+use (one pass into a stack buffer, heap only past 256 chars) and made the
+matchers generic over the element type.
+
+Before/after: same synthetic 3.6M-entry tree, limit 1,000, one Rayon thread
+(`bench search-synth . 1`), so scheduling does not add noise. 9 interleaved
+base/new process runs per cell, each the min of 5 in-process runs; the table
+shows the min over the 9. The machine was heavily loaded by other work (load
+average 80–160 on 18 cores) so absolute times are inflated and noisy; an A/A
+control (the base binary against itself, same method) moved −6% to +5%. Base
+is 70472bb with only the `BZ_SYNTH_TIES` bench switch added. "varied" is the
+default tree (sizes mostly distinct, ascending, the worst case for heap
+insertion); "all tied" is `BZ_SYNTH_TIES=1`, every entry the same size, so
+every match reaches the path tie-break:
 
 | Query | varied before | varied after | all tied before | all tied after |
 |---|---|---|---|---|
-| `'photo'` | 7.09 ms | 7.75 ms (+9%) | 6.74 ms | 7.39 ms (+10%) |
-| `'entry_0000001'` | 5.43 ms | 5.87 ms (+8%) | 5.43 ms | 5.65 ms (+4%) |
-| `'*.png'` | 7.78 ms | 7.55 ms (-3%) | 6.92 ms | 7.12 ms (+3%) |
-| `'entry_*_photo.jpg'` | 7.39 ms | 7.32 ms (-1%) | 7.19 ms | 7.78 ms (+8%) |
-| `'*münchen*'` | 16.48 ms | 14.31 ms (-13%) | 14.30 ms | 14.53 ms (+2%) |
-| `'東京*'` | 11.74 ms | 11.32 ms (-4%) | 11.52 ms | 11.63 ms (+1%) |
+| `'photo'` | 81.2 ms | 83.8 ms (+3%) | 68.0 ms | 73.8 ms (+9%) |
+| `'entry_0000001'` | 68.2 ms | 64.6 ms (−5%) | 64.1 ms | 63.0 ms (−2%) |
+| `'*.png'` | 90.8 ms | 80.2 ms (−12%) | 80.1 ms | 77.2 ms (−4%) |
+| `'entry_*_photo.jpg'` | 98.8 ms | 77.2 ms (−22%) | 87.7 ms | 84.3 ms (−4%) |
+| `'*münchen*'` | 219.0 ms | 154.8 ms (−29%) | 202.8 ms | 157.9 ms (−22%) |
+| `'東京*'` | 182.9 ms | 118.2 ms (−35%) | 178.8 ms | 122.4 ms (−32%) |
 
-No change beyond noise on wildcard and non-ASCII queries. The ASCII substring
-queries are 4–10% slower (up to ~0.7 ms); the rare-match `'entry_0000001'`
-cell has almost no top-K work, so that part is scan-loop shape, not ranking.
-Absolute latencies are still well inside one 60 Hz frame. Raw output:
+Non-ASCII wildcard queries are 22–35% faster. Everything else is within the
+A/A noise except `'photo'` on the all-tied tree: 360,000 matches that all tie
+and so all go through the path comparison, about +6 ms of 68 ms single
+threaded (roughly 16 ns per match). That cost is the price of a deterministic
+cutoff. In earlier multi-thread runs on this tree (before the lowercasing
+rewrite) the same query was 7.1 vs 7.8 ms. Raw output:
 [benchmarks/results/2026-10-12-search-topk](benchmarks/results/2026-10-12-search-topk).
 
 ## File-type breakdown (WizTree parity)

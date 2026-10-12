@@ -128,17 +128,28 @@ impl QueryMatcher {
         let has_wildcards = q.contains('*') || q.contains('?');
         let is_ascii = q.is_ascii();
 
-        Some(match (has_wildcards, is_ascii) {
-            (false, true) => Self::SubstringAscii {
-                ascii_bytes: q.bytes().map(|b| b.to_ascii_lowercase()).collect(),
-                unicode_chars: lowercase_chars(q),
-            },
-            (false, false) => Self::SubstringUnicode(lowercase_chars(q)),
-            (true, true) => Self::WildcardAscii {
+        if !has_wildcards {
+            // Names and queries are compared by their lowercased form. A
+            // query can lowercase to pure ASCII from a non-ASCII char (the
+            // Kelvin sign U+212A is 'k'), and then it must still find ASCII
+            // names, so the ASCII fast path is chosen by the lowercased form.
+            let lowered = lowercase_chars(q);
+            return Some(if lowered.iter().all(char::is_ascii) {
+                Self::SubstringAscii {
+                    ascii_bytes: lowered.iter().map(|&c| c as u8).collect(),
+                    unicode_chars: lowered,
+                }
+            } else {
+                Self::SubstringUnicode(lowered)
+            });
+        }
+        Some(if is_ascii {
+            Self::WildcardAscii {
                 ascii_tokens: ascii_tokens(q),
                 unicode_tokens: unicode_tokens(q),
-            },
-            (true, false) => Self::WildcardUnicode(unicode_tokens(q)),
+            }
+        } else {
+            Self::WildcardUnicode(unicode_tokens(q))
         })
     }
 
@@ -157,7 +168,8 @@ impl QueryMatcher {
                     text().is_some_and(|s| unicode_contains(s, unicode_chars))
                 }
             }
-            // An all-non-ASCII query cannot match an all-ASCII name.
+            // The lowercased query has a non-ASCII char, which no ASCII
+            // name can lowercase to.
             Self::SubstringUnicode(unicode_chars) => {
                 !is_ascii && text().is_some_and(|s| unicode_contains(s, unicode_chars))
             }
@@ -232,13 +244,18 @@ fn lowercase_into(text: &str, buf: &mut [char; STACK_CHARS]) -> Option<usize> {
         return None;
     }
     let mut len = 0;
+    let mut overflow = false;
     for c in text.chars() {
         for lc in c.to_lowercase() {
-            *buf.get_mut(len)? = lc;
-            len += 1;
+            if len < STACK_CHARS {
+                buf[len] = lc;
+                len += 1;
+            } else {
+                overflow = true;
+            }
         }
     }
-    Some(len)
+    (!overflow).then_some(len)
 }
 
 fn unicode_contains(text: &str, pat: &[char]) -> bool {
@@ -439,6 +456,42 @@ mod tests {
                 vec![nodes as u32]
             );
         }
+    }
+
+    #[test]
+    fn search_matches_by_lowercased_form_on_both_sides() {
+        // U+212A KELVIN SIGN lowercases to ASCII 'k'; U+212B ANGSTROM SIGN to
+        // U+00E5 'å'. Either may be in the name or in the query.
+        let mut t = Tree::with_root("/fixture");
+        t.push("kilo.txt", 0, 10, 10, false); // 1
+        t.push("\u{212A}elvin.txt", 0, 20, 20, false); // 2
+        t.push("plain.txt", 0, 30, 30, false); // 3
+        t.push("\u{e5}.txt", 0, 40, 40, false); // 4
+        t.push("\u{212B}ngstrom.txt", 0, 50, 50, false); // 5
+        t.push("KILO.BIN", 0, 60, 60, false); // 6
+        t.link_children();
+
+        // A Kelvin query finds ASCII names, and an ASCII query finds Kelvin names.
+        for q in ["\u{212A}", "k", "K"] {
+            assert_eq!(t.search(q, 10), (3, vec![6, 2, 1]), "{q:?}");
+        }
+        assert_eq!(t.search("\u{212A}ilo", 10), (2, vec![6, 1]));
+        assert_eq!(t.search("kilo", 10), (2, vec![6, 1]));
+        assert_eq!(t.search("\u{212A}elvin", 10), (1, vec![2]));
+        assert_eq!(t.search("kelvin", 10), (1, vec![2]));
+        // Wildcards: a Kelvin pattern over ASCII names and the reverse.
+        assert_eq!(t.search("\u{212A}*.txt", 10), (2, vec![2, 1]));
+        assert_eq!(t.search("k*.txt", 10), (2, vec![2, 1]));
+        assert_eq!(t.search("?ilo*", 10), (2, vec![6, 1]));
+        assert_eq!(t.search("\u{212A}ILO*", 10), (2, vec![6, 1]));
+        // Angstrom and the precomposed å are the same lowercased form.
+        for q in ["\u{212B}", "\u{e5}", "\u{c5}"] {
+            assert_eq!(t.search(q, 10), (2, vec![5, 4]), "{q:?}");
+        }
+        assert_eq!(t.search("\u{212B}*.txt", 10), (2, vec![5, 4]));
+        assert_eq!(t.search("*\u{e5}*", 10), (2, vec![5, 4]));
+        // A query with a non-ASCII lowercase form never matches an ASCII name.
+        assert_eq!(t.search("\u{e5}lo", 10), (0, vec![]));
     }
 
     #[test]

@@ -14,6 +14,7 @@ struct Ranked<'a> {
 }
 
 impl Ord for Ranked<'_> {
+    #[inline]
     fn cmp(&self, other: &Self) -> Ordering {
         self.alloc
             .cmp(&other.alloc)
@@ -23,6 +24,7 @@ impl Ord for Ranked<'_> {
 }
 
 impl PartialOrd for Ranked<'_> {
+    #[inline]
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
         Some(self.cmp(other))
     }
@@ -60,6 +62,7 @@ impl<'a> TopK<'a> {
         }
     }
 
+    #[inline]
     pub(crate) fn push(&mut self, node: usize) {
         if self.limit == 0 {
             return;
@@ -76,15 +79,12 @@ impl<'a> TopK<'a> {
         };
         if self.heap.len() < self.limit {
             self.heap.push(Reverse(candidate));
-        } else if self
-            .heap
-            .peek()
-            .is_some_and(|Reverse(minimum)| candidate > *minimum)
-        {
-            self.heap.pop();
-            self.heap.push(Reverse(candidate));
         } else {
-            return;
+            // Replace the weakest survivor in place: one sift, not pop + push.
+            match self.heap.peek_mut() {
+                Some(mut weakest) if candidate > weakest.0 => *weakest = Reverse(candidate),
+                _ => return,
+            }
         }
         if self.heap.len() == self.limit {
             self.floor = self.heap.peek().map_or(0, |Reverse(minimum)| minimum.alloc);
