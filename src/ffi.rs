@@ -270,7 +270,16 @@ getter!(bz_alloc, alloc, u64);
 getter!(bz_logical, logical, u64);
 getter!(bz_nfiles, n_files, u32);
 getter!(bz_flags, flags, u8);
-getter!(bz_complete, complete, bool);
+
+/// One bool per node: everything in its subtree was read. NULL before
+/// `bz_take_tree` and for a NULL handle.
+///
+/// # Safety
+/// `h` must be NULL or a live scan handle, with no concurrent mutation or free.
+#[no_mangle]
+pub unsafe extern "C" fn bz_complete(h: *mut BzScan) -> *const bool {
+    unsafe { flat_of(h) }.map_or(std::ptr::null(), |f| f.tree.complete.as_ptr())
+}
 getter!(bz_child_off, child_off, u32);
 getter!(bz_children, children, u32);
 getter!(bz_name_off, name_off, u32);
@@ -929,6 +938,12 @@ mod tests {
             assert_eq!(bz_cleanup_count(null), 0);
             assert!(bz_cleanup_nodes(null).is_null());
             assert!(bz_cleanup_description(null, 0).is_null());
+            assert!(bz_complete(null).is_null());
+            bz_cancel(null);
+            assert_eq!(bz_scan_status(null), ScanStatus::Failed as c_int);
+            let mut out = Coverage { errors: 7, ..Default::default() };
+            assert!(!bz_coverage(null, &mut out) && out.errors == 7, "a NULL handle leaves the output alone");
+            assert!(!bz_coverage(null, std::ptr::null_mut()));
         }
         assert!(bz_search(null, c"x".as_ptr(), 1).is_null());
         assert!(bz_types(null, 0).is_null());
@@ -1064,7 +1079,7 @@ mod tests {
         assert_eq!(status(h), CANCELLED, "not done, not failed");
         assert_eq!(bz_take_tree(h), 0);
         assert_eq!(bz_take_tree(h), 0, "and again");
-        assert!(bz_parents(h).is_null() && bz_complete(h).is_null() && bz_name_blob(h).is_null());
+        assert!(bz_parents(h).is_null() && unsafe { bz_complete(h) }.is_null() && bz_name_blob(h).is_null());
         assert_eq!(bz_errors(h), 0);
         let mut c = Coverage::default();
         assert!(!unsafe { bz_coverage(h, &mut c) }, "no tree, no coverage");
@@ -1165,7 +1180,6 @@ mod tests {
         assert_eq!((after.invalid_names, after.skipped_mount_points, after.shared_allocated_bytes), (1, 4, 5));
         assert_eq!(after.errors, 2, "the scan's failed reads stay counted");
         bz_free(removed);
-        assert!(bz_complete(std::ptr::null_mut()).is_null());
     }
 
     /// 200 scans cancelled at pseudo-random moments, with searches, progress
