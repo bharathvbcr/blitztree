@@ -768,6 +768,8 @@ final class ScanModel {
         let earlier = previous
         previous = nil
         if stopped {
+            // Logged first: `elapsed` is about to be the earlier scan's.
+            NSLog("BZ scan stopped after %.2f s, %llu files read", elapsed, files)
             // Back to what was on screen, or an idle window that says so.
             scanFailed = false
             if let earlier {
@@ -780,7 +782,6 @@ final class ScanModel {
             } else {
                 scanCancelled = true
             }
-            NSLog("BZ scan stopped after %.2f s, %llu files read", elapsed, files)
         } else {
             tree = result
             scanFailed = result == nil
@@ -1091,8 +1092,15 @@ nonisolated enum CoverageText {
     /// One line per thing left unread or counted once; empty when there is none.
     static func lines(_ c: BzCoverage) -> [String] {
         var out: [String] = []
-        if c.errors > 0 {
-            out.append(String(localized: "\(Fmt.num(c.errors)) items could not be read (permissions, or changed during the scan)"))
+        // `errors` is the total and already holds every entry error and every
+        // dropped name; each is listed once, on its own line.
+        let listed = c.entry_errors &+ c.invalid_names
+        let otherErrors = c.errors > listed ? c.errors - listed : 0
+        if otherErrors > 0 {
+            out.append(String(localized: "\(Fmt.num(otherErrors)) folders could not be read (permissions, or changed during the scan)"))
+        }
+        if c.entry_errors > 0 {
+            out.append(String(localized: "\(Fmt.num(c.entry_errors)) entries could not be read or were malformed"))
         }
         if c.invalid_names > 0 {
             out.append(String(localized: "\(Fmt.num(c.invalid_names)) items with names that are not valid UTF-8 were left out, with everything inside them"))

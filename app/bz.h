@@ -60,6 +60,8 @@ const uint32_t *bz_child_off(BzScan *h); // length N+1
 const uint32_t *bz_children(BzScan *h);
 const uint32_t *bz_name_off(BzScan *h); // length N+1
 const uint8_t *bz_name_blob(BzScan *h);
+// Same as bz_coverage's `errors`. After bz_remove it is 0 once the tree reads
+// complete (no unread folder is left to count), else the scan's total.
 uint64_t bz_errors(BzScan *h);
 
 // What a finished scan could not read: the same account the CLI prints as
@@ -77,7 +79,10 @@ typedef struct {
 // Fill `out` and return true. Returns false and leaves `out` untouched for a
 // NULL handle, a NULL `out`, or a handle without a tree (before
 // bz_take_tree, or a cancelled or failed scan). A tree from bz_remove keeps
-// the scan's counters; `complete` and `errors` follow the smaller tree.
+// the scan's counters while some folder in it is still unread (upper bounds:
+// a removed folder may have held some); once it reads complete, every
+// error-, entry-, name- and skip-class counter is 0, and only the sharing
+// figures remain.
 bool bz_coverage(BzScan *h, BzCoverage *out);
 
 // Shared Clean Up results, sorted by size. Buffers/labels live until bz_free.
@@ -100,6 +105,10 @@ uint8_t bz_cleanup_group(BzScan *h, uint64_t index);
 // name only.
 const char *bz_cleanup_verify(BzScan *h, uint64_t index);
 
+// Release a handle and its buffers (pointers read from it are dead after).
+// A scan that is still running is asked to stop first, as by bz_cancel: its
+// thread keeps its own references and ends on its own, discarding the result.
+// Do not call it concurrently with any other function on the same handle.
 void bz_free(BzScan *h);
 
 // A new handle, already holding its tree, for the scan without `count` nodes

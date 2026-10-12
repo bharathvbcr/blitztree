@@ -618,7 +618,8 @@ impl Progress {
 
     /// True (and recorded) when the walk should leave the directory it is
     /// about to read.
-    fn stop_here(&self) -> bool {        #[cfg(test)]
+    fn stop_here(&self) -> bool {
+        #[cfg(test)]
         if self.cancel_after_dirs.load(Ordering::Relaxed) != 0
             && self.cancel_after_dirs.fetch_sub(1, Ordering::Relaxed) == 1
         {
@@ -680,11 +681,29 @@ impl Coverage {
         }
     }
 
-    /// The same account for a tree that was derived from the scanned one
-    /// (a removal): the scan's counters stay, `complete` and `errors` follow
-    /// the new tree.
+    /// The same account for a tree derived from the scanned one (a removal).
+    /// Every failed read, dropped entry and skipped folder leaves its folder
+    /// incomplete, so a derived tree whose root reads complete has none of
+    /// them left: the error- and skip-class counters are zero, and the
+    /// account never says "read in full" next to "N items unreadable". The
+    /// per-folder counts are not kept, so while any folder is still partial
+    /// the scan's counters stay as scanned (upper bounds: a removed folder
+    /// may have held some of them). Sharing figures describe data, not
+    /// unread items, and stay.
     pub fn for_derived(&self, tree: &Tree) -> Coverage {
-        Coverage { errors: tree.errors, complete: tree.complete.first().copied().unwrap_or(false), ..*self }
+        if tree.complete.first().copied().unwrap_or(false) {
+            Coverage {
+                shared_allocated_bytes: self.shared_allocated_bytes,
+                clone_ids_unavailable_directories: self.clone_ids_unavailable_directories,
+                complete: true,
+                ..Coverage::default()
+            }
+        } else {
+            Coverage {
+                complete: false,
+                ..*self
+            }
+        }
     }
 }
 
@@ -856,7 +875,14 @@ fn read_dir_bulk(path: &CStr, s: &mut Scratch, progress: &Progress) -> Option<bo
             break;
         }
         read_any = true;
-        complete &= parse_batch(&s.buf, n as usize, &mut s.entries, &mut s.names, progress, path);
+        complete &= parse_batch(
+            &s.buf,
+            n as usize,
+            &mut s.entries,
+            &mut s.names,
+            progress,
+            path,
+        );
     }
     complete &= fill_missing_alloc(fd, s, progress);
     unsafe { libc::close(fd) };
@@ -879,7 +905,9 @@ fn parse_batch(
     let mut off = 0usize;
     for _ in 0..n {
         // A record must hold its own length and fit in the buffer.
-        let len = buf.get(off..off + 4).map_or(0, |_| u32_at(buf, off) as usize);
+        let len = buf
+            .get(off..off + 4)
+            .map_or(0, |_| u32_at(buf, off) as usize);
         let Some(record) = buf.get(off..off + len).filter(|_| len >= 4) else {
             progress.entry_errors.fetch_add(1, Ordering::Relaxed);
             progress.errors.fetch_add(1, Ordering::Relaxed);
@@ -889,7 +917,10 @@ fn parse_batch(
         if !parse_entry(record, entries, names, progress) {
             complete = false;
             log_error(|| {
-                format!("entry dropped in {} (unreadable, malformed or non-UTF-8 name)", path.to_string_lossy())
+                format!(
+                    "entry dropped in {} (unreadable, malformed or non-UTF-8 name)",
+                    path.to_string_lossy()
+                )
             });
         }
         off += len;
@@ -2983,7 +3014,10 @@ mod tests {
     fn assert_unread_folders_are_incomplete(t: &Tree) {
         assert!(!t.complete[0], "a tree cut short is not complete");
         for i in (0..t.len()).filter(|&i| t.is_dir(i) && t.kids(i).is_empty()) {
-            assert!(!t.complete[i], "folder {i} was never listed but reads as complete");
+            assert!(
+                !t.complete[i],
+                "folder {i} was never listed but reads as complete"
+            );
         }
     }
 
@@ -2993,12 +3027,20 @@ mod tests {
         let full = scan(&root, &Progress::default());
         assert!(full.complete[0] && full.len() > 6000);
 
-        let progress = Progress { cancel_after_dirs: AtomicU64::new(25), ..Default::default() };
+        let progress = Progress {
+            cancel_after_dirs: AtomicU64::new(25),
+            ..Default::default()
+        };
         let started = std::time::Instant::now();
         let t = scan(&root, &progress);
         let took = started.elapsed();
         assert!(progress.is_cancelled() && progress.stopped_early());
-        assert!(t.len() < full.len() / 2, "{} of {} nodes: the walk went on after the stop", t.len(), full.len());
+        assert!(
+            t.len() < full.len() / 2,
+            "{} of {} nodes: the walk went on after the stop",
+            t.len(),
+            full.len()
+        );
         assert_unread_folders_are_incomplete(&t);
         assert_partition(&t);
         assert!(took < std::time::Duration::from_secs(5), "took {took:?}");
@@ -3037,7 +3079,11 @@ mod tests {
         let _ = std::fs::remove_dir_all(&root);
         std::fs::create_dir_all(&root).unwrap();
         for i in 0..12_000 {
-            std::fs::write(root.join(format!("a-rather-long-file-name-to-fill-the-buffer-{i:06}")), b"").unwrap();
+            std::fs::write(
+                root.join(format!("a-rather-long-file-name-to-fill-the-buffer-{i:06}")),
+                b"",
+            )
+            .unwrap();
         }
         let path = CString::new(root.as_os_str().as_encoded_bytes()).unwrap();
         let mut scratch = Scratch::default();
@@ -3064,7 +3110,13 @@ mod tests {
         let progress = Progress::default();
         let t = scan(&root, &progress);
         let whole = Coverage::of(&progress, &t);
-        assert_eq!(whole, Coverage { complete: true, ..Default::default() });
+        assert_eq!(
+            whole,
+            Coverage {
+                complete: true,
+                ..Default::default()
+            }
+        );
 
         // Every counter lands in its own field.
         let progress = Progress::default();
@@ -3081,7 +3133,10 @@ mod tests {
         {
             counter.store(n as u64 + 10, Ordering::Relaxed);
         }
-        let mut cut = Tree { errors: 3, ..Tree::with_root("/x") };
+        let mut cut = Tree {
+            errors: 3,
+            ..Tree::with_root("/x")
+        };
         cut.complete[0] = false;
         let c = Coverage::of(&progress, &cut);
         assert_eq!((c.errors, c.complete), (3, false));
@@ -3097,12 +3152,23 @@ mod tests {
             [10, 11, 12, 13, 14, 15]
         );
 
-        // A tree derived from the scanned one keeps the counters and takes its own root state.
+        // A derived tree that reads complete has nothing unread left to count;
+        // only the sharing figures describe data and stay.
         let mut healthy = Tree::with_root("/x");
         healthy.link_children();
         let d = c.for_derived(&healthy);
-        assert!(d.complete && d.errors == 0);
-        assert_eq!((d.invalid_names, d.skipped_mount_points), (11, 13));
+        assert_eq!(
+            d,
+            Coverage {
+                complete: true,
+                shared_allocated_bytes: 14,
+                clone_ids_unavailable_directories: 15,
+                ..Default::default()
+            }
+        );
+        // One that is still partial keeps the scan's counters (upper bounds).
+        let d = c.for_derived(&cut);
+        assert_eq!(d, c);
         let _ = std::fs::remove_dir_all(&root);
     }
 
@@ -3132,7 +3198,14 @@ mod tests {
         // A record list cut short is reported too, not walked past.
         let progress = Progress::default();
         let (mut entries, mut names) = (Vec::new(), Vec::new());
-        assert!(!parse_batch(&batch[..batch.len() - 3], 3, &mut entries, &mut names, &progress, c"/dir"));
+        assert!(!parse_batch(
+            &batch[..batch.len() - 3],
+            3,
+            &mut entries,
+            &mut names,
+            &progress,
+            c"/dir"
+        ));
         assert_eq!(progress.entry_errors.load(Ordering::Relaxed), 1);
     }
 }

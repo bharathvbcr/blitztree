@@ -51,12 +51,24 @@ struct ScanCancelChecks {
         precondition(CoverageText.lines(tree.coverage).count == 1, "one line for the failed read")
         precondition(CoverageText.headline(tree.coverage) != CoverageText.headline(covered()))
 
+        // After the unreadable folder is trashed the account no longer claims unread items.
+        guard let trimmed = tree.removing([locked]) else { fatalError("removal built no tree") }
+        precondition(trimmed.coverage.complete && trimmed.coverage.errors == 0 && trimmed.errors == 0,
+                     "no unread folder is left to count")
+        precondition(CoverageText.lines(trimmed.coverage).isEmpty)
+        precondition(CoverageText.headline(trimmed.coverage) == CoverageText.headline(covered()))
+        guard let other = tree.removing([open]) else { fatalError("removal built no tree") }
+        precondition(!other.coverage.complete && other.coverage.errors == tree.coverage.errors,
+                     "while one is left the scan's counters stay")
+
         var every = BzCoverage()
-        every.errors = 3; every.invalid_names = 2; every.skipped_cloud_directories = 4
+        every.errors = 5; every.entry_errors = 1; every.invalid_names = 2; every.skipped_cloud_directories = 4
         every.skipped_mount_points = 5; every.shared_allocated_bytes = 6_000_000
         every.clone_ids_unavailable_directories = 7
         let lines = CoverageText.lines(every)
-        precondition(lines.count == 6, "a line for every field the CLI reports (\(lines.count))")
+        precondition(lines.count == 7, "a line for every field the CLI reports (\(lines.count))")
+        precondition(lines.first?.hasPrefix(Fmt.num(2)) == true,
+                     "bad names and entry errors are not counted again in the folder line: \(lines)")
         precondition(CoverageText.lines(covered()).isEmpty, "nothing to say about a clean scan")
 
         // 2. Stopping. The race between the stop and a very short scan is real,
@@ -124,7 +136,8 @@ struct ScanCancelChecks {
             "Contains folders that were not fully read, so its size is a lower bound",
             "Every folder was read in full.",
             "Some folders were only partly read, so their sizes are lower bounds.",
-            "%@ items could not be read (permissions, or changed during the scan)",
+            "%@ folders could not be read (permissions, or changed during the scan)",
+            "%@ entries could not be read or were malformed",
             "%@ items with names that are not valid UTF-8 were left out, with everything inside them",
             "%@ cloud-only folders were not opened, so nothing was downloaded",
             "%@ other volumes mounted inside were not scanned",

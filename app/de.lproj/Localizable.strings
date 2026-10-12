@@ -34,7 +34,8 @@
 "Contains folders that were not fully read, so its size is a lower bound" = "Enthält Ordner, die nicht vollständig gelesen wurden; die Größe ist daher eine Untergrenze";
 "Every folder was read in full." = "Alle Ordner wurden vollständig gelesen.";
 "Some folders were only partly read, so their sizes are lower bounds." = "Einige Ordner wurden nur teilweise gelesen, ihre Größen sind daher Untergrenzen.";
-"%@ items could not be read (permissions, or changed during the scan)" = "%@ Objekte konnten nicht gelesen werden (Berechtigungen oder Änderungen während des Scans)";
+"%@ folders could not be read (permissions, or changed during the scan)" = "%@ Ordner konnten nicht gelesen werden (Berechtigungen oder Änderungen während des Scans)";
+"%@ entries could not be read or were malformed" = "%@ Einträge konnten nicht gelesen werden oder waren fehlerhaft";
 "%@ items with names that are not valid UTF-8 were left out, with everything inside them" = "%@ Objekte mit Namen, die kein gültiges UTF-8 sind, wurden samt Inhalt ausgelassen";
 "%@ cloud-only folders were not opened, so nothing was downloaded" = "%@ reine Cloud-Ordner wurden nicht geöffnet, es wurde also nichts heruntergeladen";
 "%@ other volumes mounted inside were not scanned" = "%@ weitere darin eingebundene Volumes wurden nicht gescannt";

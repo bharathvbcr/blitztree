@@ -35,7 +35,8 @@
 "Contains folders that were not fully read, so its size is a lower bound" = "Contains folders that were not fully read, so its size is a lower bound";
 "Every folder was read in full." = "Every folder was read in full.";
 "Some folders were only partly read, so their sizes are lower bounds." = "Some folders were only partly read, so their sizes are lower bounds.";
-"%@ items could not be read (permissions, or changed during the scan)" = "%@ items could not be read (permissions, or changed during the scan)";
+"%@ folders could not be read (permissions, or changed during the scan)" = "%@ folders could not be read (permissions, or changed during the scan)";
+"%@ entries could not be read or were malformed" = "%@ entries could not be read or were malformed";
 "%@ items with names that are not valid UTF-8 were left out, with everything inside them" = "%@ items with names that are not valid UTF-8 were left out, with everything inside them";
 "%@ cloud-only folders were not opened, so nothing was downloaded" = "%@ cloud-only folders were not opened, so nothing was downloaded";
 "%@ other volumes mounted inside were not scanned" = "%@ other volumes mounted inside were not scanned";

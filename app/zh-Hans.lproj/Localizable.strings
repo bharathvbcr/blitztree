@@ -34,7 +34,8 @@
 "Contains folders that were not fully read, so its size is a lower bound" = "包含未完整读取的文件夹，因此其大小只是下限";
 "Every folder was read in full." = "所有文件夹均已完整读取。";
 "Some folders were only partly read, so their sizes are lower bounds." = "部分文件夹只读取了一部分，因此其大小只是下限。";
-"%@ items could not be read (permissions, or changed during the scan)" = "%@ 个项目无法读取（权限不足，或在扫描期间发生变化）";
+"%@ folders could not be read (permissions, or changed during the scan)" = "%@ 个文件夹无法读取（权限不足，或在扫描期间发生变化）";
+"%@ entries could not be read or were malformed" = "%@ 个条目无法读取或格式错误";
 "%@ items with names that are not valid UTF-8 were left out, with everything inside them" = "%@ 个名称不是有效 UTF-8 的项目已被排除，其中的所有内容也一并排除";
 "%@ cloud-only folders were not opened, so nothing was downloaded" = "%@ 个仅在云端的文件夹未被打开，因此没有下载任何内容";
 "%@ other volumes mounted inside were not scanned" = "挂载在内部的其他 %@ 个卷未被扫描";

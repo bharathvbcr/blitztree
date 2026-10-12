@@ -34,7 +34,8 @@
 "Contains folders that were not fully read, so its size is a lower bound" = "Tamamen okunmayan klasörler içeriyor; bu yüzden boyutu bir alt sınırdır";
 "Every folder was read in full." = "Tüm klasörler tamamen okundu.";
 "Some folders were only partly read, so their sizes are lower bounds." = "Bazı klasörler yalnızca kısmen okundu; bu yüzden boyutları alt sınırdır.";
-"%@ items could not be read (permissions, or changed during the scan)" = "%@ öğe okunamadı (izinler veya tarama sırasında değişiklik)";
+"%@ folders could not be read (permissions, or changed during the scan)" = "%@ klasör okunamadı (izinler veya tarama sırasında değişiklik)";
+"%@ entries could not be read or were malformed" = "%@ girdi okunamadı veya hatalıydı";
 "%@ items with names that are not valid UTF-8 were left out, with everything inside them" = "Adı geçerli UTF-8 olmayan %@ öğe, içindekilerle birlikte dışarıda bırakıldı";
 "%@ cloud-only folders were not opened, so nothing was downloaded" = "Yalnızca bulutta olan %@ klasör açılmadı, bu yüzden hiçbir şey indirilmedi";
 "%@ other volumes mounted inside were not scanned" = "İçine bağlanmış diğer %@ birim taranmadı";

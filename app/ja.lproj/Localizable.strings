@@ -34,7 +34,8 @@
 "Contains folders that were not fully read, so its size is a lower bound" = "完全には読み取れていないフォルダを含むため、サイズは下限値です";
 "Every folder was read in full." = "すべてのフォルダを完全に読み取りました。";
 "Some folders were only partly read, so their sizes are lower bounds." = "一部のフォルダは部分的にしか読み取れていないため、サイズは下限値です。";
-"%@ items could not be read (permissions, or changed during the scan)" = "%@ 件の項目を読み取れませんでした（権限、またはスキャン中の変更）";
+"%@ folders could not be read (permissions, or changed during the scan)" = "%@ 個のフォルダを読み取れませんでした（権限、またはスキャン中の変更）";
+"%@ entries could not be read or were malformed" = "%@ 件のエントリを読み取れないか、不正な形式でした";
 "%@ items with names that are not valid UTF-8 were left out, with everything inside them" = "名前が有効な UTF-8 ではない %@ 件の項目は、中身ごと除外されました";
 "%@ cloud-only folders were not opened, so nothing was downloaded" = "クラウドのみの %@ 個のフォルダは開かなかったため、何もダウンロードされていません";
 "%@ other volumes mounted inside were not scanned" = "内部にマウントされた他のボリューム %@ 個はスキャンしていません";

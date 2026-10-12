@@ -163,11 +163,12 @@ fn start_scan(path: PathBuf, progress: Arc<Progress>) -> *mut BzScan {
         let result = result.clone();
         std::thread::Builder::new().spawn(move || {
             unsafe { crate::set_thread_qos_user_interactive() };
-            let (outcome, ended) = match catch_unwind(AssertUnwindSafe(|| run_scan(&path, &progress))) {
-                Ok(Some(flat)) => (Some(Ok(flat)), ScanStatus::Done),
-                Ok(None) => (None, ScanStatus::Cancelled),
-                Err(payload) => (Some(Err(panic_message(&*payload))), ScanStatus::Failed),
-            };
+            let (outcome, ended) =
+                match catch_unwind(AssertUnwindSafe(|| run_scan(&path, &progress))) {
+                    Ok(Some(flat)) => (Some(Ok(flat)), ScanStatus::Done),
+                    Ok(None) => (None, ScanStatus::Cancelled),
+                    Err(payload) => (Some(Err(panic_message(&*payload))), ScanStatus::Failed),
+                };
             *lock(&result) = outcome;
             status.store(ended as u8, Ordering::Release);
         })
@@ -392,7 +393,11 @@ pub unsafe extern "C" fn bz_remove(h: *mut BzScan, nodes: *const u32, count: u32
             progress: Arc::new(Progress::default()),
             status: Arc::new(AtomicU8::new(ScanStatus::Done as u8)),
             result: Arc::new(Mutex::new(None)),
-            flat: Some(Box::new(with_cleanup(tree, coverage, &cleanup::Anchors::from_env()))),
+            flat: Some(Box::new(with_cleanup(
+                tree,
+                coverage,
+                &cleanup::Anchors::from_env(),
+            ))),
         }))
     })
 }
@@ -444,7 +449,8 @@ pub unsafe extern "C" fn bz_cleanup_verify(h: *mut BzScan, index: u64) -> *const
 
 #[no_mangle]
 pub extern "C" fn bz_errors(h: *mut BzScan) -> u64 {
-    unsafe { flat_of(h) }.map_or(0, |f| f.tree.errors)
+    // From the coverage, so a tree derived by `bz_remove` agrees with it.
+    unsafe { flat_of(h) }.map_or(0, |f| f.coverage.errors)
 }
 
 /// Write what the scan could not read (the account the CLI prints as
@@ -468,7 +474,13 @@ pub unsafe extern "C" fn bz_coverage(h: *mut BzScan, out: *mut Coverage) -> bool
 #[no_mangle]
 pub extern "C" fn bz_free(h: *mut BzScan) {
     if !h.is_null() {
-        drop(unsafe { Box::from_raw(h) });
+        let scan = unsafe { Box::from_raw(h) };
+        // A scan still walking has no one left to read its result: stop it.
+        // The thread owns its own references (progress, status, result), so
+        // dropping the handle here cannot dangle under it. Harmless after
+        // the end, and for a `bz_remove` handle (its own counters).
+        scan.progress.cancel();
+        drop(scan);
     }
 }
 
@@ -694,7 +706,11 @@ mod tests {
             progress: Arc::new(Progress::default()),
             status: Arc::new(AtomicU8::new(ScanStatus::Done as u8)),
             result: Arc::new(std::sync::Mutex::new(None)),
-            flat: Some(Box::new(with_cleanup(tree, Coverage::default(), &cleanup::Anchors::default()))),
+            flat: Some(Box::new(with_cleanup(
+                tree,
+                Coverage::default(),
+                &cleanup::Anchors::default(),
+            ))),
         };
         handle.progress.files.store(3, Ordering::Relaxed);
         handle.progress.bytes.store(total, Ordering::Relaxed);
@@ -744,7 +760,11 @@ mod tests {
             progress: Arc::new(Progress::default()),
             status: Arc::new(AtomicU8::new(ScanStatus::Done as u8)),
             result: Arc::new(std::sync::Mutex::new(None)),
-            flat: Some(Box::new(with_cleanup(tree, Coverage::default(), &cleanup::Anchors::default()))),
+            flat: Some(Box::new(with_cleanup(
+                tree,
+                Coverage::default(),
+                &cleanup::Anchors::default(),
+            ))),
         };
         let h = &mut handle as *mut BzScan;
         let l = bz_largest_files(h, 5, 10);
@@ -769,7 +789,11 @@ mod tests {
             progress: Arc::new(Progress::default()),
             status: Arc::new(AtomicU8::new(ScanStatus::Done as u8)),
             result: Arc::new(std::sync::Mutex::new(None)),
-            flat: Some(Box::new(with_cleanup(tree, Coverage::default(), &cleanup::Anchors::default()))),
+            flat: Some(Box::new(with_cleanup(
+                tree,
+                Coverage::default(),
+                &cleanup::Anchors::default(),
+            ))),
         };
         let h = &mut handle as *mut BzScan;
 
@@ -797,7 +821,11 @@ mod tests {
             progress: Arc::new(Progress::default()),
             status: Arc::new(AtomicU8::new(ScanStatus::Done as u8)),
             result: Arc::new(std::sync::Mutex::new(None)),
-            flat: Some(Box::new(with_cleanup(tree, Coverage::default(), &cleanup::Anchors::default()))),
+            flat: Some(Box::new(with_cleanup(
+                tree,
+                Coverage::default(),
+                &cleanup::Anchors::default(),
+            ))),
         };
         let h = &mut handle as *mut BzScan;
         let t = bz_types(h, 0);
@@ -887,7 +915,11 @@ mod tests {
         let mut tree = Tree::with_root("/root");
         tree.push("a", 0, 1, 1, false);
         crate::finish(&mut tree);
-        let result = Arc::new(Mutex::new(Some(Ok(with_cleanup(tree, Coverage::default(), &cleanup::Anchors::default())))));
+        let result = Arc::new(Mutex::new(Some(Ok(with_cleanup(
+            tree,
+            Coverage::default(),
+            &cleanup::Anchors::default(),
+        )))));
         let holder = result.clone();
         let _ = std::thread::spawn(move || {
             let _held = holder.lock().unwrap();
@@ -941,8 +973,14 @@ mod tests {
             assert!(bz_complete(null).is_null());
             bz_cancel(null);
             assert_eq!(bz_scan_status(null), ScanStatus::Failed as c_int);
-            let mut out = Coverage { errors: 7, ..Default::default() };
-            assert!(!bz_coverage(null, &mut out) && out.errors == 7, "a NULL handle leaves the output alone");
+            let mut out = Coverage {
+                errors: 7,
+                ..Default::default()
+            };
+            assert!(
+                !bz_coverage(null, &mut out) && out.errors == 7,
+                "a NULL handle leaves the output alone"
+            );
             assert!(!bz_coverage(null, std::ptr::null_mut()));
         }
         assert!(bz_search(null, c"x".as_ptr(), 1).is_null());
@@ -1079,7 +1117,11 @@ mod tests {
         assert_eq!(status(h), CANCELLED, "not done, not failed");
         assert_eq!(bz_take_tree(h), 0);
         assert_eq!(bz_take_tree(h), 0, "and again");
-        assert!(bz_parents(h).is_null() && unsafe { bz_complete(h) }.is_null() && bz_name_blob(h).is_null());
+        assert!(
+            bz_parents(h).is_null()
+                && unsafe { bz_complete(h) }.is_null()
+                && bz_name_blob(h).is_null()
+        );
         assert_eq!(bz_errors(h), 0);
         let mut c = Coverage::default();
         assert!(!unsafe { bz_coverage(h, &mut c) }, "no tree, no coverage");
@@ -1106,6 +1148,26 @@ mod tests {
         unsafe { bz_cancel(std::ptr::null_mut()) };
         assert_eq!(status(std::ptr::null_mut()), FAILED);
         assert!(!unsafe { bz_coverage(std::ptr::null_mut(), &mut c) });
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn freeing_a_running_scan_stops_its_walk() {
+        let root = wide_root("bz-test-ffi-free-running", 25);
+        let progress = Arc::new(Progress::default());
+        let h = start_scan(root.clone(), progress.clone());
+        assert!(!progress.is_cancelled());
+        bz_free(h);
+        assert!(
+            progress.is_cancelled(),
+            "a freed handle asks its scan to stop"
+        );
+        // The scan thread lets go of its counters once the walk has wound down.
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while Arc::strong_count(&progress) > 1 {
+            assert!(Instant::now() < deadline, "the freed scan never finished");
+            std::thread::sleep(Duration::from_millis(1));
+        }
         let _ = std::fs::remove_dir_all(&root);
     }
 
@@ -1156,29 +1218,68 @@ mod tests {
             progress: Arc::new(Progress::default()),
             status: Arc::new(AtomicU8::new(ScanStatus::Done as u8)),
             result: Arc::new(Mutex::new(None)),
-            flat: Some(Box::new(with_cleanup(tree, coverage, &cleanup::Anchors::default()))),
+            flat: Some(Box::new(with_cleanup(
+                tree,
+                coverage,
+                &cleanup::Anchors::default(),
+            ))),
         };
         let h = &mut handle as *mut BzScan;
         let complete = unsafe { std::slice::from_raw_parts(bz_complete(h), 4) };
-        assert_eq!(complete, [false, true, false, true], "root, open, sealed, a");
+        assert_eq!(
+            complete,
+            [false, true, false, true],
+            "root, open, sealed, a"
+        );
         let flags = unsafe { std::slice::from_raw_parts(bz_flags(h), 4) };
         assert_eq!(flags[2] & crate::SELF_INCOMPLETE, crate::SELF_INCOMPLETE);
-        assert_eq!(flags[0] & crate::SELF_INCOMPLETE, 0, "the root is partial only through its child");
+        assert_eq!(
+            flags[0] & crate::SELF_INCOMPLETE,
+            0,
+            "the root is partial only through its child"
+        );
 
         let mut out = Coverage::default();
         assert!(unsafe { bz_coverage(h, &mut out) });
         assert_eq!(out, coverage);
         assert!(!unsafe { bz_coverage(h, std::ptr::null_mut()) });
 
-        // A removal keeps the counters; completeness and errors follow the new tree.
+        // Removing a healthy folder leaves the unread one: the scan's counters stay.
+        let healthy = [1u32];
+        let removed = unsafe { bz_remove(h, healthy.as_ptr(), 1) };
+        assert_eq!(bz_take_tree(removed), 2);
+        let mut after = Coverage::default();
+        assert!(unsafe { bz_coverage(removed, &mut after) });
+        assert_eq!(
+            after,
+            Coverage {
+                complete: false,
+                ..coverage
+            }
+        );
+        assert_eq!(bz_errors(removed), 2);
+        bz_free(removed);
+
+        // Removing the only unread folder: the tree reads complete, and the
+        // account no longer claims unread items beside "read in full".
         let gone = [2u32];
         let removed = unsafe { bz_remove(h, gone.as_ptr(), 1) };
         assert_eq!(bz_take_tree(removed), 3);
-        let mut after = Coverage::default();
         assert!(unsafe { bz_coverage(removed, &mut after) });
-        assert!(after.complete, "the only unread folder is gone");
-        assert_eq!((after.invalid_names, after.skipped_mount_points, after.shared_allocated_bytes), (1, 4, 5));
-        assert_eq!(after.errors, 2, "the scan's failed reads stay counted");
+        assert_eq!(
+            after,
+            Coverage {
+                complete: true,
+                shared_allocated_bytes: 5,
+                clone_ids_unavailable_directories: 6,
+                ..Default::default()
+            }
+        );
+        assert_eq!(
+            bz_errors(removed),
+            0,
+            "the status bar's unreadable count follows"
+        );
         bz_free(removed);
     }
 
@@ -1245,8 +1346,12 @@ mod tests {
                 }
                 DONE => {
                     assert_eq!(bz_take_tree(h), whole, "round {round}");
-                    let complete = unsafe { std::slice::from_raw_parts(bz_complete(h), whole as usize) };
-                    assert!(complete.iter().all(|&c| c), "round {round}: a finished scan is whole");
+                    let complete =
+                        unsafe { std::slice::from_raw_parts(bz_complete(h), whole as usize) };
+                    assert!(
+                        complete.iter().all(|&c| c),
+                        "round {round}: a finished scan is whole"
+                    );
                     finished += 1;
                 }
                 other => panic!("round {round}: status {other}"),
@@ -1260,7 +1365,10 @@ mod tests {
             bz_free(h);
         }
         eprintln!("cancel stress: {cancelled} cancelled, {finished} finished");
-        assert!(cancelled > 0, "the cancels never landed mid-scan; the stress proved nothing");
+        assert!(
+            cancelled > 0,
+            "the cancels never landed mid-scan; the stress proved nothing"
+        );
         let _ = std::fs::remove_dir_all(&root);
     }
 }
