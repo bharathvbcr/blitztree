@@ -56,6 +56,11 @@ swiftc "${SOURCES[@]}" tests/ListIntegrationChecks.swift "${FLAGS[@]}" \
   -import-objc-header app/bz.h -L target/release -lblitztree \
   -framework AppKit -framework SwiftUI -o "$CLEANUP_TEST_TMP/list"
 "$CLEANUP_TEST_TMP/list"
+# A scan that ends without a tree reads as failed and a new one is allowed.
+swiftc "${SOURCES[@]}" tests/ScanFailureChecks.swift "${FLAGS[@]}" \
+  -import-objc-header app/bz.h -L target/release -lblitztree \
+  -framework AppKit -framework SwiftUI -o "$CLEANUP_TEST_TMP/scanfail"
+"$CLEANUP_TEST_TMP/scanfail"
 # Sign-in opens the authorize URL itself. No scan engine and no real browser.
 swiftc app/AgentLogin.swift tests/AgentLoginChecks.swift "${FLAGS[@]}" \
   -framework AppKit -o "$CLEANUP_TEST_TMP/login"
