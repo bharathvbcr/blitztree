@@ -139,27 +139,27 @@ enum ScratchpadChecks {
         try writeRegistry(AgentSessions.claudeRegistry, [(getpid(), id)])
         try age(temp)
         expectRejected("running session", .sessionRunning(target.path)) {
-            _ = try CleanupPathSafety.capture(path: target.path, root: root, home: home)
+            _ = try CleanupPathSafety.capture(path: target.path, root: root, home: home, check: .policyOnly)
         }
         precondition(CleanupVerify.blockReason(verify: "agent_session", path: target.path) != nil)
 
         try writeRegistry(AgentSessions.claudeRegistry, [(try deadPID(), id)])
         try age(temp)
-        let captured = try CleanupPathSafety.capture(path: target.path, root: root, home: home)
+        let captured = try CleanupPathSafety.capture(path: target.path, root: root, home: home, check: .policyOnly)
         precondition(captured.path == target.path, "an ended session's build output is cleanable")
         precondition(CleanupVerify.blockReason(verify: "agent_session", path: target.path) == nil,
                      "signed tag, ended session")
         precondition(CleanupVerify.blockReason(verify: "agent_session", path: scratch.path) != nil,
                      "the scratchpad itself has no tag and is not inside itself")
         expectRejected("the scratchpad itself", .tooBroad(scratch.path)) {
-            _ = try CleanupPathSafety.capture(path: scratch.path, root: root, home: home)
+            _ = try CleanupPathSafety.capture(path: scratch.path, root: root, home: home, check: .policyOnly)
         }
         let tasks = project.path + "/\(id)/tasks/t"
         expectRejected("outside the scratchpad", .tooBroad(tasks)) {
-            _ = try CleanupPathSafety.capture(path: tasks, root: root, home: home)
+            _ = try CleanupPathSafety.capture(path: tasks, root: root, home: home, check: .policyOnly)
         }
         expectRejected("a scratchpad path under the home root", .outsideRoot(target.path)) {
-            _ = try CleanupPathSafety.capture(path: target.path, root: home, home: home)
+            _ = try CleanupPathSafety.capture(path: target.path, root: home, home: home, check: .policyOnly)
         }
 
         // Validated again at the operation: the session coming back blocks it.
@@ -172,7 +172,7 @@ enum ScratchpadChecks {
         }
         try fm.removeItem(at: AgentSessions.claudeRegistry)
         expectRejected("registry gone", .sessionUnverified(target.path)) {
-            _ = try CleanupPathSafety.capture(path: target.path, root: root, home: home)
+            _ = try CleanupPathSafety.capture(path: target.path, root: root, home: home, check: .policyOnly)
         }
     }
 

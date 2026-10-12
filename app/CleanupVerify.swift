@@ -7,6 +7,8 @@ import Foundation
 nonisolated enum CleanupVerify {
     typealias Reason = (localized: String, english: String)
 
+    /// What stands for a verifier the engine gave no answer for: unknown, so it blocks.
+    static let unavailable = "unavailable"
     static let cacheSignature = "Signature: 8a477f597d28d172789f06886806bc55"
     static let recentWindow: TimeInterval = 2 * 86400
     static let entryCap = 200_000
@@ -84,8 +86,13 @@ nonisolated enum CleanupVerify {
     }
 
     /// Blocks when anything in the folder (the folder included) was modified
-    /// after `cutoff`, when the walk hits an entry it cannot read, or when it
-    /// has more than `cap` entries. Symlinks are not followed.
+    /// after `cutoff`, when the walk hits an entry it cannot read, when it
+    /// has more than `cap` entries, or when another volume is mounted inside.
+    /// Symlinks are not followed, and neither is a mount (FTS_XDEV): what lies
+    /// on it is never looked at, so it cannot be shown unchanged and the
+    /// folder is kept. A mount inside a folder this check guards is rare, so
+    /// refusing costs little; moving the folder to the Trash would carry the
+    /// mounted volume's view along with it.
     private static func recentActivityReason(_ path: String, cutoff: Date, cap: Int) -> Reason? {
         let unreadable: Reason = (String(localized: "Could not check every file in \(path)"),
                                   "Could not check every file in \(path)")
@@ -98,6 +105,7 @@ nonisolated enum CleanupVerify {
         defer { fts_close(stream) }
         let limit = cutoff.timeIntervalSince1970
         var entries = 0
+        var volume: dev_t?
         errno = 0
         while let entry = fts_read(stream) {
             switch Int32(entry.pointee.fts_info) {
@@ -113,6 +121,11 @@ nonisolated enum CleanupVerify {
                 return (String(localized: "Too many files to check in \(path)"), "Too many files to check in \(path)")
             }
             guard let info = entry.pointee.fts_statp else { return unreadable }
+            if let volume, info.pointee.st_dev != volume {
+                return (String(localized: "Another volume is mounted inside \(path)"),
+                        "Another volume is mounted inside \(path)")
+            }
+            volume = info.pointee.st_dev
             let time = info.pointee.st_mtimespec
             if TimeInterval(time.tv_sec) + TimeInterval(time.tv_nsec) / 1e9 > limit {
                 return (String(localized: "Changed in the last 2 days: \(path)"), "Changed in the last 2 days: \(path)")

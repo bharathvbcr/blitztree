@@ -16,38 +16,207 @@ nonisolated enum AgentSessions {
         return URL(fileURLWithPath: home + "/projects")
     }
 
-    /// `folders`, when given, picks which top-level folders of `root` to read;
-    /// every folder is read otherwise.
-    static func lastActive(in root: URL, since: Date? = nil, folders: ((String) -> Bool)? = nil) -> [String: Date] {
-        let fm = FileManager.default
-        let roots = folders.map { keep in
-            ((try? fm.contentsOfDirectory(atPath: root.path)) ?? []).filter(keep).map { root.appendingPathComponent($0) }
-        } ?? [root]
-        var active: [String: Date] = [:]
-        for folder in roots {
-            guard let files = fm.enumerator(at: folder, includingPropertiesForKeys: [.contentModificationDateKey])
-            else { continue }
-            for case let url as URL in files where url.pathExtension == "jsonl" {
-                note(url, since: since, in: &active)
-            }
-        }
-        return active
+    /// The most one log is read for its "cwd". A line that opens a session can
+    /// be large (Claude Code's `queue-operation`, Codex's `session_meta` with
+    /// its instructions), so the folder is looked for line by line, not in a
+    /// fixed head.
+    static let cwdBudget = 4 << 20
+    /// The most one scan reads from all its logs together.
+    static let scanBudget = 256 << 20
+    private static let chunk = 64 << 10
+
+    /// What a scan of the session logs found.
+    struct Activity {
+        /// When a session last worked in each folder.
+        var folders: [String: Date] = [:]
+        /// False when something could not be read or attributed, so `folders`
+        /// may be missing sessions: a directory that exists but cannot be
+        /// listed, a log whose date or content cannot be read, or one whose
+        /// folder was not found within `cwdBudget` or the scan's `scanBudget`.
+        /// A directory that does not exist is complete: no agent, no sessions.
+        var complete = true
     }
 
-    private static func note(_ url: URL, since: Date?, in active: inout [String: Date]) {
-        guard let date = try? url.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate,
-              since.map({ date > $0 }) ?? true,
-              let file = try? FileHandle(forReadingFrom: url) else { return }
-        let head = String(decoding: (try? file.read(upToCount: 8192)) ?? Data(), as: UTF8.self)
-        try? file.close()
-        guard let match = head.firstMatch(of: /"cwd":"((?:[^"\\]|\\.)*)"/) else { return }
-        let cwd = String(match.1).replacingOccurrences(of: "\\/", with: "/")
-        active[cwd] = max(active[cwd] ?? date, date)
+    /// Whether sessions worked in a folder. `unknown`: the logs could not all
+    /// be read, and none of those read said yes.
+    enum Usage: Equatable { case used, unused, unknown }
+
+    /// `folders`, when given, picks which top-level folders of `root` to read;
+    /// every folder is read otherwise.
+    static func scan(in requested: URL, since: Date? = nil, folders: ((String) -> Bool)? = nil,
+                     cwdBudget: Int = cwdBudget, scanBudget: Int = scanBudget) -> Activity {
+        var activity = Activity()
+        var remaining = scanBudget
+        // The sessions root itself may be a symlink (a dotfiles checkout): it
+        // is resolved once, here. A symlink below it is still not followed
+        // and still makes the answer unknown.
+        let root: URL
+        switch resolve(requested.path) {
+        case .resolved(let path): root = URL(fileURLWithPath: path)
+        case .missing: return activity
+        case .failed: activity.complete = false; return activity
+        }
+        let roots: [URL]
+        if let keep = folders {
+            switch listing(root.path) {
+            case .missing: return activity
+            case .failed: activity.complete = false; return activity
+            case .names(let names): roots = names.filter(keep).map { root.appendingPathComponent($0) }
+            }
+        } else {
+            roots = [root]
+        }
+        for folder in roots {
+            if case .missing = status(of: folder.path) { continue }
+            var unreadable = false
+            guard let files = FileManager.default.enumerator(
+                at: folder, includingPropertiesForKeys: [.contentModificationDateKey],
+                errorHandler: { _, error in
+                    if !isMissing(error) { unreadable = true }
+                    return true
+                }) else {
+                activity.complete = false
+                continue
+            }
+            for case let url as URL in files where url.pathExtension == "jsonl" {
+                if !note(url, since: since, in: &activity.folders, remaining: &remaining, cwdBudget: cwdBudget) {
+                    activity.complete = false
+                }
+            }
+            if unreadable { activity.complete = false }
+        }
+        return activity
+    }
+
+    /// `folders`, when given, picks which top-level folders of `root` to read;
+    /// every folder is read otherwise. What could not be read is left out:
+    /// callers that gate a cleanup use `usage` or `worked` instead.
+    static func lastActive(in root: URL, since: Date? = nil, folders: ((String) -> Bool)? = nil) -> [String: Date] {
+        scan(in: root, since: since, folders: folders).folders
+    }
+
+    /// False when the log could not be read or attributed (see `Activity`).
+    private static func note(_ url: URL, since: Date?, in active: inout [String: Date],
+                             remaining: inout Int, cwdBudget: Int) -> Bool {
+        guard let date = try? url.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate else {
+            return status(of: url.path) == .missing
+        }
+        guard since.map({ date > $0 }) ?? true else { return true }
+        let file: FileHandle
+        do { file = try FileHandle(forReadingFrom: url) } catch { return isMissing(error) }
+        defer { try? file.close() }
+        let limit = min(cwdBudget, remaining)
+        switch cwd(in: file, limit: limit) {
+        case .found(let cwd, let read):
+            remaining -= read
+            active[cwd] = max(active[cwd] ?? date, date)
+            return true
+        case .absent(let read):
+            // A whole log that never names a folder cannot be attributed to
+            // any, by this or any later read.
+            remaining -= read
+            return true
+        case .exhausted(let read):
+            remaining -= read
+            return false
+        case .failed:
+            return false
+        }
+    }
+
+    enum CwdResult: Equatable {
+        case found(String, bytesRead: Int)
+        /// The whole log was read and names no folder.
+        case absent(bytesRead: Int)
+        /// `limit` bytes were read without finding a folder or the end of the log.
+        case exhausted(bytesRead: Int)
+        case failed
+    }
+
+    private static let needle = Data("\"cwd\":\"".utf8)
+
+    /// The first `"cwd"` of a log, read line by line from the start, at most
+    /// `limit` bytes in all.
+    static func cwd(in file: FileHandle, limit: Int) -> CwdResult {
+        var pending = Data()
+        var read = 0
+        while read < limit {
+            guard let part = readChunk(file, min(chunk, limit - read)) else { return .failed }
+            if part.isEmpty {
+                if let found = cwd(inLine: pending) { return .found(found, bytesRead: read) }
+                return .absent(bytesRead: read)
+            }
+            read += part.count
+            pending.append(part)
+            while let newline = pending.firstIndex(of: 0x0A) {
+                if let found = cwd(inLine: pending[pending.startIndex..<newline]) { return .found(found, bytesRead: read) }
+                pending.removeSubrange(pending.startIndex...newline)
+            }
+        }
+        if let found = cwd(inLine: pending) { return .found(found, bytesRead: read) }
+        // A log that ends exactly at the limit has been read in full.
+        guard let probe = readChunk(file, 1) else { return .failed }
+        return probe.isEmpty ? .absent(bytesRead: read) : .exhausted(bytesRead: read)
+    }
+
+    /// The next `count` bytes: empty at the end of the log (`read(upToCount:)`
+    /// answers nil there), nil when the read fails.
+    private static func readChunk(_ file: FileHandle, _ count: Int) -> Data? {
+        do { return try file.read(upToCount: count) ?? Data() } catch { return nil }
+    }
+
+    /// The value of the first complete `"cwd":"…"` in one line, JSON escapes decoded.
+    private static func cwd(inLine line: Data) -> String? {
+        guard let start = line.range(of: needle) else { return nil }
+        var escaped = false
+        var end: Data.Index?
+        for index in line[start.upperBound...].indices {
+            let byte = line[index]
+            if escaped { escaped = false } else if byte == 0x5C { escaped = true } else if byte == 0x22 { end = index; break }
+        }
+        guard let end else { return nil }
+        let literal = Data([0x22]) + line[start.upperBound..<end] + Data([0x22])
+        return (try? JSONSerialization.jsonObject(with: literal, options: .fragmentsAllowed)) as? String
+    }
+
+    private enum Resolution { case resolved(String), missing, failed }
+
+    /// `realpath`, which is bounded by PATH_MAX and by the system's own symlink limit.
+    private static func resolve(_ path: String) -> Resolution {
+        guard let resolved = realpath(path, nil) else {
+            return errno == ENOENT || errno == ENOTDIR ? .missing : .failed
+        }
+        defer { free(resolved) }
+        return .resolved(String(cString: resolved))
+    }
+
+    private enum Listing { case names([String]), missing, failed }
+
+    private static func listing(_ path: String) -> Listing {
+        do { return .names(try FileManager.default.contentsOfDirectory(atPath: path)) }
+        catch { return isMissing(error) ? .missing : .failed }
+    }
+
+    private enum PathStatus { case present, missing }
+
+    private static func status(of path: String) -> PathStatus {
+        var info = stat()
+        return lstat(path, &info) != 0 && errno == ENOENT ? .missing : .present
+    }
+
+    private static func isMissing(_ error: Error) -> Bool {
+        let nsError = error as NSError
+        if nsError.domain == NSCocoaErrorDomain {
+            return nsError.code == NSFileNoSuchFileError || nsError.code == NSFileReadNoSuchFileError
+        }
+        return nsError.domain == NSPOSIXErrorDomain && nsError.code == Int(ENOENT)
     }
 
     /// Whether a session in `root` worked at or inside `folder` since `since`.
-    static func worked(in folder: String, root: URL, since: Date, folders: ((String) -> Bool)? = nil) -> Bool {
-        lastActive(in: root, since: since, folders: folders).keys.contains { $0 == folder || $0.hasPrefix(folder + "/") }
+    static func usage(in folder: String, root: URL, since: Date, folders: ((String) -> Bool)? = nil) -> Usage {
+        let activity = scan(in: root, since: since, folders: folders)
+        if activity.folders.keys.contains(where: { $0 == folder || $0.hasPrefix(folder + "/") }) { return .used }
+        return activity.complete ? .unused : .unknown
     }
 
     /// Whether Claude Code worked at or inside `folder` since `since`. Claude
@@ -57,9 +226,9 @@ nonisolated enum AgentSessions {
     /// `folder`, one inside it, or one around it are read (thousands of logs
     /// otherwise, on every card). Both sides are folded the same way, so this
     /// only narrows what is read; the "cwd" inside each log still decides.
-    static func claudeWorked(in folder: String, since: Date) -> Bool {
+    static func claudeUsage(in folder: String, since: Date) -> Usage {
         let key = claudeFolderKey(folder)
-        return worked(in: folder, root: claude, since: since) {
+        return usage(in: folder, root: claude, since: since) {
             let name = claudeFolderKey($0)
             return name.hasPrefix(key) || key.hasPrefix(name)
         }
