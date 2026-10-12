@@ -314,9 +314,13 @@ enum CleanupSafetyChecks {
             precondition(CleanupPathSafety.isShallowOutsideHome(path), "\(path) is at the top of a volume")
         }
         for path in ["/Users/Shared/x", "/Applications/Foo.app/Contents", "/Volumes/Disk/Photos/2024/a",
-                     "/private/tmp/claude-501/p/s", "/System/Volumes/Data/Users/other/work/app"] {
+                     "/private/tmp/claude-501/p/s", "/System/Volumes/Data/Users/other/work/app",
+                     "/Volumes/Disk/proj/node_modules", "/Volumes/Disk/work/repo/target",
+                     "/System/Volumes/Data/Volumes/Disk/proj/node_modules", "/Volumes/Disk/Users/other/work"] {
             precondition(!CleanupPathSafety.isShallowOutsideHome(path), "\(path) is deeper")
         }
+        precondition(CleanupPathSafety.isShallowOutsideHome("/Volumes/Disk/proj"), "a folder directly on a disk is its top")
+        try externalDisk()
         expectGitRejection("/Users/Shared under a whole-disk scan root", .tooBroad("/Users/Shared")) {
             _ = try CleanupPathSafety.capture(path: "/Users/Shared", root: "/System/Volumes/Data", home: home.path, check: .policyOnly)
         }
@@ -398,6 +402,48 @@ enum CleanupSafetyChecks {
         } catch {
             // Every rejection is useful here; the production caller presents
             // the localized reason and the policy tests focus on the boundary.
+        }
+    }
+
+    /// A real disk image mounted under /Volumes: a project's build folder on
+    /// it is offered (as in 0.7.0), what sits directly on the disk is not.
+    private static func externalDisk() throws {
+        func hdiutil(_ arguments: [String]) -> Bool {
+            let process = Process()
+            process.executableURL = URL(fileURLWithPath: "/usr/bin/hdiutil")
+            process.arguments = arguments
+            process.standardOutput = FileHandle.nullDevice
+            process.standardError = FileHandle.nullDevice
+            guard (try? process.run()) != nil else { return false }
+            process.waitUntilExit()
+            return process.terminationStatus == 0
+        }
+        let folder = fm.temporaryDirectory.appendingPathComponent("blitztree-disk-\(UUID().uuidString)")
+        try fm.createDirectory(at: folder, withIntermediateDirectories: true)
+        defer { try? fm.removeItem(at: folder) }
+        let name = "BZV" + UUID().uuidString.prefix(6)
+        let mount = "/Volumes/" + name
+        let image = folder.appendingPathComponent("disk.dmg").path
+        guard hdiutil(["create", "-quiet", "-size", "10m", "-fs", "HFS+", "-volname", name, image]),
+              hdiutil(["attach", "-quiet", "-nobrowse", image]) else {
+            print("SKIP external disk under /Volumes (hdiutil could not attach an image here)")
+            return
+        }
+        defer { _ = hdiutil(["detach", mount, "-force", "-quiet"]) }
+        for relative in ["proj/node_modules/pkg", "Photos/2024"] {
+            try fm.createDirectory(atPath: mount + "/" + relative, withIntermediateDirectories: true)
+        }
+        try Data("{}\n".utf8).write(to: URL(fileURLWithPath: mount + "/proj/package.json"))
+        let home = canonical(folder).appendingPathComponent("home").path
+        try fm.createDirectory(atPath: home, withIntermediateDirectories: true)
+        expectAllowed("a project's node_modules on an external disk") {
+            _ = try CleanupPathSafety.capture(path: mount + "/proj/node_modules", root: mount, home: home, check: .policyOnly)
+        }
+        expectGitRejection("a folder directly on the disk", .tooBroad(mount + "/Photos")) {
+            _ = try CleanupPathSafety.capture(path: mount + "/Photos", root: mount, home: home, check: .policyOnly)
+        }
+        expectGitRejection("a project folder directly on the disk", .tooBroad(mount + "/proj")) {
+            _ = try CleanupPathSafety.capture(path: mount + "/proj", root: mount, home: home, check: .policyOnly)
         }
     }
 

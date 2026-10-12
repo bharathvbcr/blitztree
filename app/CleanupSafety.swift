@@ -603,12 +603,20 @@ nonisolated enum CleanupPathSafety {
 
     /// A path at the top of a volume (`/Users/Shared`, `/Applications/Foo.app`,
     /// `/Volumes/Disk/Photos`, `/opt/homebrew`): nothing a cleanup offers lives
-    /// there, outside the user's own home.
+    /// there, outside the user's own home. On an external disk the volume's
+    /// own name is no depth: a project's `node_modules` at
+    /// `/Volumes/Disk/proj/node_modules` is as deep as `/Users/me/proj` is
+    /// below its home, and the engine offers it. Only a folder directly on the
+    /// disk (`/Volumes/Disk/Photos`) and another user's home folder on it
+    /// (`/Volumes/Disk/Users/other`) are the top.
     static func isShallowOutsideHome(_ path: String) -> Bool {
         let components = componentsBelowDataRoot(path)
-        let stripped = components.count >= 3 && components[0].caseInsensitiveCompare("Volumes") == .orderedSame
-            ? Array(components.dropFirst(2)) : components
-        return stripped.count <= 2
+        guard components.count >= 3, components[0].caseInsensitiveCompare("Volumes") == .orderedSame else {
+            return components.count <= 2
+        }
+        let onDisk = Array(components.dropFirst(2))
+        return onDisk.count <= 1
+            || (onDisk.count == 2 && onDisk[0].caseInsensitiveCompare("Users") == .orderedSame)
     }
 
     /// The policy for a path inside a home, as the part below that home.
