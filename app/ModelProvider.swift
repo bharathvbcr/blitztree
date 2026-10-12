@@ -354,16 +354,16 @@ final class LLMPlanClient {
                             // Deltas streamed but the strict JSON never closed
                             // (or a non-SSE body never arrived): the partial
                             // cards stand.
-                            emit(.failed("The reply was not valid plan JSON."))
+                            emit(.failed(String(localized: "The reply was not valid plan JSON.")))
                         } else {
-                            emit(.failed("The endpoint returned no plan."))
+                            emit(.failed(String(localized: "The endpoint returned no plan.")))
                         }
                         return
                     }
                 }
             } catch is CancellationError {
             } catch let error as PlanError {
-                emit(.failed(error.errorDescription ?? "The request failed."))
+                emit(.failed(error.errorDescription ?? String(localized: "The request failed.")))
             } catch {
                 emit(.failed(error.localizedDescription))
             }

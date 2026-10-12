@@ -9,7 +9,7 @@ nonisolated enum CleanupGuard {
     static var rebuildable: Set<String> { CleanupPathSafety.rebuildable }
 
     static func blockReason(command: String) -> String? {
-        CleanupCommand.parse(command) == nil ? "Command or arguments not allowed" : nil
+        CleanupCommand.parse(command) == nil ? String(localized: "Command or arguments not allowed") : nil
     }
 
     /// The Codex app keeps each chat's files in ~/Documents/Codex/<date>/<chat>

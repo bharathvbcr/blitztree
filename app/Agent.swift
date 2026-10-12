@@ -229,7 +229,7 @@ final class AgentSetup {
                     return
                 }
                 if let error = await Self.runInstall(plan.script) {
-                    if !cancelled { step = .failed("Couldn't install \(kind.name): \(error)") }
+                    if !cancelled { step = .failed(String(localized: "Couldn't install \(kind.name): \(error)")) }
                     return
                 }
                 path = target
@@ -254,9 +254,9 @@ final class AgentSetup {
                 guard !cancelled else { return }
                 if await !AgentLocator.onBackgroundThread({ AgentLocator.isSignedIn(kind, path: path, envPath: envPath) }) {
                     if let detail = outcome.detail {
-                        step = .failed("Sign-in didn't finish (\(detail)). Try again.")
+                        step = .failed(String(localized: "Sign-in didn't finish (\(detail)). Try again."))
                     } else {
-                        step = .failed("Sign-in didn't finish. Try again.")
+                        step = .failed(String(localized: "Sign-in didn't finish. Try again."))
                     }
                     return
                 }
@@ -743,7 +743,8 @@ final class AgentRun {
         do {
             try job.start()
         } catch {
-            phase = .failed("Couldn't start \(displayName): \(job.failure(error).launchError ?? error.localizedDescription)")
+            let reason = job.failure(error).launchError ?? error.localizedDescription
+            phase = .failed(String(localized: "Couldn't start \(displayName): \(reason)"))
             return
         }
         self.job = job
@@ -839,9 +840,9 @@ final class AgentRun {
         } else if status != 0 {
             // MANVI's exit codes 2-5 each name why the turn ended.
             let known = agent?.kind == .manvi ? Manvi.exitMessage(status) : nil
-            phase = .failed(known ?? (stderr.isEmpty ? "\(displayName) stopped (exit \(status))." : stderr))
+            phase = .failed(known ?? (stderr.isEmpty ? String(localized: "\(displayName) stopped (exit \(String(status))).") : stderr))
         } else {
-            phase = .failed("\(displayName) didn't return a plan.")
+            phase = .failed(String(localized: "\(displayName) didn't return a plan."))
         }
     }
 
@@ -849,7 +850,7 @@ final class AgentRun {
         planSeconds = -startedAt.timeIntervalSinceNow
         items.sort { $0.bytes > $1.bytes }
         if summary.isEmpty {
-            summary = "About \(Fmt.size(items.filter { $0.blocked == nil }.reduce(0) { $0 + $1.bytes })) can go."
+            summary = String(localized: "About \(Fmt.size(items.filter { $0.blocked == nil }.reduce(0) { $0 + $1.bytes })) can go.")
         }
         withAnimation(.snappy) { phase = .planned }
     }
@@ -998,10 +999,10 @@ final class AgentRun {
                                    directory: folder.path)
         let outcome = await Subprocess.run(spec, stdout: .discard, stderr: .stream { tail.feed($0) }, timeout: timeout)
         if let error = outcome.launchError { return error }
-        if outcome.timedOut { return "Took too long" }
-        if outcome.cancelled { return "Cancelled" }
+        if outcome.timedOut { return String(localized: "Took too long") }
+        if outcome.cancelled { return String(localized: "Cancelled") }
         guard outcome.status != 0 else { return nil }
-        return tail.last.isEmpty ? "Exited with \(outcome.status)" : tail.last
+        return tail.last.isEmpty ? String(localized: "Exited with \(String(outcome.status))") : tail.last
     }
 }
 
@@ -1131,7 +1132,7 @@ nonisolated final class AgentStreamReader: @unchecked Sendable {
             if let plan = e["structured_output"] as? [String: Any], let decoded = Self.decodePlan(plan) {
                 emit(.plan(summary: decoded.0, items: decoded.1))
             } else if e["is_error"] as? Bool == true || e["subtype"] as? String != "success" {
-                emit(.failed((e["result"] as? String) ?? "Claude Code stopped without a plan."))
+                emit(.failed((e["result"] as? String) ?? String(localized: "Claude Code stopped without a plan.")))
             }
         default:
             break
@@ -1142,7 +1143,7 @@ nonisolated final class AgentStreamReader: @unchecked Sendable {
     private func codex(_ e: [String: Any]) {
         if let id = e["id"] as? Int, e["method"] == nil {
             if let error = e["error"] as? [String: Any] {
-                emit(.failed((error["message"] as? String) ?? "Codex refused the request."))
+                emit(.failed((error["message"] as? String) ?? String(localized: "Codex refused the request.")))
                 done()
                 return
             }

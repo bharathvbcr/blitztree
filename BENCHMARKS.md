@@ -118,3 +118,84 @@ the folder's bytes and file count. Raw output:
 These are engine times only; the app copies the rows and redraws the list
 after them.
 
+## Map interaction: ring hover and window drag
+
+Two costs from the 2026-10-07 audit, measured before changing them and again
+after. Both run through `benchmarks/rendering.py --baseline e088f7d
+--interaction-only` (`e088f7d` is the code before this change); the harness
+compiles the baseline and working-tree views side by side, offscreen, and
+alternates them. Raw output:
+[benchmarks/results/2026-10-12](benchmarks/results/2026-10-12). Method details
+are in [benchmarks/RENDERING.md](benchmarks/RENDERING.md).
+
+**The machine was not quiet.** The load average was 160–360 from other agents'
+builds for the whole session, so every absolute time below is inflated and
+noisy. Each row is the min of nine interleaved baseline/candidate pairs (the
+medians and all samples are in the raw files, and the medians are noisier);
+treat the ratios as indicative and rerun on an idle Mac before quoting one.
+
+*Sunburst hover (item 7).* The baseline set `needsDisplay = true` on every
+hover change, and `updateNSView` dirtied the whole view on every SwiftUI update
+(the `_ = model.selection` line). Profile of 60 pointer steps on a 1440×900 pt
+(2880×1800 px) view: the hover logic is ~0.1 ms in total, so all the time is the
+repaint. Now a hover invalidates the old and new wedge, the centre label and,
+when the selection moves, its arc; `updateNSView` calls `syncOverlay()`, which
+reads the selection (so SwiftUI still re-runs it when the selection changes)
+and invalidates nothing when nothing changed. On average a hover event
+invalidates 18% of the view's area (largest 100%: a folder's wedge covers every
+ring outside it, and pieces that add up to more than the view become one rect).
+
+| fixture | 60 hover steps, baseline | candidate | |
+|---|---|---|---|
+| balanced (13,280 nodes) repaint only | 36.5 ms | 15.4 ms | 2.4× |
+| balanced, logic + repaint | 49.4 ms | 35.0 ms | 1.4× |
+| flat (100,001 files in one folder) repaint only | 42.2 ms | 12.1 ms | 3.5× |
+| flat, logic + repaint | 47.2 ms | 24.2 ms | 2.0× |
+| deep (a chain of 120 folders: one wedge covers the chart) | 161.8 ms | 169.0 ms | 1.0× (no change, noise) |
+
+The hover logic itself is about 1 µs slower per step (0.079 → 0.113 ms over 60
+steps) for the overlay bookkeeping. Rejected: drawing each dirty rect from
+`bitmap.cropping(to:)` (what the treemap does) was 0.56× the baseline here
+(62.6 ms vs 35.3 ms for the same 60 steps), because a fresh `CGImage` per draw
+misses Core Graphics' image cache (isolated: 0.8–2.1 ms per cropped draw vs
+0.14 ms for drawing the whole cached image through a clip). The rings draw the
+whole bitmap and let AppKit's clip bound the work. The treemap's crop path
+shows the same cost in this harness; it was not changed here.
+
+Correctness is asserted in the same run: 1,092 hover, select and deselect events
+(with and without agent highlights) redraw the same pixels as a full draw,
+within the antialiasing differences Quartz makes under a different clip (at most
+4 levels on at most 0.2% of pixels), and the first frame matches the baseline's
+outside the centre label. The bitmap rendering is untouched:
+`rendering.py --baseline bf3b1fc --check-only` still requires identical bitmaps.
+
+*Live window resize (item 6).* The baseline re-ran layout and paint for the
+whole map on every frame of a window drag (`layout()` → `relayoutIfNeeded()`).
+Per frame that is, measured here: treemap 3.4–5.2 ms (balanced), 9–28 ms (100k
+files), 3–10 ms (deep); rings 45–55 ms (balanced), 7–24 ms (flat),
+60–100 ms (deep). Now both views remember a live resize
+(`viewWillStartLiveResize`), keep their last render, and render once in
+`viewDidEndLiveResize`. They draw only when invalidated
+(`layerContentsRedrawPolicy = .onSetNeedsDisplay`), so during the drag Core
+Animation scales the existing picture (the rings keep their aspect ratio and
+stay round) and `draw` is not called. A zoom or a new tree during a drag still
+renders at once.
+
+| 24 drag frames, 1440×900 → 960×540 pt | baseline | candidate | |
+|---|---|---|---|
+| treemap, balanced | 236 ms | 6.0 ms | 39× |
+| treemap, flat | 566 ms | 27 ms | 21× |
+| treemap, deep | 210 ms | 8.7 ms | 24× |
+| rings, balanced | 1,290 ms | 30.9 ms | 42× |
+| rings, flat | 361 ms | 8.8 ms | 41× |
+| rings, deep | 948 ms | 20.2 ms | 47× |
+
+These rows are the layout and render work removed, not frame times: the
+baseline column also draws each frame, the candidate column renders once at the
+end, and the Core Animation scaling during the drag is on the GPU and cannot be
+timed offscreen. The check that goes with them asserts that no frame of a drag
+remakes either map's bitmap and that the end remakes it once, to the baseline's
+pixels. **Not measured:** a real drag in the app (frame pacing, how the scaled
+picture looks, whether AppKit calls `draw` mid-drag as expected). That needs an
+interactive session; see the QA notes in the commit message.
+

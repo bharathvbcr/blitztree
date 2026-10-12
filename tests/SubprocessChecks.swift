@@ -199,7 +199,7 @@ struct SubprocessChecks {
         let began = Date()
         let timedOut = await AgentRun.runCommand("uv cache clean", path: tools.path, timeout: 1)
         let took = Date().timeIntervalSince(began)
-        precondition(timedOut == "Took too long", "the limit ends it: \(timedOut ?? "nil")")
+        precondition(timedOut == String(localized: "Took too long"), "the limit ends it: \(timedOut ?? "nil")")
         precondition(took < 5, "bounded by the injected timeout, took \(took)s")
         let stalled = pid_t(try! String(contentsOf: pidFile, encoding: .utf8).trimmingCharacters(in: .whitespacesAndNewlines))!
         precondition(gone(stalled), "the timed-out tool is reaped")
@@ -210,7 +210,7 @@ struct SubprocessChecks {
         let cancelAt = Date()
         task.cancel()
         let result = await task.value
-        precondition(result == "Cancelled", "a cancelled delete says so: \(result ?? "nil")")
+        precondition(result == String(localized: "Cancelled"), "a cancelled delete says so: \(result ?? "nil")")
         precondition(gone(pid), "cancelling runCommand terminates and reaps the tool")
         precondition(Date().timeIntervalSince(cancelAt) < 5, "prompt cancellation")
         print("PASS runCommand: injected timeout bounded (\(String(format: "%.2f", took))s), cancel reaps \(pid)")

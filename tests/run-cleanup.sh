@@ -89,4 +89,11 @@ swiftc "${SOURCES[@]}" tests/ScanCancelChecks.swift "${FLAGS[@]}" \
   -import-objc-header app/bz.h -L target/release -lblitztree \
   -framework AppKit -framework SwiftUI -o "$CLEANUP_TEST_TMP/scancancel"
 "$CLEANUP_TEST_TMP/scancancel"
+# VoiceOver on the treemap and the rings (rows, press, announcements), and error
+# text made with String(localized:), its keys in all seven tables. Runs from the
+# repository root: it reads app/*.swift and app/*.lproj.
+swiftc "${SOURCES[@]}" tests/AccessibilityChecks.swift "${FLAGS[@]}" \
+  -import-objc-header app/bz.h -L target/release -lblitztree \
+  -framework AppKit -framework SwiftUI -o "$CLEANUP_TEST_TMP/accessibility"
+"$CLEANUP_TEST_TMP/accessibility"
 

@@ -24,6 +24,8 @@ parser.add_argument("--build-only", action="store_true")
 parser.add_argument("--output", type=pathlib.Path)
 parser.add_argument("--profile", choices=["rings", "treemap"])
 parser.add_argument("--rings-only", action="store_true")
+parser.add_argument("--interaction-only", action="store_true",
+                    help="only the ring hover and window drag checks and timings")
 parser.add_argument("--allow-ring-rounding", action="store_true")
 parser.add_argument("--scale", type=int, choices=[1, 2], default=2)
 parser.add_argument("--real", action="append", default=[], metavar="FOLDER",
@@ -135,7 +137,8 @@ else:
     # TreemapView asks CleanupPathSafety which items Clean Up would refuse; it and
     # what it builds on compile as in the app (the guard checks in run-cleanup.sh).
     extra = [str(ROOT / "app" / name) for name in
-             ("CleanupSafety.swift", "CleanupVerify.swift", "GitWorktree.swift", "AgentSessions.swift", "Subprocess.swift")]
+             ("CleanupSafety.swift", "CleanupVerify.swift", "GitWorktree.swift", "AgentSessions.swift", "Subprocess.swift",
+              "MapAccessibility.swift")]
 subprocess.run(["swiftc", *files, str(runner_path), *extra,
                 "-O", "-parse-as-library", "-swift-version", "6", "-default-isolation", "MainActor",
                 "-target", "arm64-apple-macos14.0",
@@ -149,6 +152,8 @@ elif not args.build_only:
     mode = [f"--profile-{args.profile}"] if args.profile else (["--check-only"] if args.check_only else [])
     if args.rings_only:
         mode.append("--rings-only")
+    if args.interaction_only:
+        mode = ["--interaction-only", *(["--check-only"] if args.check_only else [])]
     if args.allow_ring_rounding:
         mode.append("--allow-ring-rounding")
     if args.scale == 1:
