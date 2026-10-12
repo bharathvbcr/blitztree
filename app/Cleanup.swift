@@ -112,7 +112,11 @@ final class CleanupTrashBatch {
     func clearFailures() { failures = [] }
 
     /// Worktrees moved to the Trash whose admin entry is still to be removed
-    /// once the Trash is emptied (see `settleWorktrees`).
+    /// once the Trash is emptied (see `settleWorktrees`). Kept for the life of
+    /// the app only: a worktree whose Trash is emptied after BlitzTree quit
+    /// keeps its admin entry until `git worktree prune`. Persisting the
+    /// receipts is a separate decision, since it would let a later launch
+    /// delete inside a `.git` folder from a record on disk.
     private var worktreesInTrash: [CleanupReceipt] = []
     /// Admin entries that were left in place, with why; shown until dismissed.
     private(set) var notices: [String] = []

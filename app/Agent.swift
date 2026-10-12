@@ -913,7 +913,7 @@ final class AgentRun {
     /// Takes what the stream read. The cards are judged off the main actor and
     /// land in `items` in order, so `items` lags the stream by the cards still
     /// being judged: anything that decides from `items` goes through `inOrder`.
-    func handle(_ event: AgentStreamReader.Event) {
+    private func handle(_ event: AgentStreamReader.Event) {
         guard phase == .thinking else { return }
         switch event {
         case .activity(let text):
