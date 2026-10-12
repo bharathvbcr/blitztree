@@ -1,0 +1,51 @@
+# Source literals that tests/L10nChecks.swift tolerates although app/en.lproj has no key for them.
+# The text is the literal as the check prints it: interpolations show as \(…), newlines as \n.
+#
+#   never | text   deliberately not translated (a product name, an example value)
+#   gap | text     missing from every table when the check was added. Not a decision:
+#                  translate it (add the key to all 7 tables) and delete the line.
+#                  The check warns about a line nothing needs any more.
+#
+# A literal in app/ that is in neither the tables nor this file fails the check.
+
+never | BlitzTree
+never | MANVI
+never | gpt-4o-mini
+never | wrkspc_…
+
+gap | A running process is working in this git worktree: \(…)
+gap | Another volume is mounted inside \(…)
+gap | Changed in the last 2 days: \(…)
+gap | Check for Updates…
+gap | Checking this git worktree took too long: \(…)
+gap | Clean Up would not remove these. Move to Trash works like Finder and does not apply its checks:
+gap | Clean up with \(…) · \(…)
+gap | Cleanup incomplete
+gap | Could not check every file in \(…)
+gap | Could not check for processes using this git worktree: \(…)
+gap | Could not read the coding agents' session logs to check whether this git worktree is in use: \(…)
+gap | Could not remove git worktree metadata: \(…)
+gap | Couldn't read the coding agents' session logs to check recent use
+gap | Filter by name (*, ? wildcards, ⌘F)
+gap | General
+gap | Git could not check \(…): \(…)
+gap | Git is not available to check this worktree: \(…)
+gap | Git worktree has commits on no branch or tag: \(…)
+gap | Git worktree has files hidden from git status: \(…)
+gap | Git worktree has ignored files that a build would not recreate (such as .env): \(…)
+gap | Git worktree has submodules: \(…)
+gap | Git worktree has uncommitted or untracked changes: \(…)
+gap | Git worktree is locked: \(…)
+gap | Git worktree used in the last 2 days: \(…)
+gap | Left git worktree metadata in place because it changed: \(…)
+gap | Left git worktree metadata in place because it is locked: \(…)
+gap | Left git worktree metadata in place because the worktree exists again: \(…)
+gap | List
+gap | Model Providers
+gap | No valid cache directory tag in \(…)
+gap | Not a folder the scan recognised as removable
+gap | Not a linked git worktree: \(…)
+gap | The check does not belong to this folder: \(…)
+gap | Too many files to check in \(…)
+gap | Unknown check \(…) for \(…)
+gap | \(…) (custom)

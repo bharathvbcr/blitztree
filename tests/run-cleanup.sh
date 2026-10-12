@@ -83,4 +83,7 @@ PROVIDER_MOCK=$!
 for _ in {1..100}; do [[ -s "$CLEANUP_TEST_TMP/ports.json" ]] && break; sleep 0.1; done
 [[ -s "$CLEANUP_TEST_TMP/ports.json" ]] || { echo "provider mock did not start" >&2; exit 1; }
 "$CLEANUP_TEST_TMP/provider-pipeline" "$CLEANUP_TEST_TMP/ports.json"
+# The string tables: same keys and format specifiers in all 7 languages, and a
+# key for every literal app/ localizes. Offline; also runnable alone.
+tests/check-l10n.sh
 
