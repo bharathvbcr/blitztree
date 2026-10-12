@@ -61,6 +61,23 @@ nonisolated struct GitFixture {
         return path
     }
 
+    /// `count` linked worktrees of one fresh repository below `home`, each
+    /// backdated past the recent-use window and holding an ignored
+    /// `node_modules` file over the engine's 50 MB floor, so a scan of `home`
+    /// offers every worktree and verification passes for all of them.
+    /// Returns the worktree paths.
+    func scannableWorktrees(in home: String, count: Int) -> [String] {
+        let repo = repository(home + "/repo")
+        let blob = Data(repeating: 7, count: 51_000_000)
+        return (0..<count).map { index in
+            let path = worktree(of: repo, at: home + "/wts/wt\(index)")
+            try! FileManager.default.createDirectory(atPath: path + "/node_modules", withIntermediateDirectories: true)
+            try! blob.write(to: URL(fileURLWithPath: path + "/node_modules/blob"))
+            backdate(path)
+            return path
+        }
+    }
+
     func admin(of worktree: String) -> String {
         try! GitWorktree.layout(of: worktree).admin
     }

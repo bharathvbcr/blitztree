@@ -540,6 +540,32 @@ nonisolated enum GitWorktree {
 /// environment, a time limit and an output cap. Both pipes are drained while
 /// it runs, so a chatty child cannot stall on a full pipe.
 nonisolated enum BoundedProcess {
+    /// Every program `run` was asked to start, counted by executable name
+    /// (`git`, `lsof`...). Checks and benchmarks read it to prove how many
+    /// processes a refresh spawns; nothing in the app depends on it.
+    static let spawns = SpawnLog()
+
+    final class SpawnLog: @unchecked Sendable {
+        private let lock = NSLock()
+        private var counts: [String: Int] = [:]
+
+        fileprivate func record(_ executable: String) {
+            let name = (executable as NSString).lastPathComponent
+            lock.lock(); defer { lock.unlock() }
+            counts[name, default: 0] += 1
+        }
+
+        func count(_ name: String) -> Int {
+            lock.lock(); defer { lock.unlock() }
+            return counts[name] ?? 0
+        }
+
+        func reset() {
+            lock.lock(); defer { lock.unlock() }
+            counts = [:]
+        }
+    }
+
     struct Outcome: Sendable {
         let status: Int32
         let stdout: Data
@@ -559,6 +585,7 @@ nonisolated enum BoundedProcess {
     /// does the spawning, draining and killing.
     static func run(_ executable: String, _ arguments: [String], environment: [String: String],
                     timeout: TimeInterval, cap: Int) -> Outcome? {
+        spawns.record(executable)
         let spec = Subprocess.Spec(executable, arguments, environment: environment, directory: "/")
         let outcome = Subprocess.runBlocking(spec, stdout: .capture(cap: cap), stderr: .capture(cap: 64 * 1024),
                                              timeout: timeout)
