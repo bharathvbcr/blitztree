@@ -38,6 +38,19 @@ final class TreemapNSView: NSView {
 
     override var isFlipped: Bool { true }
 
+    override init(frame: NSRect) {
+        super.init(frame: frame)
+        // Redraw only when asked to (`relayout` and `syncOverlay` always ask).
+        // Then a window drag does not call `draw` per frame: Core Animation
+        // scales the layer's last picture, and the end of the drag renders it
+        // again at the new size.
+        wantsLayer = true
+        layerContentsRedrawPolicy = .onSetNeedsDisplay
+        layerContentsPlacement = .scaleAxesIndependently
+    }
+
+    required init?(coder: NSCoder) { fatalError("init(coder:) is not used") }
+
     /// The layout arrays were built from the tree on screen. Between a tree
     /// swap and the relayout they hold the old tree's node numbers, which
     /// must not be read against the new one.
@@ -48,13 +61,64 @@ final class TreemapNSView: NSView {
         relayoutIfNeeded()
     }
 
+    /// The window is being dragged to a new size. Laying out and painting a
+    /// whole scan for every frame of that is what made a big map stutter, so
+    /// the picture already made is stretched meanwhile (by Core Animation, see
+    /// `init`; `draw` covers the rest) and the map is rendered once, when the
+    /// drag ends.
+    private var liveResizing = false
+
+    override func viewWillStartLiveResize() {
+        super.viewWillStartLiveResize()
+        liveResizing = true
+    }
+
+    /// A frame of the drag was skipped. The drag may end at the size it began
+    /// with, which `relayoutIfNeeded` takes for "nothing changed", so the end
+    /// of a drag that skipped anything renders once whatever the size.
+    private var skippedDuringResize = false
+    /// The scale the bitmap was made at.
+    private var lastScale: CGFloat = 0
+
+    override func viewDidEndLiveResize() {
+        super.viewDidEndLiveResize()
+        liveResizing = false
+        if skippedDuringResize { lastSize = .zero }
+        skippedDuringResize = false
+        relayoutIfNeeded()
+    }
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        liveResizing = false // a drag that began in another window has no end here
+        skippedDuringResize = false
+    }
+
+    /// The layer keeps the last picture; the colours in it come from the
+    /// appearance it was drawn in.
+    override func viewDidChangeEffectiveAppearance() {
+        super.viewDidChangeEffectiveAppearance()
+        needsDisplay = true
+    }
+
+    /// A move to a display of another scale: the bitmap has the wrong pixels.
+    override func viewDidChangeBackingProperties() {
+        super.viewDidChangeBackingProperties()
+        guard let scale = window?.backingScaleFactor, lastScale != 0, scale != lastScale else { return }
+        lastSize = .zero
+        relayoutIfNeeded()
+    }
+
     func relayoutIfNeeded() {
         guard let model, model.tree != nil else { return }
-        if bounds.size != lastSize || model.viewRoot != lastRoot || model.treeGeneration != lastTreeGeneration
+        let contentChanged = model.viewRoot != lastRoot || model.treeGeneration != lastTreeGeneration
             || model.showFreeSpace != lastShowFree || displayedFreeBytes != lastFreeBytes
-            || model.highlightedType != lastHighlight {
-            relayout()
-        }
+            || model.highlightedType != lastHighlight
+        guard bounds.size != lastSize || contentChanged else { return }
+        // Only a new size can wait for the end of the drag, and only when
+        // there is a bitmap to stretch.
+        if liveResizing, !contentChanged, lastSize != .zero { skippedDuringResize = true; return }
+        relayout()
     }
 
     func relayout() {
@@ -64,6 +128,7 @@ final class TreemapNSView: NSView {
             lastSize = .zero
             resetLookups()
             needsDisplay = true
+            a11y.layoutChanged()
             return
         }
         lastSize = bounds.size
@@ -82,10 +147,12 @@ final class TreemapNSView: NSView {
         hoveredNode = model.hovered
         shown = Overlay(hovered: hoveredNode, label: hoveredLabel, selection: model.selection)
         needsDisplay = true
+        a11y.layoutChanged()
     }
 
     private func renderBitmap(tree: Tree) {
         let scale = window?.backingScaleFactor ?? 2
+        lastScale = scale
         let pw = max(1, Int((bounds.width * scale).rounded()))
         let ph = max(1, Int((bounds.height * scale).rounded()))
         let r = TreemapRenderer.render(
@@ -174,6 +241,7 @@ final class TreemapNSView: NSView {
     @discardableResult
     func syncOverlay() -> [CGRect] {
         let now = Overlay(hovered: hoveredNode, label: hoveredLabel, selection: model?.selection)
+        a11y.selectionChanged(now.selection)
         guard now != shown else { return [] }
         let dirty = dirtyRects(from: shown, to: now)
         for r in dirty { setNeedsDisplay(r) }
@@ -265,6 +333,19 @@ final class TreemapNSView: NSView {
     // ---- Drawing ----
 
     override func draw(_ dirtyRect: NSRect) {
+        // Mid-drag the layout still has the old size: show its bitmap
+        // stretched, without labels or overlays that would sit in the wrong
+        // places.
+        if bounds.size != lastSize {
+            if let bitmap {
+                NSImage(cgImage: bitmap, size: bounds.size).draw(
+                    in: bounds, from: .zero, operation: .copy, fraction: 1,
+                    respectFlipped: true,
+                    hints: [.interpolation: NSImageInterpolation.low.rawValue]
+                )
+            }
+            return
+        }
         // Redraw only what was invalidated: a mouse move damages a few thin
         // strips, and blitting the whole bitmap (25 MB on a big Retina
         // window) plus every label was most of each hover frame.
@@ -429,6 +510,8 @@ final class TreemapNSView: NSView {
     @discardableResult
     func hover(at p: CGPoint) -> [CGRect] {
         relayoutIfNeeded() // a tree swapped in since the last layout
+        // Mid-drag the layout is still for the old size; its rects are not under this pointer.
+        guard bounds.size == lastSize else { return [] }
         let lab = Scan.hit(labelHits, p)
         hoveredLabel = lab
         let leaf = lab == nil ? hit(p) : nil
@@ -494,6 +577,93 @@ final class TreemapNSView: NSView {
         model.selection = node
         syncOverlay()
         NodeMenu.popUp(node: node, model: model, with: event, for: self)
+    }
+
+    // ---- Accessibility (see MapAccessibility) ----
+
+    private lazy var a11y = MapAccessibility(view: self, kind: .treemap, host: .init(
+        model: { [unowned self] in model },
+        items: { [unowned self] in accessibilityItems() },
+        press: { [unowned self] in press($0) },
+        select: { [unowned self] in select($0) }))
+
+    override func isAccessibilityElement() -> Bool { true }
+    override func accessibilityRole() -> NSAccessibility.Role? { .list }
+    override func accessibilityRoleDescription() -> String? { a11y.roleDescription }
+    override func accessibilityLabel() -> String? { a11y.label }
+    override func accessibilityChildren() -> [Any]? { a11y.children }
+    override func accessibilitySelectedChildren() -> [Any]? { a11y.selectedChildren }
+
+    /// The folder on screen's children that have a rect, largest first (the
+    /// tree's order), then what is left over. Rects are in view points.
+    private func accessibilityItems() -> [MapAccessibility.Item] {
+        // A layout for another folder (not yet rebuilt) would list the wrong rows.
+        guard layoutIsCurrent, let model, let tree = model.tree, model.viewRoot == lastRoot else { return [] }
+        let root = model.viewRoot
+        var out: [MapAccessibility.Item] = []
+        if root != 0 {
+            let above = tree.parents[root] == UInt32.max ? 0 : Int(tree.parents[root])
+            out.append(.init(role: .back, node: above, bytes: tree.alloc[above], rect: bounds))
+        }
+        var dirs: [Int: CGRect] = [:]
+        for r in rects where r.isDir { dirs[r.node] = r.rect }
+        var files: [Int: CGRect] = [:]
+        for r in leaves { files[r.node] = r.rect }
+        var listed = 0, leftOver = 0
+        var leftOverBytes: UInt64 = 0
+        for child in tree.children(root) {
+            let node = Int(child)
+            let isDir = tree.isDir(node)
+            let rect = isDir ? tree.drawn(node, isDrawn: { dirs[$0] != nil }).flatMap { dirs[$0] } : files[node]
+            if listed < MapAccessibility.maxItems, let rect {
+                out.append(.init(role: isDir ? .folder : .file, node: node, bytes: tree.alloc[node], rect: rect))
+                listed += 1
+            } else {
+                leftOver += 1
+                leftOverBytes += tree.alloc[node]
+            }
+        }
+        if leftOver > 0 {
+            out.append(.init(role: .smaller(count: leftOver), node: -2, bytes: leftOverBytes, rect: bounds))
+        }
+        if displayedFreeBytes > 0 {
+            let region = labels.first { $0.node < 0 }?.region ?? bounds
+            out.append(.init(role: .free, node: -1, bytes: displayedFreeBytes, rect: region))
+        }
+        return out
+    }
+
+    /// Pressing acts as a double-click does: a folder with contents zooms
+    /// in, a file is selected, "Back" zooms out.
+    private func press(_ item: MapAccessibility.Item) -> Bool {
+        guard let model, let tree = model.tree, layoutIsCurrent else { return false }
+        switch item.role {
+        case .back:
+            model.viewRoot = item.node
+            relayout()
+        case .folder where !tree.children(item.node).isEmpty:
+            model.viewRoot = item.node
+            relayout()
+        case .folder, .file:
+            select(item)
+        case .free, .smaller:
+            return false
+        }
+        return true
+    }
+
+    private func select(_ item: MapAccessibility.Item) {
+        model?.selection = item.node
+        syncOverlay()
+    }
+}
+
+extension ScanModel {
+    /// What the maps and breadcrumbs call the scanned folder.
+    var rootDisplayName: String {
+        if scanRoot == "/System/Volumes/Data" { return String(localized: "Macintosh HD") }
+        let last = (scanRoot as NSString).lastPathComponent
+        return last.isEmpty ? scanRoot : last
     }
 }
 
@@ -655,7 +825,10 @@ final class NodeMenu: NSObject {
         NSPasteboard.general.setString(path, forType: .string)
     }
 
-    static let trashMove: (URL) throws -> Void = { try FileManager.default.trashItem(at: $0, resultingItemURL: nil) }
+    /// How Move to Trash is asked and done. Variables so a check can answer
+    /// the confirmation and move into a stand-in Trash; the app never sets them.
+    static var confirm: (NSAlert) -> NSApplication.ModalResponse = { $0.runModal() }
+    static var trashMove: (URL) throws -> Void = { try FileManager.default.trashItem(at: $0, resultingItemURL: nil) }
 
     static func trashItem(at path: String, model: ScanModel?, move: (URL) throws -> Void = trashMove) throws {
         if let failure = trashItems([TrashTarget(path: path)], model: model, move: move).first {
@@ -747,7 +920,7 @@ final class NodeMenu: NSObject {
                             report: ((NSAlert) -> Void)? = nil) {
         guard !targets.isEmpty else { return }
         let alert = trashAlert(targets)
-        let response = confirm?(alert) ?? alert.runModal()
+        let response = (confirm ?? Self.confirm)(alert)
         guard response == .alertFirstButtonReturn else { return }
         let failures = trashItems(targets, model: model, move: move ?? trashMove)
         guard let first = failures.first else { return }

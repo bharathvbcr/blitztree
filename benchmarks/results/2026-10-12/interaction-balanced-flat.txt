@@ -1,0 +1,47 @@
+Renderer benchmark binary: /var/folders/wl/qc_0nnp91cd5kfy179krkjxr0000gn/T/blitztree-rendering-wdogfbt2/rendering
+PASS: 1092 sunburst hover/selection events redraw the same pixels as a full draw (redrawn per event: mean 18%, largest 100% of the view)
+PASS: 36 drag frames render nothing; the end renders once to the baseline's pixels
+workload,baseline_ms,optimized_ms,speedup (min of 9 interleaved pairs, then medians)
+sunburst_hover_logic_balanced_60_steps,min 0.079,0.113,0.70x,median 0.100,0.130,0.77x
+samples,sunburst_hover_logic_balanced_60_steps,baseline,0.239,0.109,0.088,0.094,0.084,0.100,0.079,0.153,0.166
+samples,sunburst_hover_logic_balanced_60_steps,optimized,0.396,0.130,0.144,0.175,0.123,0.115,0.115,0.113,0.189
+sunburst_repaint_balanced_60_steps,min 36.480,15.438,2.36x,median 39.140,24.234,1.62x
+samples,sunburst_repaint_balanced_60_steps,baseline,43.311,44.552,37.544,44.814,39.347,36.480,39.140,37.655,38.874
+samples,sunburst_repaint_balanced_60_steps,optimized,29.250,25.137,52.266,15.438,21.632,17.881,24.234,28.447,21.126
+sunburst_hover_balanced_60_steps,min 49.378,35.014,1.41x,median 54.146,40.074,1.35x
+samples,sunburst_hover_balanced_60_steps,baseline,55.387,55.374,49.378,54.146,55.141,54.889,52.640,50.928,53.417
+samples,sunburst_hover_balanced_60_steps,optimized,43.636,39.709,39.306,41.830,39.269,43.913,41.371,35.014,40.074
+treemap_drag_balanced_24_frames,min 236.428,5.973,39.58x,median 291.168,14.208,20.49x
+samples,treemap_drag_balanced_24_frames,baseline,247.345,236.428,424.487,484.964,250.180,247.579,291.168,385.688,638.982
+samples,treemap_drag_balanced_24_frames,optimized,5.973,10.068,15.652,14.208,12.335,11.503,18.747,14.618,20.943
+sunburst_drag_balanced_24_frames,min 1290.146,30.884,41.77x,median 1595.565,103.921,15.35x
+samples,sunburst_drag_balanced_24_frames,baseline,1290.146,1988.270,2025.619,1595.565,1579.362,1731.955,1594.343,1636.798,1461.871
+samples,sunburst_drag_balanced_24_frames,optimized,30.884,87.529,108.200,103.921,98.575,105.957,144.739,99.672,181.702
+sunburst_hover_logic_flat_60_steps,min 0.066,0.082,0.80x,median 0.074,0.089,0.83x
+samples,sunburst_hover_logic_flat_60_steps,baseline,0.131,0.072,0.074,0.078,0.112,0.150,0.066,0.068,0.069
+samples,sunburst_hover_logic_flat_60_steps,optimized,0.107,0.088,0.088,0.089,0.140,0.135,0.098,0.082,0.083
+sunburst_repaint_flat_60_steps,min 42.211,12.053,3.50x,median 51.712,13.112,3.94x
+samples,sunburst_repaint_flat_60_steps,baseline,42.211,64.512,51.537,117.398,56.144,51.337,51.712,42.484,95.035
+samples,sunburst_repaint_flat_60_steps,optimized,12.127,15.842,12.070,15.075,12.053,23.434,12.829,13.112,19.056
+sunburst_hover_flat_60_steps,min 47.207,24.244,1.95x,median 86.057,49.120,1.75x
+samples,sunburst_hover_flat_60_steps,baseline,243.807,73.900,69.107,86.057,87.875,87.972,129.676,78.222,47.207
+samples,sunburst_hover_flat_60_steps,optimized,49.120,30.421,42.550,137.312,82.626,89.663,35.346,73.740,24.244
+treemap_drag_flat_24_frames,min 566.469,27.058,20.94x,median 723.911,39.898,18.14x
+samples,treemap_drag_flat_24_frames,baseline,566.469,718.428,814.485,768.360,793.087,982.336,696.828,723.911,645.729
+samples,treemap_drag_flat_24_frames,optimized,27.058,39.898,41.315,42.699,42.586,39.364,64.338,32.238,28.444
+sunburst_drag_flat_24_frames,min 361.005,8.842,40.83x,median 383.987,19.865,19.33x
+samples,sunburst_drag_flat_24_frames,baseline,378.990,403.250,386.021,378.950,418.573,383.987,415.906,378.385,361.005
+samples,sunburst_drag_flat_24_frames,optimized,8.842,22.500,21.141,21.985,19.865,20.096,18.768,17.330,17.993
+sunburst_hover_logic_deep_60_steps,min 0.088,0.145,0.60x,median 0.091,0.149,0.61x
+samples,sunburst_hover_logic_deep_60_steps,baseline,0.179,0.091,0.088,0.091,0.097,0.091,0.089,0.092,0.103
+samples,sunburst_hover_logic_deep_60_steps,optimized,0.176,0.147,0.149,0.157,0.153,0.147,0.148,0.145,0.193
+sunburst_repaint_deep_60_steps,min 240.487,329.058,0.73x,median 506.091,440.593,1.15x
+samples,sunburst_repaint_deep_60_steps,baseline,536.317,533.915,508.687,506.091,608.731,287.627,240.487,330.647,371.917
+samples,sunburst_repaint_deep_60_steps,optimized,394.975,550.729,329.058,491.907,374.341,451.186,399.859,612.623,440.593
+sunburst_hover_deep_60_steps,min 345.579,330.937,1.04x,median 377.727,457.560,0.83x
+samples,sunburst_hover_deep_60_steps,baseline,574.618,364.234,471.739,367.108,377.727,345.579,418.031,467.870,371.252
+samples,sunburst_hover_deep_60_steps,optimized,476.952,370.740,421.978,514.130,330.937,333.955,505.459,627.534,457.560
+treemap_drag_deep_24_frames,min 365.552,11.905,30.71x,median 431.564,19.537,22.09x
+samples,treemap_drag_deep_24_frames,baseline,419.943,447.320,371.185,365.552,480.946,431.701,431.564,449.698,407.881
+samples,treemap_drag_deep_24_frames,optimized,11.905,16.855,19.537,14.765,20.246,18.464,21.155,21.957,19.823
+exit 1

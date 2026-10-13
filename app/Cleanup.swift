@@ -161,7 +161,7 @@ final class CleanupTrashBatch {
                 for item in items {
                     do {
                         guard let target = item.target else {
-                            throw CleanupOperations.failure("This folder could not be validated; rescan before cleaning")
+                            throw CleanupOperations.failure(String(localized: "This folder could not be validated; rescan before cleaning"))
                         }
                         // Revalidating at the boundary checks the folder again
                         // (it may have been used since the scan), rule check included.

@@ -15,7 +15,7 @@ nonisolated struct CleanupReceipt: Sendable {
          worktree: WorktreeAdminEntry? = nil) throws {
         let identity = try CleanupIdentity.capture(path: url.path)
         guard identity == original else {
-            throw CleanupOperations.failure("The moved item changed identity; leave it in the Trash and review it")
+            throw CleanupOperations.failure(String(localized: "The moved item changed identity; leave it in the Trash and review it"))
         }
         self.url = url
         self.sourcePath = sourcePath
@@ -27,7 +27,7 @@ nonisolated struct CleanupReceipt: Sendable {
     func validate() throws {
         guard try CleanupIdentity.capture(path: url.path) == identity,
               try CleanupIdentity.capture(path: url.deletingLastPathComponent().path) == parentIdentity else {
-            throw CleanupOperations.failure("The item in the Trash or its parent changed; review it before deleting")
+            throw CleanupOperations.failure(String(localized: "The item in the Trash or its parent changed; review it before deleting"))
         }
     }
 
@@ -120,7 +120,7 @@ nonisolated enum CleanupOperations {
         var destination: NSURL?
         try FileManager.default.trashItem(at: source, resultingItemURL: &destination)
         guard let destination else {
-            throw failure("The item was moved but its Trash location was not returned; review the Trash manually")
+            throw failure(String(localized: "The item was moved but its Trash location was not returned; review the Trash manually"))
         }
         return destination as URL
     }
@@ -167,7 +167,7 @@ nonisolated enum CleanupOperations {
                         try receipt.validate()
                         var isDirectory: ObjCBool = false
                         guard FileManager.default.fileExists(atPath: receipt.url.path, isDirectory: &isDirectory) else {
-                            throw failure("The item in the Trash is missing")
+                            throw failure(String(localized: "The item in the Trash is missing"))
                         }
                         if isDirectory.boolValue {
                             let children = try FileManager.default.contentsOfDirectory(atPath: receipt.url.path)

@@ -32,6 +32,9 @@ final class SunburstNSView: NSView {
     /// Layout visits each ring in angular order, despite interleaving rings.
     private var segmentsByRing: [[Int]] = []
     private var litSegments: [Int]?
+    /// The first segment drawn for each node, built when a selection or a
+    /// highlight needs to find one.
+    private var segmentIndex: [Int: Int]?
     /// Ring edges in points: radii[0] is the centre disc, ring k spans
     /// radii[k]..<radii[k + 1].
     private var radii: [CGFloat] = []
@@ -44,6 +47,13 @@ final class SunburstNSView: NSView {
     private var lastFreeBytes: UInt64 = 0
     private var hoveredSegment: Int?
     private var hoveringCenter = false
+    /// What the overlay shows. It changes only through `syncOverlay()`, which
+    /// invalidates exactly the areas that look different, so a partial redraw
+    /// never mixes two states.
+    private struct Overlay: Equatable {
+        var hovered: Int?, center = false, selected: Int?
+    }
+    private var shown = Overlay()
     private var sizeFont: NSFont?
     private static let titleFont = NSFont.systemFont(ofSize: 12, weight: .medium).tabularDigits()
     private static let detailFont = NSFont.monospacedDigitSystemFont(ofSize: 11, weight: .regular)
@@ -52,7 +62,14 @@ final class SunburstNSView: NSView {
 
     override init(frame: NSRect) {
         super.init(frame: frame)
+        // Redraw only when asked to (`relayout` and `syncOverlay` always ask).
+        // Then a window drag does not call `draw` per frame: Core Animation
+        // scales the layer's last picture, round, and the end of the drag
+        // renders the rings again at the new size.
         wantsLayer = true
+        layerContentsRedrawPolicy = .onSetNeedsDisplay
+        layerContentsPlacement = .scaleProportionallyToFit
+        layer?.backgroundColor = NSColor(calibratedWhite: Style.background, alpha: 1).cgColor
     }
 
     required init?(coder: NSCoder) { fatalError("init(coder:) is not used") }
@@ -67,31 +84,85 @@ final class SunburstNSView: NSView {
         relayoutIfNeeded()
     }
 
+    /// The window is being dragged to a new size. Rendering every ring for
+    /// each frame of that is what made a big map stutter, so the picture
+    /// already made is shown meanwhile (scaled by Core Animation, see `init`;
+    /// `draw` covers the rest) and the rings are rendered once, when the drag
+    /// ends.
+    private var liveResizing = false
+
+    override func viewWillStartLiveResize() {
+        super.viewWillStartLiveResize()
+        liveResizing = true
+    }
+
+    /// A frame of the drag was skipped. The drag may end at the size it began
+    /// with, which `relayoutIfNeeded` takes for "nothing changed", so the end
+    /// of a drag that skipped anything renders once whatever the size.
+    private var skippedDuringResize = false
+    /// The scale the bitmap was made at.
+    private var lastScale: CGFloat = 0
+
+    override func viewDidEndLiveResize() {
+        super.viewDidEndLiveResize()
+        liveResizing = false
+        if skippedDuringResize { lastSize = .zero }
+        skippedDuringResize = false
+        relayoutIfNeeded()
+    }
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        liveResizing = false // a drag that began in another window has no end here
+        skippedDuringResize = false
+    }
+
+    /// The layer keeps the last picture; the colours in it come from the
+    /// appearance it was drawn in.
+    override func viewDidChangeEffectiveAppearance() {
+        super.viewDidChangeEffectiveAppearance()
+        needsDisplay = true
+    }
+
+    /// A move to a display of another scale: the bitmap has the wrong pixels.
+    override func viewDidChangeBackingProperties() {
+        super.viewDidChangeBackingProperties()
+        guard let scale = window?.backingScaleFactor, lastScale != 0, scale != lastScale else { return }
+        lastSize = .zero
+        relayoutIfNeeded()
+    }
+
     func relayoutIfNeeded() {
         guard let model, model.tree != nil else { return }
-        if bounds.size != lastSize || model.viewRoot != lastRoot || model.treeGeneration != lastTreeGeneration
-            || model.showFreeSpace != lastShowFree || displayedFreeBytes != lastFreeBytes {
-            // Zooming crossfades; resizing and rescans just redraw.
-            let zoomed = lastTreeGeneration == model.treeGeneration && model.viewRoot != lastRoot
-            relayout()
-            // Not during SwiftUI's update pass: this writes to the model.
-            DispatchQueue.main.async { [weak self] in self?.refreshHover() }
-            if zoomed {
-                let fade = CATransition()
-                fade.type = .fade
-                fade.duration = 0.18
-                layer?.add(fade, forKey: "zoom")
-            }
+        let contentChanged = model.viewRoot != lastRoot || model.treeGeneration != lastTreeGeneration
+            || model.showFreeSpace != lastShowFree || displayedFreeBytes != lastFreeBytes
+        guard bounds.size != lastSize || contentChanged else { return }
+        // Only a new size can wait for the end of the drag, and only when
+        // there is a bitmap to show.
+        if liveResizing, !contentChanged, lastSize != .zero { skippedDuringResize = true; return }
+        // Zooming crossfades; resizing and rescans just redraw.
+        let zoomed = lastTreeGeneration == model.treeGeneration && model.viewRoot != lastRoot
+        relayout()
+        // Not during SwiftUI's update pass: this writes to the model.
+        DispatchQueue.main.async { [weak self] in self?.refreshHover() }
+        if zoomed {
+            let fade = CATransition()
+            fade.type = .fade
+            fade.duration = 0.18
+            layer?.add(fade, forKey: "zoom")
         }
     }
 
     func relayout() {
         hoveredSegment = nil
+        segmentIndex = nil
         guard let model, let tree = model.tree, bounds.width > 40, bounds.height > 40 else {
             segments = []; segmentPaths = []; segmentsByRing = []; radii = []
             litSegments = nil; hoveringCenter = false; bitmap = nil
             lastSize = .zero
+            shown = Overlay()
             needsDisplay = true
+            a11y.layoutChanged()
             return
         }
         lastSize = bounds.size
@@ -117,7 +188,10 @@ final class SunburstNSView: NSView {
             NSLog("BZ rings: %d arcs, layout %.1f ms, paint %.1f ms", segments.count,
                   laidOut.timeIntervalSince(started) * 1000, -laidOut.timeIntervalSinceNow * 1000)
         }
+        // Everything redraws, so the overlay simply starts from the model.
+        shown = Overlay(hovered: nil, center: hoveringCenter, selected: selectedSegment())
         needsDisplay = true
+        a11y.layoutChanged()
     }
 
     // ---- Layout ----
@@ -258,6 +332,7 @@ final class SunburstNSView: NSView {
 
     private func render() -> CGImage? {
         let scale = window?.backingScaleFactor ?? 2
+        lastScale = scale
         let pw = max(1, Int((bounds.width * scale).rounded()))
         let ph = max(1, Int((bounds.height * scale).rounded()))
         guard let ctx = CGContext(
@@ -382,16 +457,58 @@ final class SunburstNSView: NSView {
         ctx.fillEllipse(in: CGRect(x: center.x - r, y: center.y - r, width: 2 * r, height: 2 * r))
     }
 
+    /// The index of the first segment drawn for each node.
+    private func nodeIndex() -> [Int: Int] {
+        if let segmentIndex { return segmentIndex }
+        let index = Dictionary(segments.indices.map { (segments[$0].node, $0) }) { a, _ in a }
+        segmentIndex = index
+        return index
+    }
+
+    /// The segment that shows the selection: its own, or for a folder too
+    /// deep for the rings the one that holds it (see `Tree.drawn`).
+    private func selectedSegment() -> Int? {
+        guard let model, let sel = model.selection, let tree = model.tree,
+              model.treeGeneration == lastTreeGeneration else { return nil }
+        let index = nodeIndex()
+        return tree.drawn(sel) { index[$0] != nil }.flatMap { index[$0] }
+    }
+
     override func draw(_ dirtyRect: NSRect) {
         guard let bitmap else {
             NSColor(calibratedWhite: Style.background, alpha: 1).setFill()
             bounds.fill()
             return
         }
+        if bounds.size != lastSize {
+            // Mid-drag the rings still have the old size: show them whole and
+            // round, centred, without overlays that would sit in the wrong
+            // places.
+            NSColor(calibratedWhite: Style.background, alpha: 1).setFill()
+            bounds.fill()
+            let fit = min(bounds.width / lastSize.width, bounds.height / lastSize.height)
+            let size = CGSize(width: lastSize.width * fit, height: lastSize.height * fit)
+            NSImage(cgImage: bitmap, size: size).draw(
+                in: CGRect(x: bounds.midX - size.width / 2, y: bounds.midY - size.height / 2,
+                           width: size.width, height: size.height),
+                from: .zero, operation: .copy, fraction: 1, respectFlipped: true,
+                hints: [.interpolation: NSImageInterpolation.low.rawValue]
+            )
+            return
+        }
+        // A hover damages a wedge and the centre label, and AppKit clips this
+        // draw to them. The whole bitmap is still the thing to draw: through the
+        // clip it costs only the damaged pixels, whereas cropping a fresh image
+        // for each rect missed Core Graphics' image cache and cost several
+        // times more.
         NSImage(cgImage: bitmap, size: bounds.size).draw(
             in: bounds, from: .zero, operation: .copy, fraction: 1,
             respectFlipped: true, hints: nil
         )
+        var damaged: UnsafePointer<NSRect>?
+        var n = 0
+        getRectsBeingDrawn(&damaged, count: &n)
+        let dirty = n > 0 && damaged != nil ? Array(UnsafeBufferPointer(start: damaged, count: n)) : [dirtyRect]
         // Segments from before a tree swap hold the old tree's node numbers.
         guard let model, let tree = model.tree, model.treeGeneration == lastTreeGeneration,
               let ctx = NSGraphicsContext.current?.cgContext else { return }
@@ -399,7 +516,7 @@ final class SunburstNSView: NSView {
         if !highlights.isEmpty {
             if litSegments == nil {
                 // Folders deeper than the rings light the arc that holds them.
-                let drawn = Dictionary(segments.indices.map { (segments[$0].node, $0) }) { a, _ in a }
+                let drawn = nodeIndex()
                 let wanted = Set(highlights.compactMap { node in tree.drawn(node) { drawn[$0] != nil } })
                 litSegments = segments.indices.filter { wanted.contains(segments[$0].node) }
             }
@@ -418,7 +535,7 @@ final class SunburstNSView: NSView {
             }
         }
 
-        if let i = hoveredSegment, i < segments.count {
+        if let i = shown.hovered, i < segments.count {
             let s = segments[i]
             ctx.addPath(wedgePath(s))
             ctx.setFillColor(NSColor.white.withAlphaComponent(0.16).cgColor)
@@ -429,21 +546,65 @@ final class SunburstNSView: NSView {
             ctx.strokePath()
         }
 
-        if let sel = model.selection,
-           let shown = tree.drawn(sel, isDrawn: { node in segments.contains { $0.node == node } }),
-           let i = segments.firstIndex(where: { $0.node == shown }) {
+        if let i = shown.selected, i < segments.count {
             ctx.addPath(segmentPaths[i])
             ctx.setStrokeColor(NSColor.controlAccentColor.cgColor)
             ctx.setLineWidth(2)
             ctx.strokePath()
         }
 
-        if hoveringCenter && model.viewRoot != 0 {
+        if shown.center && model.viewRoot != 0 {
             let r = radii[0] - 3
             ctx.setFillColor(NSColor.white.withAlphaComponent(0.07).cgColor)
             ctx.fillEllipse(in: CGRect(x: center.x - r, y: center.y - r, width: 2 * r, height: 2 * r))
         }
-        drawCenterLabel(tree: tree, model: model)
+        if Scan.intersects(dirty, centerRect) { drawCenterLabel(tree: tree, model: model) }
+    }
+
+    /// Where the centre label and the centre disc's tint paint: the disc's
+    /// square, at least big enough for a three-line label in a small window.
+    private var centerRect: CGRect {
+        guard let r = radii.first else { return .zero }
+        let half = max(r, 48)
+        return CGRect(x: center.x - half, y: center.y - half, width: 2 * half, height: 2 * half)
+    }
+
+    /// Catch the overlay up with the pointer and the model's selection, and
+    /// queue redraws of just what changed (returned for the bench). The
+    /// selection is read every time, so `updateNSView` stays subscribed to it.
+    @discardableResult
+    func syncOverlay() -> [CGRect] {
+        let now = Overlay(hovered: hoveredSegment, center: hoveringCenter, selected: selectedSegment())
+        a11y.selectionChanged(model?.selection)
+        guard now != shown else { return [] }
+        var dirty = dirtyRects(from: shown, to: now)
+        // Wedges of big folders overlap each other and the centre; once the
+        // pieces add up to more than the view, redrawing it once is cheaper.
+        if dirty.reduce(0, { $0 + $1.width * $1.height }) >= bounds.width * bounds.height { dirty = [bounds] }
+        for r in dirty { setNeedsDisplay(r) }
+        shown = now
+        return dirty
+    }
+
+    /// Everything that looks different between two overlay states: the
+    /// wedges (hover fills the whole folder), the selection's arc and the
+    /// centre label, which names whatever is hovered.
+    private func dirtyRects(from a: Overlay, to b: Overlay) -> [CGRect] {
+        var out: [CGRect] = []
+        // Strokes are up to 2 pt wide and antialiased.
+        func grown(_ path: CGPath) -> CGRect { path.boundingBoxOfPath.insetBy(dx: -3, dy: -3) }
+        if a.hovered != b.hovered {
+            for h in [a.hovered, b.hovered] {
+                if let h, h < segments.count { out.append(grown(wedgePath(segments[h]))) }
+            }
+        }
+        if a.hovered != b.hovered || a.center != b.center { out.append(centerRect) }
+        if a.selected != b.selected {
+            for s in [a.selected, b.selected] {
+                if let s, s < segments.count { out.append(grown(segmentPaths[s])) }
+            }
+        }
+        return out
     }
 
     /// Name, size and share of whatever is under the pointer, else the folder
@@ -453,22 +614,22 @@ final class SunburstNSView: NSView {
         let size: UInt64
         var detail: String?
         let rootBytes = max(tree.alloc[model.viewRoot], 1)
-        if let i = hoveredSegment, i < segments.count {
+        if let i = shown.hovered, i < segments.count {
             let s = segments[i]
             size = s.bytes
             switch s.node {
             case -1: title = String(localized: "Free space")
-            case -2: title = String(localized: "\(Fmt.num(UInt64(s.count))) smaller items")
+            case -2: title = MapAccessibility.smallerItems(s.count)
             default:
                 title = tree.name(s.node)
                 detail = String(format: "%.1f%%", 100 * Double(s.bytes) / Double(rootBytes))
             }
-        } else if hoveringCenter && model.viewRoot != 0 {
+        } else if shown.center && model.viewRoot != 0 {
             let p = Int(tree.parents[model.viewRoot])
-            title = String(localized: "Back to \(p == 0 || p == Int(UInt32.max) ? rootName(model) : tree.name(p))")
+            title = String(localized: "Back to \(p == 0 || p == Int(UInt32.max) ? model.rootDisplayName : tree.name(p))")
             size = tree.alloc[p == Int(UInt32.max) ? 0 : p]
         } else {
-            title = model.viewRoot == 0 ? rootName(model) : tree.name(model.viewRoot)
+            title = model.viewRoot == 0 ? model.rootDisplayName : tree.name(model.viewRoot)
             size = tree.alloc[model.viewRoot]
             detail = String(localized: "\(Fmt.num(UInt64(tree.nFiles[model.viewRoot]))) files")
         }
@@ -504,13 +665,6 @@ final class SunburstNSView: NSView {
                       options: [.usesLineFragmentOrigin, .truncatesLastVisibleLine])
             y += h + 2
         }
-    }
-
-    private func rootName(_ model: ScanModel) -> String {
-        let p = model.scanRoot
-        if p == "/System/Volumes/Data" { return String(localized: "Macintosh HD") }
-        let last = (p as NSString).lastPathComponent
-        return last.isEmpty ? p : last
     }
 
     // ---- Interaction ----
@@ -572,15 +726,20 @@ final class SunburstNSView: NSView {
         guard let window else { return }
         let p = convert(window.mouseLocationOutsideOfEventStream, from: nil)
         if bounds.contains(p) {
-            hoveredSegment = -1 // force an update
-            updateHover(at: p)
+            updateHover(at: p, force: true)
         } else if model?.hovered != nil {
             model?.hovered = nil
         }
     }
 
-    private func updateHover(at point: CGPoint) {
+    /// Moves the hover to what is under `point` and redraws what changed
+    /// (returned for the bench). `force` re-applies it to the model, tooltip
+    /// and cursor even when the segment is the same.
+    @discardableResult
+    func updateHover(at point: CGPoint, force: Bool = false) -> [CGRect] {
         relayoutIfNeeded() // a tree swapped in since the last layout
+        // Mid-drag the layout is still for the old size; its arcs are not under this pointer.
+        guard bounds.size == lastSize else { return [] }
         let found = hit(point)
         var seg: Int?
         var onCenter = false
@@ -589,7 +748,7 @@ final class SunburstNSView: NSView {
         case let .segment(i): seg = i
         case nil: break
         }
-        guard seg != hoveredSegment || onCenter != hoveringCenter else { return }
+        guard force || seg != hoveredSegment || onCenter != hoveringCenter else { return [] }
         hoveredSegment = seg
         hoveringCenter = onCenter
         let node = seg.map { segments[$0].node }.flatMap { $0 >= 0 ? $0 : nil }
@@ -602,7 +761,7 @@ final class SunburstNSView: NSView {
         }
         NSCursor.pointingHand.set()
         if seg == nil && !(onCenter && model?.viewRoot != 0) { NSCursor.arrow.set() }
-        needsDisplay = true
+        return syncOverlay()
     }
 
     override func mouseExited(with event: NSEvent) {
@@ -610,7 +769,7 @@ final class SunburstNSView: NSView {
         hoveringCenter = false
         model?.hovered = nil
         NSCursor.arrow.set()
-        needsDisplay = true
+        syncOverlay()
     }
 
     /// DaisyDisk clicks: a folder zooms in, the centre zooms back out, a
@@ -632,11 +791,11 @@ final class SunburstNSView: NSView {
                 relayoutIfNeeded()
             } else {
                 model.selection = node
-                needsDisplay = true
+                syncOverlay()
             }
         case nil:
             model.selection = nil
-            needsDisplay = true
+            syncOverlay()
         }
     }
 
@@ -647,8 +806,82 @@ final class SunburstNSView: NSView {
               segments[i].node >= 0
         else { return }
         model.selection = segments[i].node
-        needsDisplay = true
+        syncOverlay()
         NodeMenu.popUp(node: segments[i].node, model: model, with: event, for: self)
+    }
+
+    // ---- Accessibility (see MapAccessibility) ----
+
+    private lazy var a11y = MapAccessibility(view: self, kind: .rings, host: .init(
+        model: { [unowned self] in model },
+        items: { [unowned self] in accessibilityItems() },
+        press: { [unowned self] in press($0) },
+        select: { [unowned self] in select($0) }))
+
+    override func isAccessibilityElement() -> Bool { true }
+    override func accessibilityRole() -> NSAccessibility.Role? { .list }
+    override func accessibilityRoleDescription() -> String? { a11y.roleDescription }
+    override func accessibilityLabel() -> String? { a11y.label }
+    override func accessibilityChildren() -> [Any]? { a11y.children }
+    override func accessibilitySelectedChildren() -> [Any]? { a11y.selectedChildren }
+
+    /// The first ring is the folder on screen's children in size order.
+    /// A row's rect is its arc's bounds; "Back" is the centre disc.
+    private func accessibilityItems() -> [MapAccessibility.Item] {
+        // A layout for another folder (not yet rebuilt) would list the wrong rows.
+        guard let model, let tree = model.tree, model.treeGeneration == lastTreeGeneration, model.viewRoot == lastRoot,
+              segments.count == segmentPaths.count, !radii.isEmpty else { return [] }
+        var out: [MapAccessibility.Item] = []
+        if model.viewRoot != 0 {
+            let p = tree.parents[model.viewRoot]
+            let above = p == UInt32.max ? 0 : Int(p)
+            out.append(.init(role: .back, node: above, bytes: tree.alloc[above], rect: centerRect))
+        }
+        var listed = Set<Int>()
+        for i in segmentsByRing.first ?? [] where listed.count < MapAccessibility.maxItems {
+            let s = segments[i]
+            guard s.node >= 0 else { continue }
+            out.append(.init(role: tree.isDir(s.node) ? .folder : .file, node: s.node, bytes: s.bytes,
+                             rect: segmentPaths[i].boundingBoxOfPath))
+            listed.insert(s.node)
+        }
+        // Whatever the ring has no arc for (too thin to draw, or past the cap).
+        var leftOver = 0
+        var leftOverBytes: UInt64 = 0
+        for child in tree.children(model.viewRoot) where !listed.contains(Int(child)) {
+            leftOver += 1
+            leftOverBytes += tree.alloc[Int(child)]
+        }
+        if leftOver > 0 {
+            out.append(.init(role: .smaller(count: leftOver), node: -2, bytes: leftOverBytes, rect: centerRect))
+        }
+        if let i = segmentsByRing.first?.first(where: { segments[$0].node == -1 }) {
+            out.append(.init(role: .free, node: -1, bytes: segments[i].bytes, rect: segmentPaths[i].boundingBoxOfPath))
+        }
+        return out
+    }
+
+    /// Pressing acts as a click does: a folder zooms in, a file is selected,
+    /// "Back" zooms out.
+    private func press(_ item: MapAccessibility.Item) -> Bool {
+        guard let model, let tree = model.tree, model.treeGeneration == lastTreeGeneration else { return false }
+        switch item.role {
+        case .back:
+            zoomOut()
+        case .folder where !tree.children(item.node).isEmpty:
+            model.viewRoot = item.node
+            relayoutIfNeeded()
+        case .folder, .file:
+            select(item)
+        case .free, .smaller:
+            return false
+        }
+        return true
+    }
+
+    private func select(_ item: MapAccessibility.Item) {
+        model?.selection = item.node
+        syncOverlay()
     }
 }
 
@@ -687,8 +920,6 @@ struct SunburstView: NSViewRepresentable {
             view.highlights = lit
             view.needsDisplay = true
         }
-        // A pick in the list outlines its arc here.
-        _ = model.selection
-        view.needsDisplay = true
+        view.syncOverlay() // e.g. a pick in the list outlines its arc here
     }
 }

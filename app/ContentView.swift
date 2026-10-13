@@ -309,6 +309,7 @@ struct ContentView: View {
                     Image(systemName: "chevron.right")
                         .font(.system(size: 9, weight: .semibold))
                         .foregroundStyle(.tertiary)
+                        .accessibilityHidden(true)
                 }
                 Button {
                     model.viewRoot = node
@@ -337,6 +338,7 @@ struct ContentView: View {
                 Image(systemName: "exclamationmark.triangle")
                     .font(.system(size: 40))
                     .foregroundStyle(.secondary)
+                    .accessibilityHidden(true)
                 Text("The scan failed")
                     .foregroundStyle(.secondary)
                 Text("BlitzTree could not scan \(model.scanRoot)")
@@ -348,6 +350,7 @@ struct ContentView: View {
                 Image(systemName: "stop.circle")
                     .font(.system(size: 40))
                     .foregroundStyle(.secondary)
+                    .accessibilityHidden(true)
                 Text("Scan stopped")
                     .foregroundStyle(.secondary)
                 Text("BlitzTree stopped scanning \(model.scanRoot) before it finished.")
@@ -359,6 +362,7 @@ struct ContentView: View {
                 Image(systemName: "internaldrive")
                     .font(.system(size: 40))
                     .foregroundStyle(.secondary)
+                    .accessibilityHidden(true)
                 Text("Pick a target and scan")
                     .foregroundStyle(.secondary)
             }
@@ -1186,6 +1190,7 @@ struct SearchToolbarField: View {
             Image(systemName: "magnifyingglass")
                 .foregroundStyle(.secondary)
                 .font(.system(size: 11))
+                .accessibilityHidden(true)
 
             TextField(String(localized: "Search"), text: $model.searchQuery)
                 .textFieldStyle(.plain)
@@ -1200,6 +1205,7 @@ struct SearchToolbarField: View {
                         .font(.system(size: 11))
                 }
                 .buttonStyle(.plain)
+                .accessibilityLabel("Clear search")
             }
 
             if model.isSearching {

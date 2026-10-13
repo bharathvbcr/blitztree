@@ -53,6 +53,40 @@ to 28.374 ms against `178d256`, with balanced/deep maps essentially unchanged.
 Those algorithm changes are absent from the final source. The raw paired
 samples are retained as `results/2026-09-27/render-rejected-treemap.txt`.
 
+## Ring hover and window drag (`--interaction-only`)
+
+```sh
+python3 benchmarks/rendering.py --baseline e088f7d --interaction-only          # checks and timings
+python3 benchmarks/rendering.py --baseline bf3b1fc --interaction-only --check-only
+```
+
+Checks (also part of every full run):
+
+- 1,092 hover, select and deselect events on the rings, for balanced, deep and
+  flat fixtures with and without agent highlights, redraw only the rects the
+  event returns into a persistent canvas. After each event the canvas must equal
+  a full redraw, to within the clip-dependent antialiasing Quartz applies at
+  rect edges (at most 4 levels on at most 0.2% of pixels; a missed overlay is
+  over a hundred levels). The first frame must equal the baseline's.
+- A drag (`viewWillStartLiveResize`, 12 `setFrameSize`/`layout` frames,
+  `viewDidEndLiveResize`) renders neither map before its end and renders once at
+  its end, to the baseline's pixels; a zoom during a drag renders at once.
+
+Timings, each the min and median of nine alternating baseline/candidate pairs
+with raw samples:
+
+- `sunburst_hover_*`: 60 pointer steps on a 1440×900 pt view, each an
+  `updateHover` plus the repaint of what it invalidated (the baseline repaints
+  the whole view). `_logic_` and `_repaint_` split the two.
+- `*_drag_*`: 24 frames of `setFrameSize` + `layout`, then the drag's end. The
+  baseline also draws every frame. The candidate does not: the views draw only
+  when invalidated, so Core Animation scales the layer during the drag. That
+  scaling is on the GPU and cannot be timed offscreen, so these rows are the
+  layout and render work removed, not a measured frame time.
+
+The canvas is drawn with `draw(_:)` called under a clip, not AppKit's own
+display pass, so repaint times are indicative; the invalidated area is exact.
+
 ## Real scans (`--real`)
 
 ```sh
