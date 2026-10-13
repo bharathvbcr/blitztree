@@ -34,7 +34,7 @@ echo "==> Swift UI"
 # -default-isolation needs Swift 6.1 (Xcode 16.3+). Probe it.
 if ! echo 'func bzProbe() {}' | swiftc -swift-version 6 -default-isolation MainActor -typecheck - >/dev/null 2>&1; then
     echo "error: the installed Swift predates 6.1 and cannot build the UI;" >&2
-    echo "       default-MainActor isolation needs Xcode 16.3 or newer." >&2
+    echo "       default-MainActor isolation and .icon asset compilation need Xcode 26 or newer." >&2
     exit 1
 fi
 swiftc app/*.swift \
@@ -48,7 +48,11 @@ swiftc app/*.swift \
 # The XPC services only serve sandboxed apps; BlitzTree isn't sandboxed.
 ditto "$SPARKLE/Sparkle.framework" "$APP/Contents/Frameworks/Sparkle.framework"
 rm -rf "$APP/Contents/Frameworks/Sparkle.framework/Versions/B/XPCServices" \
-       "$APP/Contents/Frameworks/Sparkle.framework/XPCServices"
+       "$APP/Contents/Frameworks/Sparkle.framework/XPCServices" \
+       "$APP/Contents/Frameworks/Sparkle.framework/Versions/B/Headers" \
+       "$APP/Contents/Frameworks/Sparkle.framework/Headers" \
+       "$APP/Contents/Frameworks/Sparkle.framework/Versions/B/PrivateHeaders" \
+       "$APP/Contents/Frameworks/Sparkle.framework/PrivateHeaders"
 
 cat > "$APP/Contents/Info.plist" <<EOF
 <?xml version="1.0" encoding="UTF-8"?>
@@ -140,4 +144,5 @@ fi
 "${SIGN[@]}" "$SPARKLE_IN_APP/Versions/B/Updater.app"
 "${SIGN[@]}" "$SPARKLE_IN_APP"
 "${SIGN[@]}" "$APP"
-echo "==> Built $APP"
+codesign --verify --deep --strict "$APP"
+echo "==> Built and verified $APP"

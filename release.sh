@@ -61,8 +61,10 @@ elif [[ "${ALLOW_UNNOTARIZED:-}" != 1 ]]; then
 fi
 
 # The tag is created at HEAD (--target below); GitHub must have that commit.
-[[ -n "$(git for-each-ref --contains "$HEAD_SHA" refs/remotes/origin)" ]] ||
-    die "HEAD $HEAD_SHA is not on any origin branch; push it first so the release tag points at a commit GitHub has."
+if [[ "${DRY_RUN:-}" != 1 && "${ALLOW_UNPUSHED:-}" != 1 ]]; then
+    [[ -n "$(git for-each-ref --contains "$HEAD_SHA" refs/remotes/origin)" ]] ||
+        die "HEAD $HEAD_SHA is not on any origin branch; push it first so the release tag points at a commit GitHub has."
+fi
 
 # Sparkle's signing tool, from the version build.sh pins (never a glob).
 SPARKLE_VERSION=$(awk -F= '/^SPARKLE_VERSION=/{print $2; exit}' build.sh)
@@ -124,7 +126,7 @@ cat > appcast.xml <<EOF
     <pubDate>$(LC_ALL=C date -u "+%a, %d %b %Y %H:%M:%S +0000")</pubDate>
     <sparkle:version>$V</sparkle:version>
     <sparkle:shortVersionString>$V</sparkle:shortVersionString>
-    <sparkle:minimumSystemVersion>$MIN_OS.0</sparkle:minimumSystemVersion>
+    <sparkle:minimumSystemVersion>$MIN_OS</sparkle:minimumSystemVersion>
     <sparkle:fullReleaseNotesLink>https://github.com/ahmedkhaleel2004/blitztree/releases/tag/v$V</sparkle:fullReleaseNotesLink>
     <description><![CDATA[$CHANGES_HTML]]></description>
     <enclosure url="https://github.com/ahmedkhaleel2004/blitztree/releases/download/v$V/BlitzTree.dmg" $ED type="application/octet-stream"/>
@@ -144,6 +146,7 @@ else
     gh release create "v$V" BlitzTree.dmg SHA256SUMS.txt appcast.xml \
         --target "$HEAD_SHA" \
         --title "BlitzTree $V" \
-        --notes "$NOTES"
+        --notes "$NOTES" \
+        --latest
 fi
 echo "==> released v$V"

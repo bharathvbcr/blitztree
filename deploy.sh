@@ -16,7 +16,13 @@ DEST_DIR=${DEST:h}
 [[ -d "$DEST_DIR" && -w "$DEST_DIR" ]] || { print -u2 "deploy.sh: cannot write to $DEST_DIR"; exit 1; }
 # Same directory as DEST, so the final moves are renames on one filesystem.
 STAGING=$(mktemp -d "$DEST_DIR/.BlitzTree-deploy.XXXXXX")
-trap 'rm -rf "$STAGING"' EXIT
+cleanup() {
+    if [[ -e "$STAGING/old.app" && ! -e "$DEST" ]]; then
+        mv "$STAGING/old.app" "$DEST"
+    fi
+    rm -rf "$STAGING"
+}
+trap cleanup EXIT INT TERM
 
 # Clean replace: a ditto-merge over an old bundle can corrupt the signature,
 # and an invalid signature makes TCC silently ignore the FDA grant. So the new
@@ -43,6 +49,9 @@ if ! codesign --verify --deep --strict "$DEST"; then
         mv "$DEST" "$STAGING/rejected.app"
         mv "$STAGING/old.app" "$DEST"
         print -u2 "deploy.sh: the deployed bundle failed verification; the old one is restored"
+    else
+        rm -rf "$DEST"
+        print -u2 "deploy.sh: the deployed bundle failed verification; cleaned up destination"
     fi
     exit 1
 fi
