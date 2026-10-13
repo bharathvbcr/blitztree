@@ -72,7 +72,8 @@ engine scan plus about 0.15 s to hand the tree to the UI.
   it was bench-only, never faster, and shipped in the app's static library
   with unchecked record parsing; it is in git history before the removal.
 - Thread count sweet spot is about the core count. 32+ threads regress ~40%.
-- Scan threads run at `QOS_CLASS_USER_INITIATED`. At a GUI app's default
+- Scan, search and file-type threads (and the scan's coordinator thread) run
+  at `QOS_CLASS_USER_INITIATED`, on two lazily built pools, one for scans and one for queries (see the last section). At a GUI app's default
   QoS they land on efficiency cores and the scan takes twice as long.
   `QOS_CLASS_USER_INTERACTIVE` scanned no faster (home folder in the app:
   8.8–9.6 s vs 9.3–9.4 s) but outranked the UI and the compositor, so the
@@ -216,4 +217,130 @@ install and about five times per planned path.
 20.6x on the min. A component with non-ASCII letters that matches no bytes is
 tried again by canonical equivalence, as `String ==` always matched it, so a
 name spelled composed or decomposed still finds its node.
+
+## USER_INITIATED scan and query pools, and the arena lock (2026-10-12)
+
+Scan, search and the type breakdown now run on lazily built pools of
+USER_INITIATED workers (`src/pool.rs`): a scan pool (`bz-scan-N`) for the walk
+and a query pool (`bz-query-N`) for search and types. Before, only the scan had
+such a pool, and it built a new one for every scan, while search and types ran
+on rayon's global pool at the app's default QoS. The scan coordinator thread is
+USER_INITIATED too (it was USER_INTERACTIVE, the class that made the window
+skip frames).
+
+Method: M5 Pro, 18 cores, macOS 27, release builds of `4286e7e` (base) and the
+change, three arms per round (`base`, `two` = the final two-pool build, and
+`base2` = the base binary again as the A/A control), run interleaved with the
+starting arm rotated each round (`benchmarks/ab.sh`), min and median over the
+rounds. **The machine was not quiet (other agents' builds and tests), so
+absolute times are inflated and only same-round comparisons mean anything.**
+The one-minute load average read by `uptime` after each run: 165-185 for the
+table below, 165-215 for the search-during-scan and pool-size runs, 260-490 for
+the earlier single-pool runs, and about 150 and 280 for the two arena-lock
+instrumentation runs. Raw samples:
+[benchmarks/results/2026-10-12-shared-pool](benchmarks/results/2026-10-12-shared-pool)
+(files with `two-pools` in the name are this table).
+
+| measurement (ms unless noted) | base min / median | base2 (A/A) | two pools |
+|---|---|---|---|
+| `search-synth` 1M entries, `'photo'` (9 rounds) | 2.37 / 3.38 | 2.47 / 2.83 | 2.77 / 2.96 |
+| `'entry_0000001'` | 1.71 / 2.41 | 1.73 / 1.95 | 1.75 / 2.50 |
+| `'*.png'` | 2.29 / 3.11 | 2.34 / 3.22 | 2.32 / 2.86 |
+| `'entry_*_photo.jpg'` | 2.22 / 3.19 | 2.31 / 3.22 | 2.25 / 2.72 |
+| `types` of a 500k-file tree, min of 11 in each process (9 rounds) | 0.36 / 0.60 | 0.38 / 0.45 | 0.40 / 0.47 |
+| `scan-repeat`, small folder, 11 scans per process (21 rounds): min of scans | 0.249 | 0.260 | **0.107** |
+| the same, median across processes of each process's min | 0.323 | 0.357 | **0.169** |
+| the same, first scan in the process (median) | 0.577 | 0.517 | 0.509 |
+| `bulk` walk of a 505k-entry tree (9 rounds, seconds) | 0.217 / 0.233 | 0.208 / 0.225 | 0.199 / 0.228 |
+
+What this shows, and what it does not:
+
+- **No measurable change in the CLI for search, types or a large scan.** Every
+  "two pools" figure sits inside the spread between the two identical base arms
+  (the `types` base and A/A minimums differ by 2x at this load, so that row
+  cannot resolve anything). The workers run at the same speed they ran before;
+  the CLI is not where default-QoS threads hurt.
+- **A repeated scan no longer builds a pool**: about 0.13 ms less per scan on a
+  tiny folder (the cost of starting a thread per core), none on the first scan
+  of a process, nothing visible on a scan that takes seconds. This is real but
+  small.
+- **The benefit the card is after, search and types on the performance cores
+  inside the app, was not measured.** The CLI shows no difference and I could
+  not drive the app's GUI here, so "search/types were running on efficiency
+  cores in the app" stays inferred (from the scan-thread measurement above) and
+  the in-app before/after timing is **unverified**. The tests do prove the
+  mechanism: work run through the pool executes on `bz-scan-N` or `bz-query-N` threads (by role) whose
+  QoS reads back as USER_INITIATED, and the coordinator thread reads back
+  USER_INITIATED where it read USER_INTERACTIVE.
+- **A single shared pool was worse, so there are two.** The first version of
+  this change ran scan, search and types on one pool (`e757ee9`). rayon runs a
+  worker's own spawned jobs before work injected from outside, so a search
+  issued while a scan was walking waited until the walk had little left. `bench
+  search-during-scan` searches a 1M-entry tree back to back while a 505k-entry
+  scan runs (7 interleaved rounds, base / single pool / two pools / base A/A):
+
+  | | base | single pool | two pools | base A/A |
+  |---|---|---|---|---|
+  | searches completed during the scan, min / median | 7 / 14 | **1 / 2** | 10 / 11 | 7 / 12 |
+  | worst search during the scan, ms, min / median | 33 / 47 | **222 / 255** | 30 / 39 | 33 / 42 |
+  | median search during the scan, ms, median | 21 | **255** | 25 | 28 |
+  | idle search, ms, min | 3.21 | 3.73 | 3.23 | 3.29 |
+  | scan time, ms, median | 279 | 260 | 277 | 262 |
+
+  The single pool's worst search was about the length of the scan; with a
+  query pool of its own it is back to the base's, and the scan time is
+  unchanged. That regression is resolved. The earlier measurement of the same
+  effect at load 300+ (single pool: 1-3 searches, 1.09-1.70 s worst case, base:
+  17-32 searches, 89-249 ms) is in `search-during-scan.tsv`; the table above is
+  `search-during-scan-two-pools.tsv`, at load 165-215.
+  The behaviour is also a test with no timing in it
+  (`queries_finish_while_every_scan_worker_is_blocked`): it parks every scan
+  worker on a latch, then asserts a search and a type breakdown still finish;
+  on the single-pool commit that test hangs until its 120 s watchdog fires.
+- **The query pool has rayon's default size.** `BZ_SYNTH_COUNT=1000000 bench
+  search-synth <dir> N` (N sets `RAYON_NUM_THREADS`; 7 rounds, min of rounds, ms): 18 workers 2.5-3.3,
+  9 workers 3.9-4.0, 6 workers 4.9-5.1, 3 workers 8.6-9.1 (`photo`, `*.png`,
+  `entry_*_photo.jpg`; `query-pool-size.tsv`). Search scales with the worker
+  count, and idle workers cost nothing, so there is no reason to cap it.
+  `RAYON_NUM_THREADS` sets both pools.
+
+### Does the arena lock contend on hard-link-heavy trees?
+
+`walk` takes the arena lock once per directory, and `account_file` (a HashMap
+lookup, plus `compare_paths` for a second path to the same data) runs inside
+it. `bench hardlink-fixture` builds real hard links in a fresh directory:
+200 deep folders of 500 files, every folder after the first linking to the first
+one's files (100k entries, 500 data streams); `BZ_HL_PROJECTS=1000` gives a
+505k-entry version; `BZ_HL_UNIQUE=1` writes the same shape as independent files.
+
+Instrumented build (the patch is in the results directory): timing the lock
+around the directory-append block, summed over the workers.
+
+| fixture | walk | lock held (all workers) | `account_file` loop | note |
+|---|---|---|---|---|
+| 100k hard links, load ~150 | 45–57 ms | 7–11 ms | 5–8 ms (50–80 ns per linked file) | 1,001 acquisitions |
+| 100k independent files (control) | 204–241 ms | 9–23 ms | 0.5–3.5 ms | no stream bookkeeping |
+| 505k hard links, load ~150 | 212–279 ms | 43–56 ms | 28–36 ms | 5,001 acquisitions |
+| the same at load ~280 | 1.43 s | 420–427 ms | 287–306 ms | cost per file about 10x higher: the load, not the code |
+
+The wait time the instrumentation reports (0.1–8 s summed over 18 workers) is
+dominated by the load average: the lock holder is descheduled while it holds the
+lock. It is not attributable to the bookkeeping, since the control has the same
+waits with almost none of it.
+
+The direct test of "is the bookkeeping the bottleneck": a build where
+`account_file` does nothing (wrong totals, timing only) against the real one,
+with the A/A control, 25 and 21 interleaved rounds.
+
+| fixture | real (min / median) | bookkeeping free | real again (A/A) |
+|---|---|---|---|
+| 100k hard links, walk, ms | 34 / 37 | 33 / 36 | 34 / 37 |
+| 505k hard links, walk, s | 1.017 / 1.091 | 1.021 / 1.090 | 1.011 / 1.096 |
+
+Removing the bookkeeping entirely changed nothing the A/A control could not.
+The most the change could save is therefore below the noise of this fixture,
+which is the most hard-link-heavy tree one could build; and since `account_file`
+returns the bytes the live progress counter shows, resolving ownership in
+`finish` would also make the counter overshoot during the scan. **No locking
+change was made.** Re-measure on a quiet machine before revisiting.
 

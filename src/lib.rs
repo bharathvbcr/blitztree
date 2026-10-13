@@ -5,8 +5,10 @@
 //! readdir-then-stat-per-file cost that makes naive scanners slow on macOS.
 
 pub mod cleanup;
+pub mod export;
 pub mod ffi;
 pub mod ranking;
+mod pool;
 mod search;
 pub use search::{AsciiToken, PatternToken, QueryMatcher};
 pub mod types;
@@ -76,6 +78,15 @@ pub const NO_PARENT: u32 = u32::MAX;
 /// Kept so a removal can recompute subtree completeness without the walk.
 pub const SELF_INCOMPLETE: u8 = 2;
 
+/// Append `name` below `path` the way `PathBuf::push` does for a name without
+/// a slash: a separator unless `path` is empty or already ends in one.
+pub(crate) fn join_name(path: &mut Vec<u8>, name: &[u8]) {
+    if path.last().is_some_and(|&b| b != b'/') {
+        path.push(b'/');
+    }
+    path.extend_from_slice(name);
+}
+
 /// The finished tree as flat arrays, the layout the Swift UI reads in place
 /// (see app/bz.h). Node 0 is the root; children come after their parent.
 #[derive(Default)]
@@ -125,6 +136,9 @@ impl Tree {
     pub fn name(&self, i: usize) -> &str {
         std::str::from_utf8(self.name_bytes(i)).unwrap_or("")
     }
+    /// Unlike `path_bytes`, a name that is not UTF-8 reads as empty here, so
+    /// the path is not the node's: the Clean Up checks rely on that to fail
+    /// closed rather than act on a real path made from lossy text.
     pub fn path(&self, mut i: usize) -> PathBuf {
         let mut parts = Vec::new();
         while i != 0 {
@@ -134,6 +148,21 @@ impl Tree {
         let mut path = PathBuf::from(self.name(0));
         for part in parts.into_iter().rev() {
             path.push(part);
+        }
+        path
+    }
+    /// The bytes of `path(i)` with every name exactly as stored: the root's
+    /// name, then each name below it, joined as `join_name` does. For the
+    /// export, which must not change or lose a byte of a name.
+    pub fn path_bytes(&self, mut i: usize) -> Vec<u8> {
+        let mut parts = Vec::new();
+        while i != 0 {
+            parts.push(i);
+            i = self.parents[i] as usize;
+        }
+        let mut path = self.name_bytes(0).to_vec();
+        for &part in parts.iter().rev() {
+            join_name(&mut path, self.name_bytes(part));
         }
         path
     }
@@ -273,6 +302,11 @@ pub struct Coverage {
     pub clone_ids_unavailable_directories: u64,
     /// Every directory was read in full: nothing unreadable or skipped.
     pub complete: bool,
+    /// A worker pool could not be started when this was built, so work ran on
+    /// rayon's global pool and may have been slower (the engine reports it on
+    /// stderr too, which a GUI never sees). The results are the same:
+    /// `complete` does not depend on it.
+    pub workers_degraded: bool,
 }
 
 impl Coverage {
@@ -288,6 +322,7 @@ impl Coverage {
             shared_allocated_bytes: count(&progress.shared_bytes),
             clone_ids_unavailable_directories: count(&progress.clone_ids_unavailable_dirs),
             complete: tree.complete.first().copied().unwrap_or(false),
+            workers_degraded: pool::degraded(),
         }
     }
 
@@ -306,6 +341,7 @@ impl Coverage {
                 shared_allocated_bytes: self.shared_allocated_bytes,
                 clone_ids_unavailable_directories: self.clone_ids_unavailable_directories,
                 complete: true,
+                workers_degraded: self.workers_degraded,
                 ..Coverage::default()
             }
         } else {
@@ -1117,35 +1153,6 @@ impl Tree {
     }
 }
 
-extern "C" {
-    fn pthread_set_qos_class_self_np(qos_class: u32, relative_priority: c_int) -> c_int;
-}
-const QOS_CLASS_USER_INTERACTIVE: u32 = 0x21;
-
-/// # Safety
-/// Only affects the calling thread's scheduling class.
-pub unsafe fn set_thread_qos_user_interactive() {
-    pthread_set_qos_class_self_np(QOS_CLASS_USER_INTERACTIVE, 0);
-}
-
-const QOS_CLASS_USER_INITIATED: u32 = 0x19;
-
-/// Rayon pool whose workers run at USER_INITIATED QoS. That still puts them
-/// on the performance cores inside a GUI app (at the app's default QoS they
-/// land on efficiency cores and scan twice as slowly), and it scans as fast
-/// as USER_INTERACTIVE did, but it no longer outranks the UI and the system
-/// compositor: at USER_INTERACTIVE a worker on every core made the window
-/// (and screen recordings) skip frames for a quarter second mid-scan.
-fn fast_pool() -> rayon::ThreadPool {
-    rayon::ThreadPoolBuilder::new()
-        .start_handler(|_| unsafe {
-            pthread_set_qos_class_self_np(QOS_CLASS_USER_INITIATED, 0);
-        })
-        .build()
-        .expect("thread pool")
-}
-
-
 /// The directory a scan of `p` reads: `p` made absolute with every symbolic
 /// link in it followed, since the walk opens directories without following
 /// links. The scan root and the CLI both resolve through this.
@@ -1277,7 +1284,9 @@ fn scan_at(
                 .map_err(|_| "The scan root contains a NUL byte".to_string())
         });
         match target {
-            Ok(path) => fast_pool().scope(|s| walk(s, &shared, path, 0)),
+            Ok(path) => pool::run(pool::Role::Scan, || {
+                rayon::scope(|s| walk(s, &shared, path, 0))
+            }),
             Err(reason) => {
                 progress.errors.fetch_add(1, Ordering::Relaxed);
                 shared.mark_incomplete(0);
@@ -1291,10 +1300,11 @@ fn scan_at(
     tree.errors = progress.errors.load(Ordering::Relaxed);
     if std::env::var_os("BZ_TIMING").is_some() {
         eprintln!(
-            "[bz] walk {:.3}s  finish {:.1}ms  ({} nodes)",
+            "[bz] walk {:.3}s  finish {:.1}ms  ({} nodes, {} workers)",
             (t1 - t0).as_secs_f64(),
             t1.elapsed().as_secs_f64() * 1e3,
-            tree.len()
+            tree.len(),
+            pool::threads()
         );
     }
     tree
@@ -2229,9 +2239,74 @@ mod tests {
     pub(crate) const PANIC_MARKER: &str = "bz-inject-panic";
 
     pub(super) fn inject_scan_fault(path: &CStr) {
-        let marker = PANIC_MARKER.as_bytes();
-        if path.to_bytes().windows(marker.len()).any(|w| w == marker) {
+        let has = |marker: &str| {
+            path.to_bytes()
+                .windows(marker.len())
+                .any(|w| w == marker.as_bytes())
+        };
+        if has(PANIC_MARKER) {
             panic!("injected scan fault");
+        }
+        if has(HOLD_MARKER) {
+            HOLD.pass();
+        }
+    }
+
+    /// Fault injection: a walk that reaches a path containing this parks its
+    /// worker in `HOLD` until the test opens it, so a test can have a scan
+    /// that is deterministically still running. One test at a time may use it.
+    pub(crate) const HOLD_MARKER: &str = "bz-inject-hold";
+
+    pub(crate) static HOLD: Hold = Hold::new();
+
+    pub(crate) struct Hold {
+        state: Mutex<(usize, bool)>,
+        changed: std::sync::Condvar,
+    }
+
+    impl Hold {
+        const fn new() -> Hold {
+            Hold {
+                state: Mutex::new((0, false)),
+                changed: std::sync::Condvar::new(),
+            }
+        }
+
+        /// Close the latch and forget earlier arrivals.
+        pub(crate) fn arm(&self) {
+            *self.state.lock().unwrap_or_else(|e| e.into_inner()) = (0, false);
+        }
+
+        /// Open the latch: parked walks continue.
+        pub(crate) fn release(&self) {
+            self.state.lock().unwrap_or_else(|e| e.into_inner()).1 = true;
+            self.changed.notify_all();
+        }
+
+        /// Block until a walk has arrived (true), or `timeout` passes (false).
+        pub(crate) fn wait_arrival(&self, timeout: std::time::Duration) -> bool {
+            let deadline = std::time::Instant::now() + timeout;
+            let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
+            while state.0 == 0 {
+                let Some(left) = deadline.checked_duration_since(std::time::Instant::now()) else {
+                    return false;
+                };
+                state = self
+                    .changed
+                    .wait_timeout(state, left)
+                    .unwrap_or_else(|e| e.into_inner())
+                    .0;
+            }
+            true
+        }
+
+        fn pass(&self) {
+            let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
+            state.0 += 1;
+            self.changed.notify_all();
+            while !state.1 {
+                state = self.changed.wait(state).unwrap_or_else(|e| e.into_inner());
+            }
         }
     }
 

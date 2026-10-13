@@ -1,0 +1,28 @@
+== links
+[bz] lock: 1001 acquires, wait 61.651 ms total, held 9.361 ms total, account_file loop 6.301 ms total (summed over workers)
+[bz] walk 0.098s  finish 0.5ms  (101001 nodes, 18 workers)
+== unique
+[bz] lock: 1001 acquires, wait 64.372 ms total, held 34.869 ms total, account_file loop 13.511 ms total (summed over workers)
+[bz] walk 0.384s  finish 0.5ms  (101001 nodes, 18 workers)
+== links-large
+[bz] lock: 5001 acquires, wait 3504.193 ms total, held 283.590 ms total, account_file loop 190.572 ms total (summed over workers)
+[bz] walk 1.290s  finish 2.5ms  (505001 nodes, 18 workers)
+== links
+[bz] lock: 1001 acquires, wait 583.416 ms total, held 16.093 ms total, account_file loop 13.856 ms total (summed over workers)
+[bz] walk 0.082s  finish 0.4ms  (101001 nodes, 18 workers)
+== unique
+[bz] lock: 1001 acquires, wait 426.349 ms total, held 33.706 ms total, account_file loop 5.293 ms total (summed over workers)
+[bz] walk 0.236s  finish 1.1ms  (101001 nodes, 18 workers)
+== links-large
+[bz] lock: 5001 acquires, wait 7972.522 ms total, held 420.076 ms total, account_file loop 287.482 ms total (summed over workers)
+[bz] walk 1.429s  finish 3.9ms  (505001 nodes, 18 workers)
+== links
+[bz] lock: 1001 acquires, wait 3464.256 ms total, held 112.190 ms total, account_file loop 75.143 ms total (summed over workers)
+[bz] walk 0.258s  finish 0.8ms  (101001 nodes, 18 workers)
+== unique
+[bz] lock: 1001 acquires, wait 351.305 ms total, held 25.388 ms total, account_file loop 4.981 ms total (summed over workers)
+[bz] walk 0.256s  finish 0.5ms  (101001 nodes, 18 workers)
+== links-large
+[bz] lock: 5001 acquires, wait 8234.943 ms total, held 427.026 ms total, account_file loop 306.429 ms total (summed over workers)
+[bz] walk 1.427s  finish 2.9ms  (505001 nodes, 18 workers)
+13:58  up 1 day,  2:12, 1 user, load averages: 279.85 283.56 220.30

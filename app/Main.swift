@@ -31,6 +31,7 @@ struct BlitzTreeApp: App {
             CommandGroup(after: .appInfo) {
                 Button("Check for Updates…") { updater.checkForUpdates(nil) }
             }
+            ExportCommands()
         }
 
         // Cmd+, — language and custom model providers.

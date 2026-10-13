@@ -1,0 +1,70 @@
+diff --git a/src/lib.rs b/src/lib.rs
+index fbbed2a..6906d43 100644
+--- a/src/lib.rs
++++ b/src/lib.rs
+@@ -819,6 +819,11 @@ impl Shared<'_> {
+     }
+ }
+ 
++static LOCK_WAIT_NS: AtomicU64 = AtomicU64::new(0);
++static LOCK_HELD_NS: AtomicU64 = AtomicU64::new(0);
++static ACCOUNT_NS: AtomicU64 = AtomicU64::new(0);
++static LOCK_ACQUIRES: AtomicU64 = AtomicU64::new(0);
++
+ fn child_path(dir: &CStr, name: &[u8]) -> Option<CString> {
+     let dir = dir.to_bytes();
+     let mut p = Vec::with_capacity(dir.len() + name.len() + 2);
+@@ -871,12 +876,16 @@ fn walk<'s>(scope: &rayon::Scope<'s>, shared: &'s Shared<'s>, path: CString, dir
+         }
+ 
+         let appended = {
++            let t_wait = std::time::Instant::now();
+             let mut arena = shared.arena.lock().unwrap();
++            let t_held = std::time::Instant::now();
++            LOCK_WAIT_NS.fetch_add((t_held - t_wait).as_nanos() as u64, Ordering::Relaxed);
++            LOCK_ACQUIRES.fetch_add(1, Ordering::Relaxed);
+             let t = &mut arena.tree;
+             let limits = shared.limits;
+             let fits = t.parents.len() as u64 + entries.len() as u64 <= limits.nodes
+                 && t.name_blob.len() as u64 + names.len() as u64 <= limits.name_bytes;
+-            if !fits {
++            let r = if !fits {
+                 t.complete[dir_idx as usize] = false;
+                 None
+             } else {
+@@ -893,6 +902,7 @@ fn walk<'s>(scope: &rayon::Scope<'s>, shared: &'s Shared<'s>, path: CString, dir
+                 t.name_blob.extend_from_slice(names);
+                 let mut bytes = 0;
+                 let mut shared_bytes = 0;
++                let t_acct = std::time::Instant::now();
+                 for (k, e) in entries.iter().enumerate() {
+                     if !e.is_dir {
+                         let added = arena.account_file(base + k as u32, e.stream);
+@@ -900,9 +910,12 @@ fn walk<'s>(scope: &rayon::Scope<'s>, shared: &'s Shared<'s>, path: CString, dir
+                         shared_bytes += e.alloc - added;
+                     }
+                 }
++                ACCOUNT_NS.fetch_add(t_acct.elapsed().as_nanos() as u64, Ordering::Relaxed);
+                 progress.shared_bytes.fetch_add(shared_bytes, Ordering::Relaxed);
+                 Some((base, bytes))
+-            }
++            };
++            LOCK_HELD_NS.fetch_add(t_held.elapsed().as_nanos() as u64, Ordering::Relaxed);
++            r
+         };
+         let Some((base, bytes)) = appended else {
+             progress.errors.fetch_add(1, Ordering::Relaxed);
+@@ -1257,6 +1270,13 @@ fn scan_at(
+     finish(&mut tree);
+     tree.errors = progress.errors.load(Ordering::Relaxed);
+     if std::env::var_os("BZ_TIMING").is_some() {
++        eprintln!(
++            "[bz] lock: {} acquires, wait {:.3} ms total, held {:.3} ms total, account_file loop {:.3} ms total (summed over workers)",
++            LOCK_ACQUIRES.load(Ordering::Relaxed),
++            LOCK_WAIT_NS.load(Ordering::Relaxed) as f64 / 1e6,
++            LOCK_HELD_NS.load(Ordering::Relaxed) as f64 / 1e6,
++            ACCOUNT_NS.load(Ordering::Relaxed) as f64 / 1e6
++        );
+         eprintln!(
+             "[bz] walk {:.3}s  finish {:.1}ms  ({} nodes, {} workers)",
+             (t1 - t0).as_secs_f64(),

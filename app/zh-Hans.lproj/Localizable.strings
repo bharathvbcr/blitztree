@@ -92,6 +92,14 @@
 "Planned in %@ s" = "用时 %@ 秒完成规划";
 "Reveal %@ in Finder" = "在 Finder 中显示 %@";
 "Reveal in Finder" = "在 Finder 中显示";
+"Export as CSV…" = "导出为 CSV…";
+"Could not export" = "无法导出";
+"Exporting to CSV…" = "正在导出为 CSV…";
+"%@ of %@ rows" = "%@ / %@ 行";
+"Exports “%@” and everything in it as a CSV file." = "将“%@”及其全部内容导出为 CSV 文件。";
+"BlitzTree could not save the CSV file. %@" = "BlitzTree 无法存储 CSV 文件。%@";
+"The export could not be started." = "无法开始导出。";
+"The export failed." = "导出失败。";
 "%@ is looking" = "%@ 正在查看";
 "Nothing worth removing" = "没有值得移除的内容";
 "Here's the plan" = "规划如下";

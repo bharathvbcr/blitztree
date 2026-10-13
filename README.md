@@ -25,6 +25,7 @@ Signed with a Developer ID and notarized by Apple, so it opens like any other ap
 - Or plan with [MANVI](https://github.com/bharathvbcr/Manvi) on the cloud (your Anthropic, Gemini or xAI key, from your shell or Keychain, with Claude models listed live) or a local model (Ollama, LM Studio, vLLM…), or local first with the cloud as fallback: Settings → Model Providers. BlitzTree starts it read-only, in its strict posture
 - Or clean up with any model: Settings → Model Providers connects any OpenAI- or Anthropic-compatible endpoint — a relay, a self-hosted server (Ollama, LM Studio) or a gateway — by its base URL, protocol and key
 - English, Türkçe, Deutsch, Français, Español, 简体中文 and 日本語, picked in Settings; the agent prompt stays English while the UI follows you
+- File → Export as CSV…: writes the folder on screen and everything in it (the whole scan, when you are at the top) as a CSV file: path, allocated size, logical size, file count, folder or not, and whether it was read in full. It streams to disk from the engine, shows progress with a Cancel button on a big export, and replaces the file only once it is whole; a cancel or an error leaves nothing behind. Replacing a file keeps its permissions (a 0600 file stays 0600) but, being a rename, not its ACLs, extended attributes or other hard links. The same writer is the CLI's `export-csv` command
 - Live progress while scanning, and an optional free-space block
 - Native AppKit/SwiftUI, with the Liquid Glass design on macOS 26 and later
 - No telemetry. BlitzTree itself only goes online to check GitHub for updates once a day (installed when you quit); the AI cleanup only runs when you click it, using your own agent, which sends folder paths and sizes from the scan (never file contents) to Anthropic or OpenAI
@@ -91,20 +92,24 @@ The Rust engine hands the finished tree to the Swift UI as flat arrays over a C 
 
 ## JSON CLI for agents and scripts
 
-An optional, read-only CLI uses the same scan engine without opening the GUI
+An optional CLI uses the same scan engine without opening the GUI
 or launching an AI agent:
 
 ```sh
 cargo build --locked --release --features cli --bin blitztree
 ./target/release/blitztree scan --root "$HOME/Downloads"
 ./target/release/blitztree quick-wins --root "$HOME" --limit 20
+./target/release/blitztree export-csv --root "$HOME/Downloads" --output downloads.csv
 ```
 
 `scan` lists the largest directories and files as JSON. `quick-wins` includes
 that inventory plus the Clean Up panel's existing candidates and labels. The
 panel and CLI share one Rust implementation of the rules, with no new heuristics.
-Both report incomplete scans; allocated bytes are not
-a promise of reclaimable space. Neither command modifies the scanned files.
+`export-csv` writes every scanned item to a CSV file, with the writer behind the
+app's File → Export as CSV…, and reports what it wrote as JSON.
+All report incomplete scans; allocated bytes are not
+a promise of reclaimable space. None of them modifies the scanned files;
+`export-csv` writes only the file named by `--output`.
 
 The CLI is built from source separately from the app. Its JSON dependency is
 only compiled with the `cli` feature. See [the CLI contract and tests](docs/AGENT_API.md).
