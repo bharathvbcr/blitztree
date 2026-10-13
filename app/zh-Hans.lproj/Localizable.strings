@@ -145,7 +145,6 @@
 /* Settings */
 "Custom model providers" = "自定义模型提供商";
 "Add provider" = "添加提供商";
-"Connect a relay, a self-hosted server, or any other OpenAI- or Anthropic-compatible endpoint by its base URL, protocol, and models." = "通过基础 URL、协议和模型，连接中继、自托管服务器或任何其他兼容 OpenAI 或 Anthropic 的端点。";
 "Edit" = "编辑";
 "Delete" = "删除";
 "Custom model API" = "自定义模型 API";
@@ -177,14 +176,13 @@
 
 /* Setup offer: custom providers */
 "Or use any model — a self-hosted server, a relay, a gateway." = "或使用任意模型——自托管服务器、中继或网关。";
-"Set up a model provider" = "";
 
 "Add a model provider" = "添加模型提供商";
 "Or" = "或";
 "Which AI proposes what can go from the scan. Nothing is removed without your say." = "哪个 AI 建议可从扫描中清理的内容。未经您确认不会删除任何内容。";
 
 "Save changes" = "保存更改";
-"HTTP %@: %@" = "HTTP %@: %@";
+"HTTP %lld: %@" = "HTTP %lld: %@";
 /* Step lines */
 "Reading your scan" = "正在读取你的扫描";
 "Asking %@ what can go" = "正在询问 %@ 哪些内容可以删除";
@@ -361,3 +359,41 @@
 "This folder could not be validated; rescan before cleaning" = "无法验证此文件夹；请在清理前重新扫描";
 "Cleanup tool not found in an absolute PATH directory" = "在 PATH 的绝对路径目录中找不到清理工具";
 "1 smaller item" = "1 个较小项目";
+
+/* Wave 1 guard reasons, installer and menu strings */
+"A running process is working in this git worktree: %@" = "有进程正在此 git 工作树中运行：%@";
+"Another volume is mounted inside %@" = "另一个宗卷已挂载在 %@ 内";
+"Changed in the last 2 days: %@" = "最近 2 天内有更改：%@";
+"Check for Updates…" = "检查更新…";
+"Checking this git worktree took too long: %@" = "检查此 git 工作树耗时过长：%@";
+"Clean Up would not remove these. Move to Trash works like Finder and does not apply its checks:" = "“清理”不会移除这些项目。“移到废纸篓”的行为与访达相同，不会应用“清理”的检查：";
+"Clean up with %@ · %@" = "使用 %@ · %@ 清理";
+"Cleanup incomplete" = "清理未完成";
+"Could not check every file in %@" = "无法检查 %@ 中的所有文件";
+"Could not check for processes using this git worktree: %@" = "无法检查是否有进程正在使用此 git 工作树：%@";
+"Could not read the coding agents' session logs to check whether this git worktree is in use: %@" = "无法读取编程代理的会话日志，因此无法确认此 git 工作树是否正在使用：%@";
+"Could not remove git worktree metadata: %@" = "无法移除 git 工作树元数据：%@";
+"Couldn't read the coding agents' session logs to check recent use" = "无法读取编程代理的会话日志，因此无法检查最近的使用情况";
+"Filter by name (*, ? wildcards, ⌘F)" = "按名称筛选（* 和 ? 通配符，⌘F）";
+"General" = "通用";
+"Git could not check %@: %@" = "Git 无法检查 %@：%@";
+"Git is not available to check this worktree: %@" = "Git 不可用，无法检查此工作树：%@";
+"Git worktree has commits on no branch or tag: %@" = "git 工作树中有不在任何分支或标签上的提交：%@";
+"Git worktree has files hidden from git status: %@" = "git 工作树中有 git status 看不到的文件：%@";
+"Git worktree has ignored files that a build would not recreate (such as .env): %@" = "git 工作树中有构建不会重新生成的被忽略文件（例如 .env）：%@";
+"Git worktree has submodules: %@" = "git 工作树包含子模块：%@";
+"Git worktree has uncommitted or untracked changes: %@" = "git 工作树有未提交或未跟踪的更改：%@";
+"Git worktree is locked: %@" = "git 工作树已锁定：%@";
+"Git worktree used in the last 2 days: %@" = "git 工作树在最近 2 天内使用过：%@";
+"Left git worktree metadata in place because it changed: %@" = "git 工作树元数据已更改，已保留原样：%@";
+"Left git worktree metadata in place because it is locked: %@" = "git 工作树已锁定，其元数据已保留原样：%@";
+"Left git worktree metadata in place because the worktree exists again: %@" = "工作树再次存在，因此 git 工作树元数据已保留原样：%@";
+"List" = "列表";
+"Model Providers" = "模型提供商";
+"No valid cache directory tag in %@" = "%@ 中没有有效的缓存目录标记";
+"Not a folder the scan recognised as removable" = "不是扫描识别为可移除的文件夹";
+"Not a linked git worktree: %@" = "不是已关联的 git 工作树：%@";
+"The check does not belong to this folder: %@" = "此检查不属于该文件夹：%@";
+"Too many files to check in %@" = "%@ 中需要检查的文件过多";
+"Unknown check %@ for %@" = "%2$@ 的未知检查 %1$@";
+"%@ (custom)" = "%@（自定义）";

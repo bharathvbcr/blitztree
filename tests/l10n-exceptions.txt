@@ -1,0 +1,15 @@
+# Source literals that tests/L10nChecks.swift tolerates although app/en.lproj has no key for them.
+# The text is the literal as the check prints it: interpolations show as \(…), newlines as \n.
+#
+#   never | text   deliberately not translated (a product name, an example value)
+#   gap | text     missing from every table when the check was added. Not a decision:
+#                  translate it (add the key to all 7 tables) and delete the line.
+#                  The check warns about a line nothing needs any more.
+#
+# A literal in app/ that is in neither the tables nor this file fails the check.
+
+never | BlitzTree
+never | MANVI
+never | gpt-4o-mini
+never | wrkspc_…
+

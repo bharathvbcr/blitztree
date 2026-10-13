@@ -1,7 +1,34 @@
 #!/bin/zsh
 # Offline regression checks. All filesystem operations stay in disposable fixtures.
 set -euo pipefail
-cd "$(dirname "$0")/.."
+SELF=${0:A}
+cd "${SELF:h}/.."
+# A check that cannot run here (no Keychain, no hdiutil, no fish ...) prints a
+# line starting with SKIP and carries on: a skip is not a failure, so the exit
+# code is untouched. But a skipped check must never read as a plain pass, so
+# the run is wrapped: everything it prints is kept, and when it ends every SKIP
+# line is listed again with a count (and, on GitHub Actions, as a warning
+# annotation on the run page).
+if [[ -z "${BZ_CLEANUP_INNER:-}" ]]; then
+  RUN_LOG=$(mktemp /tmp/blitztree-cleanup-log.XXXXXX)
+  set +e
+  BZ_CLEANUP_INNER=1 zsh "$SELF" "$@" 2>&1 | tee "$RUN_LOG"
+  RUN_STATUS=${pipestatus[1]}
+  set -e
+  SKIPS=("${(@f)$(grep -E '^SKIP' "$RUN_LOG" || true)}")
+  SKIPS=("${(@)SKIPS:#}")
+  rm -f "$RUN_LOG"
+  if (( ${#SKIPS} == 0 )); then
+    echo "no checks skipped"
+  else
+    echo "${#SKIPS} checks SKIPPED (not failures, but nothing was checked):"
+    for line in "${SKIPS[@]}"; do
+      echo "  $line"
+      [[ -n "${GITHUB_ACTIONS:-}" ]] && echo "::warning title=Check skipped::${line//\%/%25}"
+    done
+  fi
+  exit $RUN_STATUS
+fi
 CLEANUP_TEST_TMP=$(mktemp -d /tmp/blitztree-cleanup-checks.XXXXXX)
 PROVIDER_MOCK=""
 # Only the mock this script started (by PID) is stopped on the way out.
@@ -83,6 +110,27 @@ PROVIDER_MOCK=$!
 for _ in {1..100}; do [[ -s "$CLEANUP_TEST_TMP/ports.json" ]] && break; sleep 0.1; done
 [[ -s "$CLEANUP_TEST_TMP/ports.json" ]] || { echo "provider mock did not start" >&2; exit 1; }
 "$CLEANUP_TEST_TMP/provider-pipeline" "$CLEANUP_TEST_TMP/ports.json"
+# The string tables: same keys and format specifiers in all 7 languages, and a
+# key for every literal app/ localizes. Offline; also runnable alone.
+tests/check-l10n.sh
+# The maps' geometry: squarified treemap (areas, overlap, containment, pixel
+# coverage), the leaf index and the rings' angles, on random input and a scan.
+swiftc "${SOURCES[@]}" tests/LayoutChecks.swift "${FLAGS[@]}" \
+  -import-objc-header app/bz.h -L target/release -lblitztree \
+  -framework AppKit -framework SwiftUI -o "$CLEANUP_TEST_TMP/layout"
+"$CLEANUP_TEST_TMP/layout"
+# PartialPlanParser and PlanJSON on recorded stream shapes, in every chunking. No server.
+swiftc app/PlanParsing.swift tests/PlanParsingChecks.swift "${FLAGS[@]}" -o "$CLEANUP_TEST_TMP/plan-parsing"
+"$CLEANUP_TEST_TMP/plan-parsing"
+# The engine on non-APFS volumes (HFS+, ExFAT, FAT32 disk images) and a volume
+# mounted inside the scanned tree. Ignored by plain `cargo test`, so they run
+# here; without hdiutil they are reported as skipped, never as passed.
+if [[ -x /usr/bin/hdiutil ]]; then
+  cargo test --locked --release --lib volume_tests -- --ignored --test-threads=1 2>&1 | tee "$CLEANUP_TEST_TMP/volume-tests.log"
+  grep -q "test result: ok. 2 passed" "$CLEANUP_TEST_TMP/volume-tests.log"
+else
+  echo "SKIPPED: engine tests on disk images (no /usr/bin/hdiutil); nothing was checked"
+fi
 # Stopping a scan, the earlier tree coming back, and the coverage the engine
 # reports reaching the app (marks, summary text, strings in every language).
 swiftc "${SOURCES[@]}" tests/ScanCancelChecks.swift "${FLAGS[@]}" \

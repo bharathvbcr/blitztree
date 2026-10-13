@@ -145,7 +145,6 @@
 /* Settings */
 "Custom model providers" = "Eigene Modellprovider";
 "Add provider" = "Provider hinzufügen";
-"Connect a relay, a self-hosted server, or any other OpenAI- or Anthropic-compatible endpoint by its base URL, protocol, and models." = "Verbinden Sie einen Relay, einen selbst gehosteten Server oder jeden anderen OpenAI- oder Anthropic-kompatiblen Endpunkt über Basis-URL, Protokoll und Modelle.";
 "Edit" = "Bearbeiten";
 "Delete" = "Löschen";
 "Custom model API" = "Eigene Modell-API";
@@ -177,14 +176,13 @@
 
 /* Setup offer: custom providers */
 "Or use any model — a self-hosted server, a relay, a gateway." = "Oder ein beliebiges Modell — ein selbst gehosteter Server, ein Relay, ein Gateway.";
-"Set up a model provider" = "";
 
 "Add a model provider" = "Modellanbieter hinzufügen";
 "Or" = "oder";
 "Which AI proposes what can go from the scan. Nothing is removed without your say." = "Welche KI vorschlägt, was aus dem Scan weg kann. Ohne Ihre Zustimmung wird nichts entfernt.";
 
 "Save changes" = "Änderungen sichern";
-"HTTP %@: %@" = "HTTP %@: %@";
+"HTTP %lld: %@" = "HTTP %lld: %@";
 /* Step lines */
 "Reading your scan" = "Ihr Scan wird gelesen";
 "Asking %@ what can go" = "%@ fragen, was weg kann";
@@ -361,3 +359,41 @@
 "This folder could not be validated; rescan before cleaning" = "Dieser Ordner konnte nicht geprüft werden; scannen Sie erneut, bevor Sie ihn bereinigen";
 "Cleanup tool not found in an absolute PATH directory" = "Das Bereinigungswerkzeug wurde in keinem absoluten PATH-Verzeichnis gefunden";
 "1 smaller item" = "1 kleineres Objekt";
+
+/* Wave 1 guard reasons, installer and menu strings */
+"A running process is working in this git worktree: %@" = "In diesem Git-Worktree arbeitet gerade ein Prozess: %@";
+"Another volume is mounted inside %@" = "In %@ ist ein weiteres Volume eingebunden";
+"Changed in the last 2 days: %@" = "In den letzten 2 Tagen geändert: %@";
+"Check for Updates…" = "Nach Updates suchen …";
+"Checking this git worktree took too long: %@" = "Die Prüfung dieses Git-Worktrees hat zu lange gedauert: %@";
+"Clean Up would not remove these. Move to Trash works like Finder and does not apply its checks:" = "Bereinigen würde diese nicht entfernen. „In den Papierkorb legen“ funktioniert wie im Finder und wendet die Prüfungen der Bereinigung nicht an:";
+"Clean up with %@ · %@" = "Bereinigen mit %@ · %@";
+"Cleanup incomplete" = "Bereinigung unvollständig";
+"Could not check every file in %@" = "Nicht alle Dateien in %@ konnten geprüft werden";
+"Could not check for processes using this git worktree: %@" = "Prozesse, die diesen Git-Worktree verwenden, konnten nicht geprüft werden: %@";
+"Could not read the coding agents' session logs to check whether this git worktree is in use: %@" = "Die Sitzungsprotokolle der Coding-Agenten konnten nicht gelesen werden, um zu prüfen, ob dieser Git-Worktree verwendet wird: %@";
+"Could not remove git worktree metadata: %@" = "Git-Worktree-Metadaten konnten nicht entfernt werden: %@";
+"Couldn't read the coding agents' session logs to check recent use" = "Die Sitzungsprotokolle der Coding-Agenten konnten nicht gelesen werden, um die letzte Nutzung zu prüfen";
+"Filter by name (*, ? wildcards, ⌘F)" = "Nach Namen filtern (*, ? als Platzhalter, ⌘F)";
+"General" = "Allgemein";
+"Git could not check %@: %@" = "Git konnte %@ nicht prüfen: %@";
+"Git is not available to check this worktree: %@" = "Git ist nicht verfügbar, um diesen Worktree zu prüfen: %@";
+"Git worktree has commits on no branch or tag: %@" = "Git-Worktree hat Commits, die auf keinem Branch und keinem Tag liegen: %@";
+"Git worktree has files hidden from git status: %@" = "Git-Worktree hat Dateien, die in git status nicht erscheinen: %@";
+"Git worktree has ignored files that a build would not recreate (such as .env): %@" = "Git-Worktree hat ignorierte Dateien, die ein Build nicht neu erzeugen würde (z. B. .env): %@";
+"Git worktree has submodules: %@" = "Git-Worktree hat Submodule: %@";
+"Git worktree has uncommitted or untracked changes: %@" = "Git-Worktree hat nicht committete oder nicht verfolgte Änderungen: %@";
+"Git worktree is locked: %@" = "Git-Worktree ist gesperrt: %@";
+"Git worktree used in the last 2 days: %@" = "Git-Worktree wurde in den letzten 2 Tagen verwendet: %@";
+"Left git worktree metadata in place because it changed: %@" = "Git-Worktree-Metadaten wurden belassen, weil sie sich geändert haben: %@";
+"Left git worktree metadata in place because it is locked: %@" = "Git-Worktree-Metadaten wurden belassen, weil der Worktree gesperrt ist: %@";
+"Left git worktree metadata in place because the worktree exists again: %@" = "Git-Worktree-Metadaten wurden belassen, weil der Worktree wieder existiert: %@";
+"List" = "Liste";
+"Model Providers" = "Modellanbieter";
+"No valid cache directory tag in %@" = "Kein gültiges Cache-Verzeichnis-Tag in %@";
+"Not a folder the scan recognised as removable" = "Kein Ordner, den der Scan als entfernbar erkannt hat";
+"Not a linked git worktree: %@" = "Kein verknüpfter Git-Worktree: %@";
+"The check does not belong to this folder: %@" = "Die Prüfung gehört nicht zu diesem Ordner: %@";
+"Too many files to check in %@" = "Zu viele Dateien zum Prüfen in %@";
+"Unknown check %@ for %@" = "Unbekannte Prüfung %@ für %@";
+"%@ (custom)" = "%@ (benutzerdefiniert)";

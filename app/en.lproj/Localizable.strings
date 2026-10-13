@@ -140,7 +140,6 @@
 "Is “%@” safe to clean?" = "Is “%@” safe to clean?";
 "Custom model providers" = "Custom model providers";
 "Add provider" = "Add provider";
-"Connect a relay, a self-hosted server, or any other OpenAI- or Anthropic-compatible endpoint by its base URL, protocol, and models." = "Connect a relay, a self-hosted server, or any other OpenAI- or Anthropic-compatible endpoint by its base URL, protocol, and models.";
 "Edit" = "Edit";
 "Delete" = "Delete";
 "Custom model API" = "Custom model API";
@@ -168,14 +167,13 @@
 "missing provider, back to the installed agent" = "missing provider, back to the installed agent";
 "the installed agent, Claude Code first" = "the installed agent, Claude Code first";
 "Or use any model — a self-hosted server, a relay, a gateway." = "Or use any model — a self-hosted server, a relay, a gateway.";
-"Set up a model provider" = "Set up a model provider";
 "Add a model provider" = "Add a model provider";
 
 "Or" = "Or";
 "Which AI proposes what can go from the scan. Nothing is removed without your say." = "Which AI proposes what can go from the scan. Nothing is removed without your say.";
 
 "Save changes" = "Save changes";
-"HTTP %@: %@" = "HTTP %@: %@";
+"HTTP %lld: %@" = "HTTP %lld: %@";
 /* Step lines */
 "Reading your scan" = "Reading your scan";
 "Asking %@ what can go" = "Asking %@ what can go";
@@ -352,3 +350,41 @@
 "This folder could not be validated; rescan before cleaning" = "This folder could not be validated; rescan before cleaning";
 "Cleanup tool not found in an absolute PATH directory" = "Cleanup tool not found in an absolute PATH directory";
 "1 smaller item" = "1 smaller item";
+
+/* Wave 1 guard reasons, installer and menu strings */
+"A running process is working in this git worktree: %@" = "A running process is working in this git worktree: %@";
+"Another volume is mounted inside %@" = "Another volume is mounted inside %@";
+"Changed in the last 2 days: %@" = "Changed in the last 2 days: %@";
+"Check for Updates…" = "Check for Updates…";
+"Checking this git worktree took too long: %@" = "Checking this git worktree took too long: %@";
+"Clean Up would not remove these. Move to Trash works like Finder and does not apply its checks:" = "Clean Up would not remove these. Move to Trash works like Finder and does not apply its checks:";
+"Clean up with %@ · %@" = "Clean up with %@ · %@";
+"Cleanup incomplete" = "Cleanup incomplete";
+"Could not check every file in %@" = "Could not check every file in %@";
+"Could not check for processes using this git worktree: %@" = "Could not check for processes using this git worktree: %@";
+"Could not read the coding agents' session logs to check whether this git worktree is in use: %@" = "Could not read the coding agents' session logs to check whether this git worktree is in use: %@";
+"Could not remove git worktree metadata: %@" = "Could not remove git worktree metadata: %@";
+"Couldn't read the coding agents' session logs to check recent use" = "Couldn't read the coding agents' session logs to check recent use";
+"Filter by name (*, ? wildcards, ⌘F)" = "Filter by name (*, ? wildcards, ⌘F)";
+"General" = "General";
+"Git could not check %@: %@" = "Git could not check %@: %@";
+"Git is not available to check this worktree: %@" = "Git is not available to check this worktree: %@";
+"Git worktree has commits on no branch or tag: %@" = "Git worktree has commits on no branch or tag: %@";
+"Git worktree has files hidden from git status: %@" = "Git worktree has files hidden from git status: %@";
+"Git worktree has ignored files that a build would not recreate (such as .env): %@" = "Git worktree has ignored files that a build would not recreate (such as .env): %@";
+"Git worktree has submodules: %@" = "Git worktree has submodules: %@";
+"Git worktree has uncommitted or untracked changes: %@" = "Git worktree has uncommitted or untracked changes: %@";
+"Git worktree is locked: %@" = "Git worktree is locked: %@";
+"Git worktree used in the last 2 days: %@" = "Git worktree used in the last 2 days: %@";
+"Left git worktree metadata in place because it changed: %@" = "Left git worktree metadata in place because it changed: %@";
+"Left git worktree metadata in place because it is locked: %@" = "Left git worktree metadata in place because it is locked: %@";
+"Left git worktree metadata in place because the worktree exists again: %@" = "Left git worktree metadata in place because the worktree exists again: %@";
+"List" = "List";
+"Model Providers" = "Model Providers";
+"No valid cache directory tag in %@" = "No valid cache directory tag in %@";
+"Not a folder the scan recognised as removable" = "Not a folder the scan recognised as removable";
+"Not a linked git worktree: %@" = "Not a linked git worktree: %@";
+"The check does not belong to this folder: %@" = "The check does not belong to this folder: %@";
+"Too many files to check in %@" = "Too many files to check in %@";
+"Unknown check %@ for %@" = "Unknown check %@ for %@";
+"%@ (custom)" = "%@ (custom)";
