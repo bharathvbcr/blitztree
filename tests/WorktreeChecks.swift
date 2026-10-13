@@ -230,6 +230,34 @@ enum WorktreeChecks {
         fixture.write(modules + "/.gitmodules", "")
         expectBlocked(".gitmodules present", modules, .submodules(modules))
 
+        // A commit that only refs/worktree/* keeps: HEAD itself is on a branch, so
+        // nothing else notices, but removing the admin entry would drop the commit.
+        let ownRef = worktree("own-ref")
+        let ownAdmin = fixture.admin(of: ownRef)
+        fixture.run(["checkout", "-q", "--detach"], in: ownRef)
+        fixture.run(["commit", "-q", "--allow-empty", "-m", "only a worktree ref keeps this"], in: ownRef)
+        let kept = fixture.run(["rev-parse", "HEAD"], in: ownRef).trimmingCharacters(in: .whitespacesAndNewlines)
+        fixture.run(["update-ref", "refs/worktree/keep", kept], in: ownRef)
+        fixture.run(["checkout", "-q", "--detach", "HEAD~1"], in: ownRef)
+        precondition(fm.fileExists(atPath: ownAdmin + "/refs/worktree/keep"), "the ref is in the admin entry")
+        precondition(fixture.run(["for-each-ref", "--contains", kept, "refs/heads", "refs/remotes", "refs/tags"], in: ownRef).isEmpty,
+                     "no shared ref holds that commit")
+        expectBlocked("a commit kept only by refs/worktree/keep", ownRef, .ownRefs(ownRef))
+        let bisect = worktree("own-bisect-ref")
+        let bisectAdmin = fixture.admin(of: bisect)
+        try fm.createDirectory(atPath: bisectAdmin + "/refs/bisect", withIntermediateDirectories: true)
+        _ = expectVerified("empty ref folders hold nothing", bisect)
+        fixture.write(bisectAdmin + "/refs/bisect/bad", "0000000000000000000000000000000000000000\n")
+        expectBlocked("a ref under refs/bisect", bisect, .ownRefs(bisect))
+        try fm.removeItem(atPath: bisectAdmin + "/refs/bisect/bad")
+        try fm.createSymbolicLink(atPath: bisectAdmin + "/refs/bisect/link", withDestinationPath: "/nonexistent")
+        expectBlocked("a symlink under refs/ is an entry", bisect, .ownRefs(bisect))
+        try fm.removeItem(atPath: bisectAdmin + "/refs/bisect/link")
+        fixture.run(["update-ref", "-d", "refs/worktree/keep"], in: ownRef)
+        _ = expectVerified("the ref deleted: verified again", ownRef)
+        let ownMessage = GitWorktreeError.ownRefs(ownRef).englishDescription
+        precondition(ownMessage.contains("refs of its own") && ownMessage.hasSuffix(ownRef), ownMessage)
+
         // Structural: anything but a `.git` file that round-trips to its own
         // admin entry is not a worktree.
         let linked = fixture.base.appendingPathComponent("git-symlink").path
@@ -1099,6 +1127,68 @@ enum WorktreeChecks {
         try fm.removeItem(at: trash)
         try fm.moveItem(at: aside, to: trash)
         precondition(swapped.receipt.trashState() == .gone)
+
+        // Moved into a folder inside the Trash: still there, still restorable, so the
+        // entry stays. Only when no folder at any depth holds it is it gone.
+        let nested = try moved("settle-nested")
+        let deeper = trash.appendingPathComponent("kept folder/deeper")
+        try fm.createDirectory(at: deeper, withIntermediateDirectories: true)
+        let nestedHome = deeper.appendingPathComponent("the worktree")
+        try fm.moveItem(at: nested.receipt.url, to: nestedHome)
+        precondition(nested.receipt.trashState() == .present, "a worktree in a Trash subfolder is not gone")
+        let nestedWait = CleanupOperations.settleWorktrees([nested.receipt])
+        precondition(nestedWait.waiting.count == 1 && nestedWait.notices.isEmpty && fm.fileExists(atPath: nested.admin)
+                     && listed(nested.path), "its admin entry stays while the worktree can be put back")
+        try fm.removeItem(at: nestedHome)
+        precondition(nested.receipt.trashState() == .gone, "the folders hold nothing of it now")
+        try fm.removeItem(at: trash.appendingPathComponent("kept folder"))
+
+        // The bound counts every entry at every depth: exactly at the limit reads, one over is unknown.
+        let bulk = trash.appendingPathComponent("bulk")
+        try fm.createDirectory(at: bulk, withIntermediateDirectories: true)
+        for index in 0..<5 { precondition(fm.createFile(atPath: bulk.appendingPathComponent("f\(index)").path, contents: Data())) }
+        let everything = (fm.enumerator(atPath: trash.path)?.allObjects.count) ?? -1
+        precondition(everything >= 6, "entries in the Trash at any depth: \(everything)")
+        precondition(swapped.receipt.trashState(entryLimit: everything) == .gone)
+        precondition(swapped.receipt.trashState(entryLimit: everything - 1) == .unknown,
+                     "entries in subfolders count toward the bound")
+        try fm.removeItem(at: bulk)
+
+        // A symlink is looked at, never followed: a link to a folder that holds the item proves nothing.
+        let linked = try moved("settle-linked")
+        let elsewhere = base.appendingPathComponent("settle-elsewhere")
+        try fm.createDirectory(at: elsewhere, withIntermediateDirectories: true)
+        try fm.moveItem(at: linked.receipt.url, to: elsewhere.appendingPathComponent("the worktree"))
+        let link = trash.appendingPathComponent("link to a folder")
+        try fm.createSymbolicLink(at: link, withDestinationURL: elsewhere)
+        precondition(linked.receipt.trashState() == .gone, "the walk does not follow a symlink out of the Trash")
+        try fm.removeItem(at: link)
+
+        // An entry that cannot be examined, or a folder that cannot be read, is unknown (not skipped as gone).
+        let closed = trash.appendingPathComponent("closed folder")
+        try fm.createDirectory(at: closed, withIntermediateDirectories: true)
+        precondition(fm.createFile(atPath: closed.appendingPathComponent("inside").path, contents: Data()))
+        defer { try? fm.setAttributes([.posixPermissions: 0o755], ofItemAtPath: closed.path) }
+        // A listed entry whose lstat fails: only ENOENT (it was removed since it was listed) is skipped.
+        func failing(_ code: Int32) -> (String, UnsafeMutablePointer<stat>) -> Int32 {
+            { path, info in
+                if path.hasSuffix("/inside") { errno = code; return -1 }
+                return lstat(path, info)
+            }
+        }
+        precondition(swapped.receipt.trashState(examine: failing(EACCES)) == .unknown, "EACCES on a listed entry is unknown")
+        precondition(swapped.receipt.trashState(examine: failing(EIO)) == .unknown, "EIO on a listed entry is unknown")
+        precondition(swapped.receipt.trashState(examine: failing(ENOENT)) == .gone, "an entry that just vanished is skipped")
+        try fm.setAttributes([.posixPermissions: 0o000], ofItemAtPath: closed.path)
+        if (try? fm.contentsOfDirectory(atPath: closed.path)) == nil {
+            precondition(swapped.receipt.trashState() == .unknown, "a Trash subfolder that cannot be read is unknown")
+        } else {
+            print("SKIP unreadable Trash subfolder (this user can read a folder with no permissions)")
+        }
+        try fm.setAttributes([.posixPermissions: 0o755], ofItemAtPath: closed.path)
+        precondition(swapped.receipt.trashState() == .gone)
+        try fm.removeItem(at: closed)
+
         let crowded = try moved("settle-crowded")
         try fm.removeItem(atPath: crowded.receipt.url.path)
         precondition(fm.createFile(atPath: trash.appendingPathComponent("decoy").path, contents: Data()))

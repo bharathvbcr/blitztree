@@ -369,3 +369,4 @@
 /* Worktree, rule-check and boundary messages */
 "The repository of this git worktree can't be reached (is its drive connected?): %@" = "无法访问此 Git 工作树的仓库(磁盘是否已连接?)：%@";
 "Dismiss" = "关闭";
+"Git worktree has refs of its own that could keep commits nothing else keeps: %@" = "git 工作树有自己的引用，可能保留着其他引用都不保留的提交：%@";

@@ -369,3 +369,4 @@
 /* Worktree, rule-check and boundary messages */
 "The repository of this git worktree can't be reached (is its drive connected?): %@" = "このGit worktreeのリポジトリにアクセスできません(ドライブは接続されていますか?): %@";
 "Dismiss" = "閉じる";
+"Git worktree has refs of its own that could keep commits nothing else keeps: %@" = "Git ワークツリーに、ほかでは保持されないコミットを保持している可能性のある独自の ref があります: %@";

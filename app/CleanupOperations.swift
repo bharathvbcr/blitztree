@@ -41,22 +41,39 @@ nonisolated struct CleanupReceipt: Sendable {
     }
 
     /// Whether the moved item is still in the Trash. "Gone" requires the whole
-    /// Trash folder to have been read and none of its entries to be the item
-    /// (matched by device and inode, so a rename in the Trash does not hide
-    /// it); anything less is `unknown`, which is not "gone".
-    func trashState(entryLimit: Int = 50_000) -> TrashState {
+    /// Trash folder, subfolders included (the person can drag the item into
+    /// one, and it can still be put back from there), to have been read, and
+    /// none of its entries to be the item (matched by device and inode, so a
+    /// rename or a move inside the Trash does not hide it). Symlinks are
+    /// looked at, never followed. Anything less is `unknown`, which is not
+    /// "gone": more than `entryLimit` entries in all, a folder that cannot be
+    /// read, or an entry that cannot be examined for a reason other than
+    /// having just disappeared.
+    func trashState(entryLimit: Int = 50_000,
+                    examine: (String, UnsafeMutablePointer<stat>) -> Int32 = { lstat($0, $1) }) -> TrashState {
         var info = stat()
         if lstat(url.path, &info) == 0 { return .present }
         guard errno == ENOENT else { return .unknown }
         let folder = url.deletingLastPathComponent().path
-        guard let current = try? CleanupIdentity.capture(path: folder), current == parentIdentity,
-              let names = try? FileManager.default.contentsOfDirectory(atPath: folder),
-              names.count <= entryLimit else { return .unknown }
-        for name in names {
-            var entry = stat()
-            guard lstat(folder + "/" + name, &entry) == 0 else { continue }
-            if UInt64(truncatingIfNeeded: entry.st_dev) == identity.device,
-               UInt64(truncatingIfNeeded: entry.st_ino) == identity.inode { return .present }
+        guard let current = try? CleanupIdentity.capture(path: folder), current == parentIdentity else { return .unknown }
+        var pending = [folder]
+        var seen = 0
+        while let directory = pending.popLast() {
+            guard let names = try? FileManager.default.contentsOfDirectory(atPath: directory) else { return .unknown }
+            seen += names.count
+            guard seen <= entryLimit else { return .unknown }
+            for name in names {
+                let path = directory + "/" + name
+                var entry = stat()
+                guard examine(path, &entry) == 0 else {
+                    // Removed since it was listed: nothing there to be the item.
+                    if errno == ENOENT { continue }
+                    return .unknown
+                }
+                if UInt64(truncatingIfNeeded: entry.st_dev) == identity.device,
+                   UInt64(truncatingIfNeeded: entry.st_ino) == identity.inode { return .present }
+                if (entry.st_mode & S_IFMT) == S_IFDIR { pending.append(path) }
+            }
         }
         return .gone
     }

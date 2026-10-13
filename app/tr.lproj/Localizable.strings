@@ -369,3 +369,4 @@
 /* Worktree, rule-check and boundary messages */
 "The repository of this git worktree can't be reached (is its drive connected?): %@" = "Bu Git worktree'nin deposuna erişilemiyor (sürücü bağlı mı?): %@";
 "Dismiss" = "Kapat";
+"Git worktree has refs of its own that could keep commits nothing else keeps: %@" = "Git çalışma ağacının, başka hiçbir şeyin tutmadığı işlemeleri (commit) tutabilecek kendi referansları var: %@";

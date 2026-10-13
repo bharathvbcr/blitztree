@@ -53,6 +53,9 @@ nonisolated enum GitWorktreeError: Error, LocalizedError, Equatable, Sendable {
     case ignoredFiles(String)
     /// The agents' session logs could not all be read, so use cannot be ruled out.
     case sessionsUnreadable(String)
+    /// The admin entry holds refs of its own (refs/worktree/*, refs/bisect/*...).
+    /// Removing the entry would drop them, and the commits only they keep.
+    case ownRefs(String)
 
     var errorDescription: String? {
         switch self {
@@ -71,6 +74,7 @@ nonisolated enum GitWorktreeError: Error, LocalizedError, Equatable, Sendable {
         case .processCheckFailed(let path): return String(localized: "Could not check for processes using this git worktree: \(path)")
         case .ignoredFiles(let path): return String(localized: "Git worktree has ignored files that a build would not recreate (such as .env): \(path)")
         case .sessionsUnreadable(let path): return String(localized: "Could not read the coding agents' session logs to check whether this git worktree is in use: \(path)")
+        case .ownRefs(let path): return String(localized: "Git worktree has refs of its own that could keep commits nothing else keeps: \(path)")
         }
     }
 
@@ -91,6 +95,7 @@ nonisolated enum GitWorktreeError: Error, LocalizedError, Equatable, Sendable {
         case .processCheckFailed(let path): return "Could not check for processes using this git worktree: \(path)"
         case .ignoredFiles(let path): return "Git worktree has ignored files that a build would not recreate (such as .env): \(path)"
         case .sessionsUnreadable(let path): return "Could not read the coding agents' session logs to check whether this git worktree is in use: \(path)"
+        case .ownRefs(let path): return "Git worktree has refs of its own that could keep commits nothing else keeps: \(path)"
         }
     }
 }
@@ -166,6 +171,10 @@ nonisolated enum GitWorktree {
         let path = layout.path
         if try exists(layout.admin + "/locked", path: path) { throw GitWorktreeError.locked(path) }
         if try exists(path + "/.gitmodules", path: path) { throw GitWorktreeError.submodules(path) }
+        // Refs under `<admin>/refs` (refs/worktree/*, refs/bisect/*) belong to this
+        // worktree alone and go with its admin entry. Whether the commits they
+        // name are also on a shared ref is not worked out: any such ref blocks.
+        if try holdsRefs(layout.admin + "/refs", path: path) { throw GitWorktreeError.ownRefs(path) }
 
         // Read the recency evidence before git runs, so the check can never
         // be satisfied (or defeated) by its own activity.
@@ -628,6 +637,37 @@ nonisolated enum GitWorktree {
         let code = errno
         if code == ENOENT { return false }
         throw GitWorktreeError.gitFailed(path, "cannot inspect \(file) (errno \(code))")
+    }
+
+    /// True when `folder` holds anything but empty folders, looked at without
+    /// following symlinks (a symlink is an entry). Absent is false. A folder
+    /// that cannot be inspected throws (blocks), and more than `refLimit`
+    /// entries counts as holding refs.
+    private static let refLimit = 10_000
+    private static func holdsRefs(_ folder: String, path: String) throws -> Bool {
+        var pending = [folder]
+        var seen = 0
+        while let directory = pending.popLast() {
+            var info = stat()
+            if Darwin.lstat(directory, &info) != 0 {
+                if errno == ENOENT && directory == folder { return false }
+                throw GitWorktreeError.gitFailed(path, "cannot inspect \(directory) (errno \(errno))")
+            }
+            guard info.st_mode & S_IFMT == S_IFDIR else { return true }
+            guard let names = try? FileManager.default.contentsOfDirectory(atPath: directory) else {
+                throw GitWorktreeError.gitFailed(path, "cannot read \(directory)")
+            }
+            seen += names.count
+            if seen > refLimit { return true }
+            for name in names {
+                var entry = stat()
+                guard Darwin.lstat(directory + "/" + name, &entry) == 0 else {
+                    throw GitWorktreeError.gitFailed(path, "cannot inspect \(directory)/\(name) (errno \(errno))")
+                }
+                if entry.st_mode & S_IFMT == S_IFDIR { pending.append(directory + "/" + name) } else { return true }
+            }
+        }
+        return false
     }
 
     private static func isMissing(_ file: String) -> Bool {

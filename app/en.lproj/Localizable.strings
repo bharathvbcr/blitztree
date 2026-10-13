@@ -360,3 +360,4 @@
 /* Worktree, rule-check and boundary messages */
 "The repository of this git worktree can't be reached (is its drive connected?): %@" = "The repository of this git worktree can't be reached (is its drive connected?): %@";
 "Dismiss" = "Dismiss";
+"Git worktree has refs of its own that could keep commits nothing else keeps: %@" = "Git worktree has refs of its own that could keep commits nothing else keeps: %@";

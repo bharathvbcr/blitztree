@@ -369,3 +369,4 @@
 /* Worktree, rule-check and boundary messages */
 "The repository of this git worktree can't be reached (is its drive connected?): %@" = "No se puede acceder al repositorio de este worktree de Git (¿está conectado su disco?): %@";
 "Dismiss" = "Descartar";
+"Git worktree has refs of its own that could keep commits nothing else keeps: %@" = "El worktree de git tiene referencias propias que podrían conservar commits que nada más conserva: %@";
