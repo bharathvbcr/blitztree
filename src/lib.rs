@@ -5,6 +5,7 @@
 //! readdir-then-stat-per-file cost that makes naive scanners slow on macOS.
 
 pub mod cleanup;
+pub mod export;
 pub mod ffi;
 pub mod ranking;
 mod pool;
@@ -77,6 +78,15 @@ pub const NO_PARENT: u32 = u32::MAX;
 /// Kept so a removal can recompute subtree completeness without the walk.
 pub const SELF_INCOMPLETE: u8 = 2;
 
+/// Append `name` below `path` the way `PathBuf::push` does for a name without
+/// a slash: a separator unless `path` is empty or already ends in one.
+pub(crate) fn join_name(path: &mut Vec<u8>, name: &[u8]) {
+    if path.last().is_some_and(|&b| b != b'/') {
+        path.push(b'/');
+    }
+    path.extend_from_slice(name);
+}
+
 /// The finished tree as flat arrays, the layout the Swift UI reads in place
 /// (see app/bz.h). Node 0 is the root; children come after their parent.
 #[derive(Default)]
@@ -126,6 +136,9 @@ impl Tree {
     pub fn name(&self, i: usize) -> &str {
         std::str::from_utf8(self.name_bytes(i)).unwrap_or("")
     }
+    /// Unlike `path_bytes`, a name that is not UTF-8 reads as empty here, so
+    /// the path is not the node's: the Clean Up checks rely on that to fail
+    /// closed rather than act on a real path made from lossy text.
     pub fn path(&self, mut i: usize) -> PathBuf {
         let mut parts = Vec::new();
         while i != 0 {
@@ -135,6 +148,21 @@ impl Tree {
         let mut path = PathBuf::from(self.name(0));
         for part in parts.into_iter().rev() {
             path.push(part);
+        }
+        path
+    }
+    /// The bytes of `path(i)` with every name exactly as stored: the root's
+    /// name, then each name below it, joined as `join_name` does. For the
+    /// export, which must not change or lose a byte of a name.
+    pub fn path_bytes(&self, mut i: usize) -> Vec<u8> {
+        let mut parts = Vec::new();
+        while i != 0 {
+            parts.push(i);
+            i = self.parents[i] as usize;
+        }
+        let mut path = self.name_bytes(0).to_vec();
+        for &part in parts.iter().rev() {
+            join_name(&mut path, self.name_bytes(part));
         }
         path
     }

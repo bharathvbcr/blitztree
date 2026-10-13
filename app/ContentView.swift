@@ -4,6 +4,7 @@ import AppKit
 
 struct ContentView: View {
     @State private var model = ScanModel()
+    @State private var csvExporter = CSVExporter()
     @State private var showTable = true
     @State private var listMode: ListMode = .folders
     @FocusState private var isSearchFocused: Bool
@@ -91,6 +92,7 @@ struct ContentView: View {
                 .inspectorColumnWidth(min: 280, ideal: 340, max: 520)
         }
         .toolbar { toolbar }
+        .csvExport(model: model, exporter: csvExporter, rootName: displayRootName)
         .task {
             model.watchVolumes()
             model.agentEnv = await AgentLocator.find()

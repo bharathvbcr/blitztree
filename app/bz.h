@@ -106,6 +106,43 @@ uint8_t bz_cleanup_group(BzScan *h, uint64_t index);
 // name only.
 const char *bz_cleanup_verify(BzScan *h, uint64_t index);
 
+// CSV export of the folder at node `root` (node 0: the whole scan) and
+// everything under it. One row per node: path, allocated bytes, logical
+// bytes, file count, is-folder, complete. RFC 4180, UTF-8, CRLF; streamed to
+// disk by a background thread (no per-row allocation; a folder export also
+// holds one bit per tree node, n/8 bytes, to size its progress). The file is written to a hidden temporary file beside `dest_path`
+// and renamed into place only when whole: cancelled, failed and freed exports
+// leave `dest_path` as it was and no temporary file behind.
+typedef struct BzExport BzExport;
+enum {
+    BZ_EXPORT_RUNNING = 0,   // the export thread is still working
+    BZ_EXPORT_DONE = 1,      // the file is in place
+    BZ_EXPORT_CANCELLED = 2, // bz_export_cancel stopped it; no file
+    BZ_EXPORT_FAILED = 3,    // see bz_export_error; no file
+};
+// Starts an export. NULL for a NULL handle or path, a handle without a tree
+// (before bz_take_tree, or a cancelled/failed scan), a `root` outside the
+// tree, a path that is empty or not absolute (its bytes are used exactly, not
+// necessarily UTF-8), or when the thread cannot start. The export holds its
+// own reference to the tree: bz_free(h) while it runs is safe, and the tree
+// lives until the export ends. Not callable concurrently with bz_free(h).
+BzExport *bz_export_start(BzScan *h, uint32_t root, const char *dest_path);
+// Rows written so far (refreshed in batches), rows to write (0 until the
+// export has started) and one of BZ_EXPORT_*. Any output pointer may be NULL;
+// a NULL handle reports BZ_EXPORT_FAILED so a poller stops.
+void bz_export_progress(BzExport *e, uint64_t *rows_done, uint64_t *rows_total, int *status);
+// Ask a running export to stop. It ends promptly with BZ_EXPORT_CANCELLED; an
+// export whose file is already in place stays BZ_EXPORT_DONE. A no-op for
+// NULL and when repeated.
+void bz_export_cancel(BzExport *e);
+// Why the export failed (English, e.g. "Could not save /x/out.csv: No such
+// file or directory (os error 2)"); NULL unless the status is
+// BZ_EXPORT_FAILED. Valid until bz_export_free.
+const char *bz_export_error(BzExport *e);
+// Stops the export if it is still running and waits for it (it checks before
+// every row), so no temporary file is left when this returns. NULL is fine.
+void bz_export_free(BzExport *e);
+
 // Release a handle and its buffers (pointers read from it are dead after).
 // A scan that is still running is asked to stop first, as by bz_cancel: its
 // thread keeps its own references and ends on its own, discarding the result.

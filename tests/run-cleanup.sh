@@ -63,6 +63,12 @@ swiftc "${SOURCES[@]}" tests/SearchIntegrationChecks.swift "${FLAGS[@]}" \
   -import-objc-header app/bz.h -L target/release -lblitztree \
   -framework AppKit -framework SwiftUI -o "$CLEANUP_TEST_TMP/search"
 "$CLEANUP_TEST_TMP/search"
+# File > Export as CSV…: the exporter that drives the engine's streamed,
+# atomic CSV writer (whole scan, folder, failures, cancel, scan kept alive).
+swiftc "${SOURCES[@]}" tests/ExportChecks.swift "${FLAGS[@]}" \
+  -import-objc-header app/bz.h -L target/release -lblitztree \
+  -framework AppKit -framework SwiftUI -o "$CLEANUP_TEST_TMP/export"
+"$CLEANUP_TEST_TMP/export"
 swiftc "${SOURCES[@]}" tests/VolumeChecks.swift "${FLAGS[@]}" \
   -import-objc-header app/bz.h -L target/release -lblitztree \
   -framework AppKit -framework SwiftUI -o "$CLEANUP_TEST_TMP/volumes"
@@ -127,7 +133,7 @@ swiftc app/PlanParsing.swift tests/PlanParsingChecks.swift "${FLAGS[@]}" -o "$CL
 # here; without hdiutil they are reported as skipped, never as passed.
 if [[ -x /usr/bin/hdiutil ]]; then
   cargo test --locked --release --lib volume_tests -- --ignored --test-threads=1 2>&1 | tee "$CLEANUP_TEST_TMP/volume-tests.log"
-  grep -q "test result: ok. 2 passed" "$CLEANUP_TEST_TMP/volume-tests.log"
+  grep -q "test result: ok. 3 passed" "$CLEANUP_TEST_TMP/volume-tests.log"
 else
   echo "SKIPPED: engine tests on disk images (no /usr/bin/hdiutil); nothing was checked"
 fi

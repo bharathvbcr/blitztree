@@ -92,6 +92,14 @@
 "Planned in %@ s" = "%@秒で計画完了";
 "Reveal %@ in Finder" = "Finderで%@を表示";
 "Reveal in Finder" = "Finderで表示";
+"Export as CSV…" = "CSVとして書き出す…";
+"Could not export" = "書き出せませんでした";
+"Exporting to CSV…" = "CSVに書き出し中…";
+"%@ of %@ rows" = "%@ / %@ 行";
+"Exports “%@” and everything in it as a CSV file." = "「%@」とその中身をすべてCSVファイルに書き出します。";
+"BlitzTree could not save the CSV file. %@" = "BlitzTreeはCSVファイルを保存できませんでした。%@";
+"The export could not be started." = "書き出しを開始できませんでした。";
+"The export failed." = "書き出しに失敗しました。";
 "%@ is looking" = "%@が確認中";
 "Nothing worth removing" = "削除する価値のあるものはありません";
 "Here's the plan" = "プランはこちら";
