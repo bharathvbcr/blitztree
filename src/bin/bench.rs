@@ -13,6 +13,12 @@
 //!                        the same size, so top-K is decided by the path tie-break)
 //!          types       - scan path, then time the file-type breakdown of the root
 //!                        and of its largest folder (BZ_RUNS, default 11)
+//!          search-during-scan - back-to-back synthetic searches while a scan of path runs
+//!          scan-repeat - scan path BZ_RUNS (11) times in one process; first, min, median
+//!          hardlink-fixture - create <path> (must not exist): BZ_HL_PROJECTS (200)
+//!                        deep folders of BZ_HL_FILES (500) files each, every folder
+//!                        after the first hard-linked to the first's files, or
+//!                        independent files with BZ_HL_UNIQUE=1 (the control)
 //!          naive       - serial read_dir + per-file lstat (Disk Inventory X style)
 //!          naive-par   - parallel read_dir + per-file lstat
 //!   BZ_TOP=1 also prints each top-level entry's allocated bytes (for diffing).
@@ -24,6 +30,55 @@ use std::time::Instant;
 
 use blitztree::{scan, Progress};
 
+/// `n` entries under one root, named like a disk scan's; `ties` gives every entry
+/// the same size, so a top-K selection is decided by the path tie-break.
+fn synthetic_tree(n: usize, ties: bool) -> blitztree::Tree {
+    let mut tree = blitztree::Tree::default();
+    tree.parents.reserve(n);
+    tree.alloc.reserve(n);
+    tree.logical.reserve(n);
+    tree.flags.reserve(n);
+    tree.complete.reserve(n);
+    tree.name_off.reserve(n + 1);
+    tree.name_blob.reserve(n * 20);
+
+    // Node 0 is root
+    tree.parents.push(blitztree::NO_PARENT);
+    tree.alloc.push(100_000_000_000);
+    tree.logical.push(100_000_000_000);
+    tree.flags.push(1);
+    tree.complete.push(true);
+    tree.name_off.push(0);
+    let root_name = b"/System/Volumes/Data";
+    tree.name_blob.extend_from_slice(root_name);
+    tree.name_off.push(tree.name_blob.len() as u32);
+
+    let extensions = [
+        "png", "jpg", "pdf", "rs", "swift", "txt", "dylib", "json", "log", "münchen", "東京",
+    ];
+    for i in 1..n {
+        let ext = extensions[i % extensions.len()];
+        let name = format!(
+            "entry_{i:07}_{}.{}",
+            if i % 10 == 0 { "photo" } else { "file" },
+            ext
+        );
+        tree.parents.push(0);
+        let bytes = if ties {
+            4096
+        } else {
+            (i as u64 * 1024) % 1_000_000_000
+        };
+        tree.alloc.push(bytes);
+        tree.logical.push(bytes);
+        tree.flags.push(if i % 8 == 0 { 1 } else { 0 });
+        tree.complete.push(true);
+        tree.name_blob.extend_from_slice(name.as_bytes());
+        tree.name_off.push(tree.name_blob.len() as u32);
+    }
+    tree
+}
+
 fn main() {
     let args: Vec<String> = std::env::args().collect();
     let mode = args.get(1).map(String::as_str).unwrap_or("bulk");
@@ -31,8 +86,10 @@ fn main() {
     if let Some(t) = args.get(3) {
         let threads: usize = t.parse().expect("threads must be a positive integer");
         assert!(threads > 0, "threads must be positive");
-        // scan() creates its own QoS-configured pool. Configuring only the
-        // global pool silently left bulk scans at the default thread count.
+        // The shared worker pool (src/pool.rs) is built on first use with rayon's
+        // default size, which reads this variable, so it must be set before any
+        // scan, search or breakdown runs. Configuring only rayon's global pool
+        // would leave the shared pool at the default thread count.
         std::env::set_var("RAYON_NUM_THREADS", threads.to_string());
     }
 
@@ -205,39 +262,7 @@ fn main() {
                 .unwrap_or(3_600_000);
             let ties = std::env::var_os("BZ_SYNTH_TIES").is_some();
             println!("Building synthetic tree with {n} entries...");
-            let mut tree = blitztree::Tree::default();
-            tree.parents.reserve(n);
-            tree.alloc.reserve(n);
-            tree.logical.reserve(n);
-            tree.flags.reserve(n);
-            tree.complete.reserve(n);
-            tree.name_off.reserve(n + 1);
-            tree.name_blob.reserve(n * 20);
-
-            // Node 0 is root
-            tree.parents.push(blitztree::NO_PARENT);
-            tree.alloc.push(100_000_000_000);
-            tree.logical.push(100_000_000_000);
-            tree.flags.push(1);
-            tree.complete.push(true);
-            tree.name_off.push(0);
-            let root_name = b"/System/Volumes/Data";
-            tree.name_blob.extend_from_slice(root_name);
-            tree.name_off.push(tree.name_blob.len() as u32);
-
-            let extensions = ["png", "jpg", "pdf", "rs", "swift", "txt", "dylib", "json", "log", "münchen", "東京"];
-            for i in 1..n {
-                let ext = extensions[i % extensions.len()];
-                let name = format!("entry_{i:07}_{}.{}", if i % 10 == 0 { "photo" } else { "file" }, ext);
-                tree.parents.push(0);
-                let bytes = if ties { 4096 } else { (i as u64 * 1024) % 1_000_000_000 };
-                tree.alloc.push(bytes);
-                tree.logical.push(bytes);
-                tree.flags.push(if i % 8 == 0 { 1 } else { 0 });
-                tree.complete.push(true);
-                tree.name_blob.extend_from_slice(name.as_bytes());
-                tree.name_off.push(tree.name_blob.len() as u32);
-            }
+            let tree = synthetic_tree(n, ties);
 
             println!("Synthetic tree ready. Benchmarking search queries (min of 5 runs each):");
             let test_queries = [
@@ -274,6 +299,109 @@ fn main() {
                     eps
                 );
             }
+            return;
+        }
+        "search-during-scan" => {
+            // Searches a synthetic tree (BZ_SYNTH_COUNT, 1M) back to back while a
+            // scan of `path` runs on its own threads, then the same searches idle.
+            // Shows what a search costs when a scan holds the workers.
+            let n: usize = std::env::var("BZ_SYNTH_COUNT")
+                .ok()
+                .and_then(|s| s.parse().ok())
+                .unwrap_or(1_000_000);
+            let tree = synthetic_tree(n, false);
+            let timed = || {
+                let t0 = Instant::now();
+                tree.search("photo", 1000);
+                t0.elapsed().as_secs_f64() * 1e3
+            };
+            tree.search("photo", 1000);
+            let idle = (0..5).map(|_| timed()).fold(f64::MAX, f64::min);
+
+            use blitztree::ffi::*;
+            let c_path = std::ffi::CString::new(path.as_os_str().as_encoded_bytes()).unwrap();
+            let scan_started = Instant::now();
+            let handle = bz_scan_start(c_path.as_ptr());
+            let (mut files, mut dirs, mut bytes, mut done) = (0, 0, 0, 0);
+            let mut during = Vec::new();
+            loop {
+                bz_progress(handle, &mut files, &mut dirs, &mut bytes, &mut done);
+                if done != 0 {
+                    break;
+                }
+                during.push(timed());
+            }
+            let scan_ms = scan_started.elapsed().as_secs_f64() * 1e3;
+            bz_free(handle);
+            during.sort_by(f64::total_cmp);
+            let (searches, worst) = (during.len(), during.last().copied().unwrap_or(0.0));
+            let median = during.get(searches / 2).copied().unwrap_or(0.0);
+            println!(
+                "search-during-scan: idle {idle:.2} ms  during {searches} searches: median {median:.2} ms  max {worst:.2} ms  (scan {scan_ms:.0} ms)"
+            );
+            return;
+        }
+        "scan-repeat" => {
+            // BZ_RUNS (11) scans of the same folder in one process: what the app does
+            // when it scans again. On a small folder the per-scan setup is most of it.
+            let runs: usize = std::env::var("BZ_RUNS")
+                .ok()
+                .and_then(|s| s.parse().ok())
+                .unwrap_or(11);
+            let mut times = Vec::with_capacity(runs);
+            for _ in 0..runs {
+                let t0 = Instant::now();
+                let tree = scan(&path, &Progress::default());
+                times.push(t0.elapsed());
+                assert!(!tree.is_empty());
+            }
+            let first = times[0];
+            times.sort();
+            println!(
+                "scan-repeat: first {:.3} ms  min {:.3} ms  median {:.3} ms  ({runs} scans)",
+                first.as_secs_f64() * 1e3,
+                times[0].as_secs_f64() * 1e3,
+                times[runs / 2].as_secs_f64() * 1e3
+            );
+            return;
+        }
+        "hardlink-fixture" => {
+            let env = |key: &str, default: usize| {
+                std::env::var(key)
+                    .ok()
+                    .and_then(|s| s.parse().ok())
+                    .unwrap_or(default)
+            };
+            let (projects, files) = (env("BZ_HL_PROJECTS", 200), env("BZ_HL_FILES", 500));
+            let unique = std::env::var_os("BZ_HL_UNIQUE").is_some();
+            // `path` must not exist yet; every project is a deep folder of `files` files.
+            std::fs::create_dir(&path).expect("the fixture directory must be new");
+            let folder = |project: usize| {
+                path.join(format!(
+                    "project-{project:04}/packages/linked/node_modules/package"
+                ))
+            };
+            for project in 0..projects {
+                let dir = folder(project);
+                std::fs::create_dir_all(&dir).unwrap();
+                for file in 0..files {
+                    let name = format!("file-{file:04}.js");
+                    if project == 0 || unique {
+                        std::fs::write(dir.join(&name), [b'x'; 128]).unwrap();
+                    } else {
+                        std::fs::hard_link(folder(0).join(&name), dir.join(&name)).unwrap();
+                    }
+                }
+            }
+            println!(
+                "{projects} projects x {files} files: {} ({} data streams)",
+                if unique {
+                    "independent files"
+                } else {
+                    "hard links to project 0's files"
+                },
+                if unique { projects * files } else { files }
+            );
             return;
         }
         "naive" => {
