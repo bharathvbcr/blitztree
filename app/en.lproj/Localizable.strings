@@ -350,3 +350,5 @@
 "The item was moved but its Trash location was not returned; review the Trash manually" = "The item was moved but its Trash location was not returned; review the Trash manually";
 "The item in the Trash is missing" = "The item in the Trash is missing";
 "This folder could not be validated; rescan before cleaning" = "This folder could not be validated; rescan before cleaning";
+"Cleanup tool not found in an absolute PATH directory" = "Cleanup tool not found in an absolute PATH directory";
+"1 smaller item" = "1 smaller item";

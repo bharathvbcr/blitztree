@@ -73,15 +73,40 @@ final class TreemapNSView: NSView {
         liveResizing = true
     }
 
+    /// A frame of the drag was skipped. The drag may end at the size it began
+    /// with, which `relayoutIfNeeded` takes for "nothing changed", so the end
+    /// of a drag that skipped anything renders once whatever the size.
+    private var skippedDuringResize = false
+    /// The scale the bitmap was made at.
+    private var lastScale: CGFloat = 0
+
     override func viewDidEndLiveResize() {
         super.viewDidEndLiveResize()
         liveResizing = false
+        if skippedDuringResize { lastSize = .zero }
+        skippedDuringResize = false
         relayoutIfNeeded()
     }
 
     override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
         liveResizing = false // a drag that began in another window has no end here
+        skippedDuringResize = false
+    }
+
+    /// The layer keeps the last picture; the colours in it come from the
+    /// appearance it was drawn in.
+    override func viewDidChangeEffectiveAppearance() {
+        super.viewDidChangeEffectiveAppearance()
+        needsDisplay = true
+    }
+
+    /// A move to a display of another scale: the bitmap has the wrong pixels.
+    override func viewDidChangeBackingProperties() {
+        super.viewDidChangeBackingProperties()
+        guard let scale = window?.backingScaleFactor, lastScale != 0, scale != lastScale else { return }
+        lastSize = .zero
+        relayoutIfNeeded()
     }
 
     func relayoutIfNeeded() {
@@ -92,7 +117,7 @@ final class TreemapNSView: NSView {
         guard bounds.size != lastSize || contentChanged else { return }
         // Only a new size can wait for the end of the drag, and only when
         // there is a bitmap to stretch.
-        if liveResizing, !contentChanged, lastSize != .zero { return }
+        if liveResizing, !contentChanged, lastSize != .zero { skippedDuringResize = true; return }
         relayout()
     }
 
@@ -127,6 +152,7 @@ final class TreemapNSView: NSView {
 
     private func renderBitmap(tree: Tree) {
         let scale = window?.backingScaleFactor ?? 2
+        lastScale = scale
         let pw = max(1, Int((bounds.width * scale).rounded()))
         let ph = max(1, Int((bounds.height * scale).rounded()))
         let r = TreemapRenderer.render(
@@ -799,7 +825,10 @@ final class NodeMenu: NSObject {
         NSPasteboard.general.setString(path, forType: .string)
     }
 
-    static let trashMove: (URL) throws -> Void = { try FileManager.default.trashItem(at: $0, resultingItemURL: nil) }
+    /// How Move to Trash is asked and done. Variables so a check can answer
+    /// the confirmation and move into a stand-in Trash; the app never sets them.
+    static var confirm: (NSAlert) -> NSApplication.ModalResponse = { $0.runModal() }
+    static var trashMove: (URL) throws -> Void = { try FileManager.default.trashItem(at: $0, resultingItemURL: nil) }
 
     static func trashItem(at path: String, model: ScanModel?, move: (URL) throws -> Void = trashMove) throws {
         if let failure = trashItems([TrashTarget(path: path)], model: model, move: move).first {
@@ -891,7 +920,7 @@ final class NodeMenu: NSObject {
                             report: ((NSAlert) -> Void)? = nil) {
         guard !targets.isEmpty else { return }
         let alert = trashAlert(targets)
-        let response = confirm?(alert) ?? alert.runModal()
+        let response = (confirm ?? Self.confirm)(alert)
         guard response == .alertFirstButtonReturn else { return }
         let failures = trashItems(targets, model: model, move: move ?? trashMove)
         guard let first = failures.first else { return }

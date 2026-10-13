@@ -160,6 +160,112 @@ struct AccessibilityChecks {
             model.selection = nil
             if let t = view as? TreemapNSView { t.syncOverlay() } else if let r = view as? SunburstNSView { r.syncOverlay() }
         }
+
+        // 3b. "N smaller items" has its own wording for one.
+        precondition(MapAccessibility.smallerItems(1) == String(localized: "1 smaller item"), "one smaller item: \(MapAccessibility.smallerItems(1))")
+        precondition(MapAccessibility.smallerItems(2) == String(localized: "\(Fmt.num(2)) smaller items"), "two smaller items: \(MapAccessibility.smallerItems(2))")
+        precondition(MapAccessibility.smallerItems(1) != MapAccessibility.smallerItems(2), "one and many read differently")
+
+        // 3c. Move to Trash from VoiceOver goes through the confirmation and
+        //     the same safety path as the right-click menu, and does not hold
+        //     the accessibility call while the alert is up. The alert is
+        //     answered and the move done by stand-ins: nothing reaches the
+        //     real Trash.
+        let (realConfirm, realMove) = (NodeMenu.confirm, NodeMenu.trashMove)
+        defer { (NodeMenu.confirm, NodeMenu.trashMove) = (realConfirm, realMove) }
+        let standIn = fixture.appendingPathComponent("stand-in-trash")
+        try fm.createDirectory(at: standIn, withIntermediateDirectories: true)
+        var alerts: [NSAlert] = []
+        var moves: [String] = []
+        var answer = NSApplication.ModalResponse.alertSecondButtonReturn
+        NodeMenu.confirm = { alerts.append($0); return answer }
+        NodeMenu.trashMove = { url in
+            moves.append(url.path)
+            try fm.moveItem(at: url, to: standIn.appendingPathComponent(url.lastPathComponent))
+        }
+        func settle(timeout: TimeInterval = 5, until done: () -> Bool) async {
+            let deadline = Date().addingTimeInterval(timeout)
+            while !done() && Date() < deadline { try? await Task.sleep(for: .milliseconds(10)) }
+        }
+        func action(_ view: NSView, _ rowName: String, _ title: String) -> NSAccessibilityCustomAction {
+            guard let found = row(view, rowName)?.accessibilityCustomActions()?.first(where: { $0.name == title }) else {
+                fatalError("no '\(title)' action on \(rowName): \((row(view, rowName)?.accessibilityCustomActions() ?? []).map(\.name))")
+            }
+            return found
+        }
+        let trashTitle = String(localized: "Move to Trash")
+        // A row listed now, used after the tree is replaced (3d).
+        let staleRow = row(treemap, "Movies")! as! MapAccessibility.Element
+        let staleActions = staleRow.accessibilityCustomActions() ?? []
+        let staleSelect = staleActions.first { $0.name == String(localized: "Select") }!
+        let staleCopy = staleActions.first { $0.name == String(localized: "Copy Path") }!
+
+        for (name, view, target) in [("treemap", treemap as NSView, "notes.txt"), ("rings", rings as NSView, "big.bin")] {
+            let path = root + "/" + target
+            alerts = []; moves = []
+            // Cancel: the call returns at once (the alert is not up yet), the
+            // alert names the full path, and the file stays.
+            answer = .alertSecondButtonReturn
+            precondition(action(view, target, trashTitle).handler?() == true, "\(name): the action reports success")
+            precondition(alerts.isEmpty, "\(name): the action returned before the alert ran, not while it was up")
+            await settle { !alerts.isEmpty }
+            precondition(alerts.count == 1, "\(name): Move to Trash asks first (\(alerts.count) alerts)")
+            precondition(alerts[0].informativeText.contains(Tree.displayPath(path)) && alerts[0].messageText.contains(target),
+                         "\(name): the alert names the item: \(alerts[0].messageText) / \(alerts[0].informativeText)")
+            precondition(moves.isEmpty && fm.fileExists(atPath: path), "\(name): cancelling leaves \(target) in place")
+            // Confirm: the same alert, then the move.
+            alerts = []
+            answer = .alertFirstButtonReturn
+            precondition(action(view, target, trashTitle).handler?() == true, "\(name): the action reports success")
+            await settle { !moves.isEmpty }
+            precondition(alerts.count == 1, "\(name): the confirmed move was asked about too")
+            precondition(moves == [path], "\(name): moved \(moves)")
+            precondition(!fm.fileExists(atPath: path) && fm.fileExists(atPath: standIn.appendingPathComponent(target).path),
+                         "\(name): \(target) went to the stand-in Trash")
+            await model.settled()
+            precondition(model.tree?.node(at: path) == nil, "\(name): the item left the map")
+            treemap.relayoutIfNeeded(); rings.relayoutIfNeeded()
+        }
+
+        // 3d. A row from before the tree changed refuses to act: its node
+        //     number may now be another file.
+        //     (`staleRow` was taken before the trash loop above replaced the tree.)
+        precondition(staleRow.item.treeGeneration != model.treeGeneration, "removing items started a new generation")
+        model.selection = nil
+        NSPasteboard.general.clearContents()
+        precondition(staleSelect.handler?() == false && model.selection == nil, "Select refuses a row from an older tree")
+        precondition(staleCopy.handler?() == false, "a menu action refuses a row from an older tree")
+        precondition(staleRow.accessibilityPerformPress() == false && model.viewRoot == 0, "press refuses a row from an older tree")
+        await settle(timeout: 0.2) { false }
+        precondition(NSPasteboard.general.string(forType: .string) == nil, "Copy Path did not run for the stale row")
+        precondition(model.selection == nil, "nothing was selected through the stale row")
+        treemap.relayoutIfNeeded()
+        precondition(action(treemap, "Movies", String(localized: "Select")).handler?() == true && model.selection == model.tree?.node(at: root + "/Movies"),
+                     "a row listed from the current tree acts")
+
+        // 3e. A drag that skips frames and ends at the size it began with
+        //     still renders once at the end (the size alone says "no change").
+        func relayoutIfNeeded(_ view: NSView) {
+            if let t = view as? TreemapNSView { t.relayoutIfNeeded() } else if let r = view as? SunburstNSView { r.relayoutIfNeeded() }
+        }
+        for (name, view) in [("treemap", treemap as NSView), ("rings", rings as NSView)] {
+            relayoutIfNeeded(view)
+            let original = view.frame.size
+            posted = []
+            view.viewWillStartLiveResize()
+            view.setFrameSize(NSSize(width: original.width + 80, height: original.height + 40))
+            relayoutIfNeeded(view)
+            precondition(posted.isEmpty, "\(name): a frame of the drag is not rendered")
+            view.setFrameSize(original)
+            view.viewDidEndLiveResize()
+            precondition(posted.contains { $0.0 == NSAccessibility.Notification.layoutChanged.rawValue },
+                         "\(name): a drag back to its first size renders at the end")
+            // And a drag with no skipped frame renders nothing.
+            posted = []
+            view.viewWillStartLiveResize()
+            view.viewDidEndLiveResize()
+            precondition(posted.isEmpty, "\(name): an untouched view is not rendered again")
+        }
         #endif
         #endif // SKIP_VOICEOVER
 
@@ -183,9 +289,21 @@ struct AccessibilityChecks {
         precondition(bare.isEmpty, "error text built without String(localized:):\n" + bare.joined(separator: "\n"))
         // Messages that do not go through `.failed(` or `failure(`, named so they cannot slip back.
         let agent = try String(contentsOfFile: appDir + "/Agent.swift", encoding: .utf8)
+        // `runCommand`'s reason becomes the card's status. Its result type can
+        // only be made from a localized message (or a tool's own text, marked
+        // `verbatim`), so a bare literal does not compile; this keeps the type
+        // and keeps a `return "..."` out of the body.
+        guard let start = agent.range(of: "static func runCommand("),
+              let end = agent.range(of: "\n    }\n", range: start.upperBound..<agent.endIndex) else {
+            fatalError("\(appDir)/Agent.swift has no runCommand")
+        }
+        let runCommandText = String(agent[start.lowerBound..<end.upperBound])
+        precondition(runCommandText.contains("-> StepFailure?"), "runCommand returns a StepFailure, not a String")
+        precondition(!runCommandText.contains("return \""), "runCommand returns a bare literal:\n" + runCommandText)
+        precondition(agent.contains("init(_ message: LocalizedStringResource)"), "StepFailure takes a LocalizedStringResource")
         for snippet in [
-            "String(localized: \"Took too long\")", "String(localized: \"Cancelled\")",
-            "String(localized: \"Exited with \\(String(outcome.status))\")",
+            "StepFailure(\"Took too long\")", "StepFailure(\"Cancelled\")",
+            "StepFailure(\"Exited with \\(String(outcome.status))\")",
             "String(localized: \"\\(displayName) stopped (exit \\(String(status))).\")",
             "String(localized: \"About \\(Fmt.size(",
         ] {
@@ -207,6 +325,8 @@ struct AccessibilityChecks {
             "The item in the Trash or its parent changed; review it before deleting",
             "The item was moved but its Trash location was not returned; review the Trash manually",
             "The item in the Trash is missing", "This folder could not be validated; rescan before cleaning",
+            "Command or arguments not allowed", "Cleanup tool not found in an absolute PATH directory",
+            "1 smaller item", "%@ smaller items",
         ]
         // Texts that read the same in some language.
         let sameInSomeLanguages: Set<String> = ["%@, %@"]
@@ -239,6 +359,9 @@ struct AccessibilityChecks {
             ("%@ didn't return a plan.", { String(localized: "\("x") didn't return a plan.", bundle: $0) }),
             ("About %@ can go.", { String(localized: "About \("x") can go.", bundle: $0) }),
             ("Exited with %@", { String(localized: "Exited with \("1")", bundle: $0) }),
+            ("Cleanup tool not found in an absolute PATH directory", { String(localized: "Cleanup tool not found in an absolute PATH directory", bundle: $0) }),
+            ("1 smaller item", { String(localized: "1 smaller item", bundle: $0) }),
+            ("%@ smaller items", { String(localized: "\("2") smaller items", bundle: $0) }),
         ]
         for language in languages where language != "en" {
             guard let bundle = Bundle(path: "\(appDir)/\(language).lproj") else { fatalError("no bundle for \(language)") }

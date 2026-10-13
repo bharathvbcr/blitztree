@@ -359,3 +359,5 @@
 "The item was moved but its Trash location was not returned; review the Trash manually" = "Das Objekt wurde verschoben, aber sein Ort im Papierkorb wurde nicht gemeldet; prüfen Sie den Papierkorb manuell.";
 "The item in the Trash is missing" = "Das Objekt im Papierkorb fehlt";
 "This folder could not be validated; rescan before cleaning" = "Dieser Ordner konnte nicht geprüft werden; scannen Sie erneut, bevor Sie ihn bereinigen";
+"Cleanup tool not found in an absolute PATH directory" = "Das Bereinigungswerkzeug wurde in keinem absoluten PATH-Verzeichnis gefunden";
+"1 smaller item" = "1 kleineres Objekt";

@@ -359,3 +359,5 @@
 "The item was moved but its Trash location was not returned; review the Trash manually" = "Öğe taşındı ancak Çöp Kutusu'ndaki konumu bildirilmedi; Çöp Kutusu'nu elle gözden geçirin.";
 "The item in the Trash is missing" = "Çöp Kutusu'ndaki öğe bulunamıyor";
 "This folder could not be validated; rescan before cleaning" = "Bu klasör doğrulanamadı; temizlemeden önce yeniden tarayın";
+"Cleanup tool not found in an absolute PATH directory" = "Temizlik aracı PATH içindeki mutlak yol dizinlerinde bulunamadı";
+"1 smaller item" = "1 küçük öge";

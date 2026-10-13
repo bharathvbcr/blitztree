@@ -359,3 +359,5 @@
 "The item was moved but its Trash location was not returned; review the Trash manually" = "項目は移動されましたが、ゴミ箱内の場所が返されませんでした。ゴミ箱を手動で確認してください。";
 "The item in the Trash is missing" = "ゴミ箱内の項目が見つかりません";
 "This folder could not be validated; rescan before cleaning" = "このフォルダを検証できませんでした。クリーンアップの前に再スキャンしてください";
+"Cleanup tool not found in an absolute PATH directory" = "クリーンアップツールが PATH の絶対パスのディレクトリに見つかりません";
+"1 smaller item" = "小さい項目1件";

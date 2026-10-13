@@ -96,15 +96,40 @@ final class SunburstNSView: NSView {
         liveResizing = true
     }
 
+    /// A frame of the drag was skipped. The drag may end at the size it began
+    /// with, which `relayoutIfNeeded` takes for "nothing changed", so the end
+    /// of a drag that skipped anything renders once whatever the size.
+    private var skippedDuringResize = false
+    /// The scale the bitmap was made at.
+    private var lastScale: CGFloat = 0
+
     override func viewDidEndLiveResize() {
         super.viewDidEndLiveResize()
         liveResizing = false
+        if skippedDuringResize { lastSize = .zero }
+        skippedDuringResize = false
         relayoutIfNeeded()
     }
 
     override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
         liveResizing = false // a drag that began in another window has no end here
+        skippedDuringResize = false
+    }
+
+    /// The layer keeps the last picture; the colours in it come from the
+    /// appearance it was drawn in.
+    override func viewDidChangeEffectiveAppearance() {
+        super.viewDidChangeEffectiveAppearance()
+        needsDisplay = true
+    }
+
+    /// A move to a display of another scale: the bitmap has the wrong pixels.
+    override func viewDidChangeBackingProperties() {
+        super.viewDidChangeBackingProperties()
+        guard let scale = window?.backingScaleFactor, lastScale != 0, scale != lastScale else { return }
+        lastSize = .zero
+        relayoutIfNeeded()
     }
 
     func relayoutIfNeeded() {
@@ -114,7 +139,7 @@ final class SunburstNSView: NSView {
         guard bounds.size != lastSize || contentChanged else { return }
         // Only a new size can wait for the end of the drag, and only when
         // there is a bitmap to show.
-        if liveResizing, !contentChanged, lastSize != .zero { return }
+        if liveResizing, !contentChanged, lastSize != .zero { skippedDuringResize = true; return }
         // Zooming crossfades; resizing and rescans just redraw.
         let zoomed = lastTreeGeneration == model.treeGeneration && model.viewRoot != lastRoot
         relayout()
@@ -307,6 +332,7 @@ final class SunburstNSView: NSView {
 
     private func render() -> CGImage? {
         let scale = window?.backingScaleFactor ?? 2
+        lastScale = scale
         let pw = max(1, Int((bounds.width * scale).rounded()))
         let ph = max(1, Int((bounds.height * scale).rounded()))
         guard let ctx = CGContext(
@@ -593,7 +619,7 @@ final class SunburstNSView: NSView {
             size = s.bytes
             switch s.node {
             case -1: title = String(localized: "Free space")
-            case -2: title = String(localized: "\(Fmt.num(UInt64(s.count))) smaller items")
+            case -2: title = MapAccessibility.smallerItems(s.count)
             default:
                 title = tree.name(s.node)
                 detail = String(format: "%.1f%%", 100 * Double(s.bytes) / Double(rootBytes))

@@ -915,7 +915,7 @@ final class AgentRun {
                             let gb = Double(bytes) / 1e9
                             try? await Task.sleep(for: .seconds(min(3.5, 0.3 + gb / 4)))
                         } else if let command {
-                            error = await Self.runCommand(command, path: env.path)
+                            error = await Self.runCommand(command, path: env.path)?.text
                         } else {
                             let result = await CleanupOperations.remove(urls)
                             remaining = result.remaining
@@ -977,13 +977,13 @@ final class AgentRun {
     /// Waits without holding a thread (so a dozen of them at once cannot
     /// use up the concurrency pool), gives up after `timeout`, and when the
     /// calling task is cancelled terminates the tool and waits for it to exit.
-    nonisolated static func runCommand(_ command: String, path: String, timeout: TimeInterval = 600) async -> String? {
-        guard let vetted = CleanupCommand.parse(command) else { return "Command or arguments not allowed" }
+    nonisolated static func runCommand(_ command: String, path: String, timeout: TimeInterval = 600) async -> StepFailure? {
+        guard let vetted = CleanupCommand.parse(command) else { return StepFailure("Command or arguments not allowed") }
         let executable = path.split(separator: ":", omittingEmptySubsequences: false)
             .filter { $0.hasPrefix("/") }
             .map { URL(fileURLWithPath: String($0)).appendingPathComponent(vetted.executable) }
             .first { FileManager.default.isExecutableFile(atPath: $0.path) }
-        guard let executable else { return "Cleanup tool not found in an absolute PATH directory" }
+        guard let executable else { return StepFailure("Cleanup tool not found in an absolute PATH directory") }
         // Some tools only run inside a project (`bun pm cache rm` wants a
         // package.json), so they run in an empty stand-in one.
         let folder = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
@@ -998,12 +998,21 @@ final class AgentRun {
         let spec = Subprocess.Spec(executable.path, vetted.arguments, environment: Subprocess.environment(path: path),
                                    directory: folder.path)
         let outcome = await Subprocess.run(spec, stdout: .discard, stderr: .stream { tail.feed($0) }, timeout: timeout)
-        if let error = outcome.launchError { return error }
-        if outcome.timedOut { return String(localized: "Took too long") }
-        if outcome.cancelled { return String(localized: "Cancelled") }
+        if let error = outcome.launchError { return StepFailure(verbatim: error) }
+        if outcome.timedOut { return StepFailure("Took too long") }
+        if outcome.cancelled { return StepFailure("Cancelled") }
         guard outcome.status != 0 else { return nil }
-        return tail.last.isEmpty ? String(localized: "Exited with \(String(outcome.status))") : tail.last
+        return tail.last.isEmpty ? StepFailure("Exited with \(String(outcome.status))") : StepFailure(verbatim: tail.last)
     }
+}
+
+/// Why a cleanup step failed, as its card shows it. A message written in code
+/// can only be made from a `LocalizedStringResource`, so a bare string cannot
+/// reach the card in English; text that came from a tool is `verbatim`.
+nonisolated struct StepFailure: Sendable, Equatable {
+    let text: String
+    init(_ message: LocalizedStringResource) { text = String(localized: message) }
+    init(verbatim text: String) { self.text = text }
 }
 
 /// Keeps the last line of an agent's stderr for error messages.

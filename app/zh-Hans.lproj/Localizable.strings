@@ -359,3 +359,5 @@
 "The item was moved but its Trash location was not returned; review the Trash manually" = "项目已移动，但未返回其在废纸篓中的位置；请手动检查废纸篓。";
 "The item in the Trash is missing" = "废纸篓中的项目已丢失";
 "This folder could not be validated; rescan before cleaning" = "无法验证此文件夹；请在清理前重新扫描";
+"Cleanup tool not found in an absolute PATH directory" = "在 PATH 的绝对路径目录中找不到清理工具";
+"1 smaller item" = "1 个较小项目";

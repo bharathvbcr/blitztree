@@ -36,6 +36,10 @@ final class MapAccessibility {
         var node: Int
         var bytes: UInt64
         var rect: CGRect
+        /// The tree the row was listed from. Set when the rows are built; an
+        /// action on a row from an older tree is refused rather than applied
+        /// to whatever node number now means something else.
+        var treeGeneration: UInt64 = 0
 
         var isNode: Bool {
             switch role {
@@ -65,6 +69,12 @@ final class MapAccessibility {
     /// Building the row to focus costs a pass over the layout; only worth it
     /// when something is listening.
     static var voiceOverRunning: () -> Bool = { NSWorkspace.shared.isVoiceOverEnabled }
+
+    /// "N smaller items", with its own wording for one. Both maps use this;
+    /// the count is at least one, so no zero form is needed.
+    static func smallerItems(_ count: Int) -> String {
+        count == 1 ? String(localized: "1 smaller item") : String(localized: "\(Fmt.num(UInt64(count))) smaller items")
+    }
 
     private unowned let view: NSView
     private let kind: Kind
@@ -115,8 +125,10 @@ final class MapAccessibility {
         guard let model = host.model(), let tree = model.tree else { return [] }
         let rootBytes = max(tree.alloc[model.viewRoot], 1)
         let folder = name(of: model.viewRoot, model: model, tree: tree)
-        return host.items().map { item in
-            Element(item: item, title: title(for: item, model: model, tree: tree, folder: folder, rootBytes: rootBytes),
+        return host.items().map { listed in
+            var item = listed
+            item.treeGeneration = model.treeGeneration
+            return Element(item: item, title: title(for: item, model: model, tree: tree, folder: folder, rootBytes: rootBytes),
                     owner: self, parent: view)
         }
     }
@@ -137,7 +149,7 @@ final class MapAccessibility {
             let free = String(localized: "Free space")
             return String(localized: "\(free), \(size)")
         case .smaller(let count):
-            let smaller = String(localized: "\(Fmt.num(UInt64(count))) smaller items")
+            let smaller = Self.smallerItems(count)
             return String(localized: "\(smaller), \(size)")
         }
     }
@@ -153,23 +165,43 @@ final class MapAccessibility {
         }
     }
 
-    func press(_ item: Item) -> Bool { host.press(item) }
+    /// The row was listed from the tree on screen now.
+    func isCurrent(_ item: Item) -> Bool {
+        host.model()?.treeGeneration == item.treeGeneration
+    }
+
+    func press(_ item: Item) -> Bool { isCurrent(item) && host.press(item) }
+
+    /// Runs `work` after the accessibility call has returned. A custom action
+    /// that opens a confirmation would otherwise hold the call past the
+    /// accessibility timeout (-25204) while the alert is up.
+    static var afterReturn: (@escaping @MainActor () -> Void) -> Void = { work in
+        DispatchQueue.main.async { MainActor.assumeIsolated(work) }
+    }
 
     /// Select, then what the right-click menu offers for the row (Zoom In or
-    /// Open, Reveal in Finder, Copy Path, Ask, Move to Trash).
+    /// Open, Reveal in Finder, Copy Path, Ask, Move to Trash). Each is refused
+    /// if the tree changed since the row was listed, again after the hop.
     func actions(for item: Item) -> [NSAccessibilityCustomAction] {
         guard item.isNode, let model = host.model() else { return [] }
         let select = NSAccessibilityCustomAction(name: String(localized: "Select")) { [weak self] in
-            MainActor.assumeIsolated { self?.host.select(item) }
-            return true
+            MainActor.assumeIsolated {
+                guard let self, self.isCurrent(item) else { return false }
+                self.host.select(item)
+                return true
+            }
         }
         let menu = NSMenu()
         NodeMenu.fill(menu, node: item.node, model: model)
         let fromMenu = menu.items.filter { $0.isEnabled && !$0.isSeparatorItem && $0.action != nil }.map { entry in
-            NSAccessibilityCustomAction(name: entry.title) {
+            NSAccessibilityCustomAction(name: entry.title) { [weak self] in
                 MainActor.assumeIsolated {
-                    guard let action = entry.action else { return false }
-                    return NSApplication.shared.sendAction(action, to: entry.target, from: entry)
+                    guard let self, self.isCurrent(item), let action = entry.action else { return false }
+                    Self.afterReturn { [weak self] in
+                        guard self?.isCurrent(item) == true else { return }
+                        NSApplication.shared.sendAction(action, to: entry.target, from: entry)
+                    }
+                    return true
                 }
             }
         }

@@ -359,3 +359,5 @@
 "The item was moved but its Trash location was not returned; review the Trash manually" = "L'élément a été déplacé, mais son emplacement dans la Corbeille n'a pas été renvoyé ; vérifiez la Corbeille manuellement.";
 "The item in the Trash is missing" = "L'élément de la Corbeille est introuvable";
 "This folder could not be validated; rescan before cleaning" = "Ce dossier n'a pas pu être validé ; relancez un scan avant de nettoyer";
+"Cleanup tool not found in an absolute PATH directory" = "Outil de nettoyage introuvable dans un répertoire absolu du PATH";
+"1 smaller item" = "1 élément plus petit";
