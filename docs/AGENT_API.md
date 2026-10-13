@@ -250,17 +250,23 @@ no file name can reach the start of a cell. Other columns are numbers and
 `true`/`false`. Names are never rewritten. (The writer would neutralise a
 relative root that began with `=`, `+`, `-`, `@`, TAB or CR by prefixing a single
 quote. The CLI's root is always absolute; the app's is too, unless it was
-launched with a relative path argument, which the writer then neutralises.) Treat the file's
-contents as data like any report.
+launched with a relative path argument, which the writer then neutralises.)
+Treat the file's contents as data like any report.
 
-**Writing it.** The CSV streams through a buffer, one row at a time, so
-memory does not grow with the tree (a 1,001,001-row export holds under 64 KB
-beyond its write buffer; see the test `a_million_row_export_holds_constant_memory`).
+**Writing it.** The CSV streams through a buffer, one row at a time, so the
+memory a row costs does not grow with the row count: a 1,001,001-row export of
+the whole scan held under 64 KB beyond its write buffer (test
+`a_million_row_export_holds_constant_memory`). The one thing that scales with the
+tree is a bitset of n/8 bytes (about 125 KB per million nodes) that a folder
+export, not a whole-scan export, allocates to count its rows for the progress bar.
 It is written to a hidden `.blitztree-export-*.tmp` file in `FILE`'s folder,
 synced, and renamed over `FILE`: `FILE` is whole or untouched. Any error (a
 folder that is missing or read-only, a full disk, a folder removed meanwhile),
 SIGINT or SIGTERM during the write removes the temporary file, leaves `FILE`
-as it was, prints a JSON error and exits `1`. The folder is checked before the
+as it was, prints a JSON error and exits `1`. Replacing an existing regular file
+keeps its permission bits (a 0600 file stays 0600) but, being a rename, not its
+owner, ACLs, extended attributes or hard links: the old file's other names keep
+the old content. The folder is checked before the
 scan starts, so a bad `--output` fails at once. An existing `FILE` is replaced
 (a symlink there is replaced, not written through); a folder there is an error.
 

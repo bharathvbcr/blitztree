@@ -108,8 +108,8 @@ const char *bz_cleanup_verify(BzScan *h, uint64_t index);
 // CSV export of the folder at node `root` (node 0: the whole scan) and
 // everything under it. One row per node: path, allocated bytes, logical
 // bytes, file count, is-folder, complete. RFC 4180, UTF-8, CRLF; streamed to
-// disk by a background thread (constant memory per row, whatever the tree's
-// size). The file is written to a hidden temporary file beside `dest_path`
+// disk by a background thread (no per-row allocation; a folder export also
+// holds one bit per tree node, n/8 bytes, to size its progress). The file is written to a hidden temporary file beside `dest_path`
 // and renamed into place only when whole: cancelled, failed and freed exports
 // leave `dest_path` as it was and no temporary file behind.
 typedef struct BzExport BzExport;

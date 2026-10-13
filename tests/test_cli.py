@@ -729,25 +729,71 @@ class ExportCSVTests(unittest.TestCase):
             self.assertEqual(len(rows), 1 + 1 + 10 + 300)
         self.assertEqual(self.leftovers(), [])
 
-    def test_an_interrupt_leaves_a_whole_file_or_none_and_never_a_temporary(self):
-        for i in range(4000):
-            self.make(f"d{i % 40}/f{i}", size=1)
+    def temp_bytes(self):
+        """Bytes in the largest export temporary file right now (0 when there is none or it is empty)."""
+        sizes = [0]
+        for name in self.leftovers():
+            try:
+                sizes.append((self.out / name).stat().st_size)
+            except FileNotFoundError:
+                pass
+        return max(sizes)
+
+    def test_an_interrupt_during_the_write_leaves_no_file_and_no_temporary(self):
+        # Long names make a CSV of a few MB: the engine flushes 256 KiB at a time, so a
+        # non-empty temporary file means the write is under way.
+        for i in range(8000):
+            self.make(f"d{i % 40}/{'n' * 100}-{i}", size=1)
+        rows = 1 + 1 + 40 + 8000
         stopped = finished = 0
-        for delay in (0.0, 0.02, 0.05, 0.1, 0.2, 0.4):
-            dest = self.out / f"i-{delay}.csv"
+        for attempt in range(12):
+            dest = self.out / f"i-{attempt}.csv"
             proc = subprocess.Popen([str(BIN), "export-csv", "--root", str(self.tree), "--output", str(dest)],
                                     env=self.env, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-            time.sleep(delay)
-            proc.send_signal(signal.SIGINT)
+            deadline = time.monotonic() + 30
+            while proc.poll() is None and self.temp_bytes() == 0 and time.monotonic() < deadline:
+                pass  # no sleep: the write window is milliseconds wide
+            if proc.poll() is None:
+                proc.send_signal(signal.SIGINT)
             stdout, stderr = proc.communicate(timeout=60)
-            self.assertEqual(self.leftovers(), [], f"delay {delay}")
+            self.assertEqual(self.leftovers(), [], f"attempt {attempt}")
             if proc.returncode == 0:
                 finished += 1
-                self.assertEqual(len(self.read_csv(dest)), 1 + 1 + 40 + 4000, f"delay {delay}: a whole file")
+                self.assertEqual(len(self.read_csv(dest)), rows, f"attempt {attempt}: a whole file")
             else:
                 stopped += 1
-                self.assertFalse(dest.exists(), f"delay {delay}: stopped, so no file (exit {proc.returncode})")
-        self.assertEqual(stopped + finished, 6)
+                self.assertEqual(proc.returncode, 1, stderr)
+                self.assertIn("cancelled", json.loads(stdout)["error"]["message"])
+                self.assertFalse(dest.exists(), f"attempt {attempt}: stopped, so no file")
+            if stopped >= 3:
+                break
+        self.assertGreaterEqual(stopped, 1, f"no export was stopped mid-write ({finished} finished first)")
+
+    def test_an_interrupt_before_the_write_leaves_no_file(self):
+        for i in range(3000):
+            self.make(f"d{i % 40}/f{i}", size=1)
+        dest = self.out / "early.csv"
+        proc = subprocess.Popen([str(BIN), "export-csv", "--root", str(self.tree), "--output", str(dest)],
+                                env=self.env, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        proc.send_signal(signal.SIGINT)
+        proc.communicate(timeout=60)
+        self.assertEqual(self.leftovers(), [])
+        if proc.returncode != 0:
+            self.assertFalse(dest.exists())
+
+    def test_replacing_a_file_keeps_its_permissions(self):
+        self.make("one")
+        dest = self.out / "private.csv"
+        dest.write_bytes(b"old")
+        dest.chmod(0o600)
+        self.cli("export-csv", "--root", str(self.tree), "--output", str(dest))
+        self.assertEqual(dest.stat().st_mode & 0o777, 0o600)
+        self.assertEqual(self.read_csv(dest)[0], CSV_HEADER)
+        fresh = self.out / "fresh.csv"
+        reference = self.out / "reference"
+        reference.write_bytes(b"")
+        self.cli("export-csv", "--root", str(self.tree), "--output", str(fresh))
+        self.assertEqual(fresh.stat().st_mode & 0o777, reference.stat().st_mode & 0o777)
 
 
 if __name__ == "__main__":

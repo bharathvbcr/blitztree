@@ -858,3 +858,49 @@ fn a_tree_that_lists_a_node_twice_is_refused_not_looped_over() {
     let err = write_csv(&t, 0, &mut out, &Control::new()).unwrap_err();
     assert!(matches!(err, Error::Invalid(_)), "{err}");
 }
+
+#[test]
+fn replacing_a_file_keeps_its_permissions_and_a_new_file_gets_the_umask_mode() {
+    use std::os::unix::fs::PermissionsExt;
+    let root = scratch("mode");
+    let tree = sample();
+    let mode_of = |p: &Path| std::fs::metadata(p).unwrap().permissions().mode() & 0o777;
+    for mode in [0o600, 0o640, 0o444, 0o755] {
+        let dest = root.join(format!("m{mode:o}.csv"));
+        std::fs::write(&dest, b"old").unwrap();
+        std::fs::set_permissions(&dest, std::fs::Permissions::from_mode(mode)).unwrap();
+        export_file(&tree, 0, &dest, &Control::new()).unwrap();
+        assert_eq!(mode_of(&dest), mode, "a {mode:o} file stays {mode:o}");
+        assert!(std::fs::read(&dest).unwrap().starts_with(b"path,"));
+    }
+    // A cancelled replacement leaves both content and mode.
+    let kept = root.join("kept.csv");
+    std::fs::write(&kept, b"old").unwrap();
+    std::fs::set_permissions(&kept, std::fs::Permissions::from_mode(0o600)).unwrap();
+    let ctl = Control::new();
+    stop_after(&ctl, 2);
+    assert!(export_file(&tree, 0, &kept, &ctl).is_err());
+    assert_eq!(
+        (std::fs::read(&kept).unwrap(), mode_of(&kept)),
+        (b"old".to_vec(), 0o600)
+    );
+    // Nothing there: the mode a plain new file gets. A link is replaced by a file, not followed.
+    let fresh = root.join("fresh.csv");
+    let plain = root.join("plain");
+    std::fs::write(&plain, b"").unwrap();
+    export_file(&tree, 0, &fresh, &Control::new()).unwrap();
+    assert_eq!(mode_of(&fresh), mode_of(&plain));
+    let target = root.join("target");
+    std::fs::write(&target, b"t").unwrap();
+    std::fs::set_permissions(&target, std::fs::Permissions::from_mode(0o600)).unwrap();
+    let link = root.join("link.csv");
+    std::os::unix::fs::symlink(&target, &link).unwrap();
+    export_file(&tree, 0, &link, &Control::new()).unwrap();
+    assert_eq!(
+        mode_of(&link),
+        mode_of(&plain),
+        "the link's target does not lend its mode"
+    );
+    assert_eq!(mode_of(&target), 0o600);
+    let _ = std::fs::remove_dir_all(&root);
+}

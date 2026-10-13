@@ -3,7 +3,12 @@
 //! One writer serves the app (`bz_export_*` in `ffi.rs`) and the CLI
 //! (`blitztree export-csv`). Nothing here builds the file in memory: the walk
 //! is iterative, keeps one reusable path buffer and writes each row through a
-//! `BufWriter`, so memory is constant per row whatever the tree's size.
+//! `BufWriter`, so the memory a row costs is constant: the write buffer, the
+//! path buffer and a stack as deep as the folder nesting, none of it growing
+//! with the row count. The one allocation that scales with the tree is
+//! `subtree_len`'s bitset for a folder export (n/8 bytes for n nodes, about
+//! 125 KB per million nodes), used to size the progress bar; a whole-scan
+//! export allocates none.
 //!
 //! # The file
 //!
@@ -435,16 +440,41 @@ pub fn check_destination(dest: &Path) -> Result<(), Error> {
     Temp::create(dest).map(drop)
 }
 
+/// Replacing a regular file keeps its permission bits (rwx for owner, group
+/// and others), set on the new file before any of the CSV is written: a 0600
+/// file must not come back 0644. Without a regular file at `dest` (nothing
+/// there, or a link, which is replaced rather than followed) the new file
+/// keeps the mode the umask gives it. Owner, ACLs, extended attributes and
+/// hard links of the old file are not carried over: the new file is a rename.
+fn keep_mode(file: &File, dest: &Path) -> Result<(), Error> {
+    use std::os::unix::fs::PermissionsExt;
+    let Ok(old) = std::fs::symlink_metadata(dest) else {
+        return Ok(());
+    };
+    if !old.file_type().is_file() {
+        return Ok(());
+    }
+    file.set_permissions(std::fs::Permissions::from_mode(
+        old.permissions().mode() & 0o777,
+    ))
+    .map_err(io_error(format!(
+        "Could not keep the permissions of {}",
+        dest.display()
+    )))
+}
+
 /// Export the subtree at `root` to the file `dest`, all or nothing: the CSV is
 /// written to a temporary file in `dest`'s folder, synced, and renamed over
 /// `dest`. Any error or a cancel before the rename leaves `dest` untouched and
 /// no temporary file behind. An existing `dest` is replaced (a link there is
-/// replaced, not followed); a folder there is an error.
+/// replaced, not followed) and keeps its permission bits (see `keep_mode`); a
+/// folder there is an error.
 pub fn export_file(tree: &Tree, root: usize, dest: &Path, ctl: &Control) -> Result<Summary, Error> {
     check_layout(tree, root)?;
     check_name(dest)?;
     let mut temp = Temp::create(dest)?;
     let file = temp.file.take().expect("a new temporary file is open");
+    keep_mode(&file, dest)?;
     let mut out = Counting {
         inner: BufWriter::with_capacity(BUFFER, file),
         bytes: 0,
