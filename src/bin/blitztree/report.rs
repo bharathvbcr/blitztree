@@ -58,8 +58,7 @@ pub fn quick_wins(scan: &Tree, options: &Options, anchors: &cleanup::Anchors) ->
             value["group"] = json!(c.kind.group().id());
             value["section"] = json!(c.kind.section().id());
             value["verify"] = json!(c.kind.verify());
-            value["contained_in"] =
-                json!(outer.map(|e| scan.path(candidates[e].node as usize)));
+            value["contained_in"] = json!(outer.map(|e| scan.path(candidates[e].node as usize)));
             value["requires_review"] = json!(true);
             value
         })

@@ -33,30 +33,121 @@ impl Rng {
 
 /// Every rule name, marker and container name, plus filler.
 const NAMES: &[&str] = &[
-    "a", "b", "src", "p", "node_modules", "package.json", ".venv", "venv", "pyvenv.cfg", "target",
-    "Cargo.toml", ".next", "DerivedData", "Xcode", "Archives", "UserData", "Previews", "Developer",
-    "XCTestDevices", "iOS DeviceSupport", "Caches", "Library", "CoreSimulator", ".cache", ".npm",
-    ".gradle", "gradle.properties", "init.d", "caches", "wrapper", "native", "install", ".bun",
-    "cache", ".cargo", "registry", "git", "bin", ".m2", "repository", ".ollama", "models", ".rustup",
-    "toolchains", "downloads", ".claude", "projects", "file-history", "debug", ".codex", "sessions",
-    "2025", "archived_sessions", "worktrees", ".git", "CACHEDIR.TAG", "huggingface", "hub",
-    "models--m", "torch", ".build", "Package.swift", "build", "build.gradle", ".dart_tool",
-    "pubspec.yaml", ".turbo", "Pods", "Podfile", ".tox", "zig-out", "build.zig", "_build", "deps",
-    "mix.exs", ".stack-work", "dist-newstyle", "Application Support", "Cache", "GPUCache",
-    "com.apple.x", ".Trash", "lib", "Users", "u", "tox.ini", "noxfile.py", "stack.yaml",
-    "cabal.project", "app.cabal", "memory", "MEMORY.md", "token", "stored_tokens", "x.jsonl",
+    "a",
+    "b",
+    "src",
+    "p",
+    "node_modules",
+    "package.json",
+    ".venv",
+    "venv",
+    "pyvenv.cfg",
+    "target",
+    "Cargo.toml",
+    ".next",
+    "DerivedData",
+    "Xcode",
+    "Archives",
+    "UserData",
+    "Previews",
+    "Developer",
+    "XCTestDevices",
+    "iOS DeviceSupport",
+    "Caches",
+    "Library",
+    "CoreSimulator",
+    ".cache",
+    ".npm",
+    ".gradle",
+    "gradle.properties",
+    "init.d",
+    "caches",
+    "wrapper",
+    "native",
+    "install",
+    ".bun",
+    "cache",
+    ".cargo",
+    "registry",
+    "git",
+    "bin",
+    ".m2",
+    "repository",
+    ".ollama",
+    "models",
+    ".rustup",
+    "toolchains",
+    "downloads",
+    ".claude",
+    "projects",
+    "file-history",
+    "debug",
+    ".codex",
+    "sessions",
+    "2025",
+    "archived_sessions",
+    "worktrees",
+    ".git",
+    "CACHEDIR.TAG",
+    "huggingface",
+    "hub",
+    "models--m",
+    "torch",
+    ".build",
+    "Package.swift",
+    "build",
+    "build.gradle",
+    ".dart_tool",
+    "pubspec.yaml",
+    ".turbo",
+    "Pods",
+    "Podfile",
+    ".tox",
+    "zig-out",
+    "build.zig",
+    "_build",
+    "deps",
+    "mix.exs",
+    ".stack-work",
+    "dist-newstyle",
+    "Application Support",
+    "Cache",
+    "GPUCache",
+    "com.apple.x",
+    ".Trash",
+    "lib",
+    "Users",
+    "u",
+    "tox.ini",
+    "noxfile.py",
+    "stack.yaml",
+    "cabal.project",
+    "app.cabal",
+    "memory",
+    "MEMORY.md",
+    "token",
+    "stored_tokens",
+    "x.jsonl",
     "0b7e9a52-6c1d-4f3e-8a47-5d2c9e1f0a63",
 ];
 
 /// Credentials that live in a `.cache` at any depth and under any home.
-const NEVER_INSIDE: &[&[&str]] = &[&[".cache", "huggingface", "token"], &[".cache", "huggingface", "stored_tokens"]];
+const NEVER_INSIDE: &[&[&str]] = &[
+    &[".cache", "huggingface", "token"],
+    &[".cache", "huggingface", "stored_tokens"],
+];
 
 /// What the probe says of a `.git` file, from the folder's path alone, so the
 /// answer is the same under any sibling order. Worktree half the time.
 fn fake_git(t: &Tree, i: usize) -> GitFile {
-    let hash = t.path(i).as_os_str().as_encoded_bytes().iter().fold(0xcbf2_9ce4_8422_2325u64, |h, &b| {
-        (h ^ u64::from(b)).wrapping_mul(0x0000_0100_0000_01b3)
-    });
+    let hash = t
+        .path(i)
+        .as_os_str()
+        .as_encoded_bytes()
+        .iter()
+        .fold(0xcbf2_9ce4_8422_2325u64, |h, &b| {
+            (h ^ u64::from(b)).wrapping_mul(0x0000_0100_0000_01b3)
+        });
     match (hash >> 20) % 4 {
         0 | 1 => GitFile::Worktree,
         2 => GitFile::Submodule,
@@ -66,28 +157,68 @@ fn fake_git(t: &Tree, i: usize) -> GitFile {
 
 /// Home-relative starts that reach every container and home rule.
 const HOME_STARTS: &[&str] = &[
-    ".cache", ".cache/huggingface", ".cache/huggingface/hub", "Library/Caches", "Library",
-    "Library/Developer/Xcode", "Library/Developer/Xcode/UserData", "Library/Developer/Xcode/UserData/Previews",
-    "Library/Application Support/App", ".cargo", ".m2", ".ollama",
-    ".rustup", ".rustup/toolchains", ".claude", ".claude/projects", ".codex", ".codex/sessions",
-    ".codex/worktrees", ".gradle", "project", "Library/Containers/c/Data/Library",
+    ".cache",
+    ".cache/huggingface",
+    ".cache/huggingface/hub",
+    "Library/Caches",
+    "Library",
+    "Library/Developer/Xcode",
+    "Library/Developer/Xcode/UserData",
+    "Library/Developer/Xcode/UserData/Previews",
+    "Library/Application Support/App",
+    ".cargo",
+    ".m2",
+    ".ollama",
+    ".rustup",
+    ".rustup/toolchains",
+    ".claude",
+    ".claude/projects",
+    ".codex",
+    ".codex/sessions",
+    ".codex/worktrees",
+    ".gradle",
+    "project",
+    "Library/Containers/c/Data/Library",
 ];
 
 /// I2: user config and credentials, home-relative. Never inside a candidate.
 const PROTECTED: &[&str] = &[
-    ".cargo/bin/cargo", ".cargo/config.toml", ".cargo/credentials.toml", ".cargo/env",
-    ".cargo/.crates.toml", ".cargo/.crates2.json", ".gradle/gradle.properties", ".gradle/init.d/a.gradle",
-    ".gradle/init.gradle", ".gradle/init.gradle.kts", ".m2/settings.xml", ".claude/settings.json",
-    ".claude/.credentials.json", ".claude/local/package.json", ".codex/auth.json", ".codex/config.toml",
-    ".cache/huggingface/token", ".cache/huggingface/stored_tokens",
+    ".cargo/bin/cargo",
+    ".cargo/config.toml",
+    ".cargo/credentials.toml",
+    ".cargo/env",
+    ".cargo/.crates.toml",
+    ".cargo/.crates2.json",
+    ".gradle/gradle.properties",
+    ".gradle/init.d/a.gradle",
+    ".gradle/init.gradle",
+    ".gradle/init.gradle.kts",
+    ".m2/settings.xml",
+    ".claude/settings.json",
+    ".claude/.credentials.json",
+    ".claude/local/package.json",
+    ".codex/auth.json",
+    ".codex/config.toml",
+    ".cache/huggingface/token",
+    ".cache/huggingface/stored_tokens",
 ];
 
 /// Folders the Swift guard always refuses (CleanupSafety.broadRelative), home-relative.
 const BROAD: &[&str] = &[
-    "Library", "Library/Caches", "Library/Application Support", "Library/Containers",
-    "Library/Group Containers", "Library/Developer", "Library/Preferences", ".config", ".cache",
-    "Library/Developer/CoreSimulator", "Library/Developer/CoreSimulator/Devices", ".local",
-    ".local/share", "Downloads",
+    "Library",
+    "Library/Caches",
+    "Library/Application Support",
+    "Library/Containers",
+    "Library/Group Containers",
+    "Library/Developer",
+    "Library/Preferences",
+    ".config",
+    ".cache",
+    "Library/Developer/CoreSimulator",
+    "Library/Developer/CoreSimulator/Devices",
+    ".local",
+    ".local/share",
+    "Downloads",
 ];
 
 /// (scan root, home, home's path relative to the root when the home is in the tree).
@@ -109,17 +240,31 @@ const ROOTS: &[(&str, Option<&str>, Option<&str>)] = &[
     ("/Users/u/.gradle", Some("/Users/u"), None),
     ("/Users/u/Library/Developer/Xcode", Some("/Users/u"), None),
     ("/Users/u/Library/Developer/CoreSimulator", None, None),
-    ("/Users/u/Library/Application Support", Some("/Users/u"), None),
+    (
+        "/Users/u/Library/Application Support",
+        Some("/Users/u"),
+        None,
+    ),
     ("/x/.bun", None, None),
     ("/x/.bun/install", None, None),
     ("/r/.claude/worktrees", None, None),
-    ("/private/tmp/claude-501/-p/0f6d064c-a0ba-4772-8808-62158119c071/scratchpad", None, None),
+    (
+        "/private/tmp/claude-501/-p/0f6d064c-a0ba-4772-8808-62158119c071/scratchpad",
+        None,
+        None,
+    ),
 ];
 
 fn random_paths(rng: &mut Rng, home_rel: Option<&str>) -> (Vec<String>, Vec<String>) {
     let mut paths = Vec::new();
     let mut protected = Vec::new();
-    let prefix = home_rel.map(|h| if h.is_empty() { String::new() } else { format!("{h}/") });
+    let prefix = home_rel.map(|h| {
+        if h.is_empty() {
+            String::new()
+        } else {
+            format!("{h}/")
+        }
+    });
     for _ in 0..1 + rng.below(40) {
         let mut parts: Vec<String> = Vec::new();
         if let Some(prefix) = prefix.as_ref().filter(|_| rng.chance(50)) {
@@ -145,7 +290,11 @@ fn random_paths(rng: &mut Rng, home_rel: Option<&str>) -> (Vec<String>, Vec<Stri
         }
     }
     // The same entries at non-home depths: only their direct rules protect them.
-    for p in [".gradle/gradle.properties", "lib/node_modules/npm/index.js", ".cache/huggingface/token"] {
+    for p in [
+        ".gradle/gradle.properties",
+        "lib/node_modules/npm/index.js",
+        ".cache/huggingface/token",
+    ] {
         if rng.chance(50) {
             paths.push(format!("{}/{p}", rng.pick(NAMES)));
         }
@@ -173,19 +322,35 @@ fn check(seed: u64) -> Vec<Kind> {
         assert!(n != 0, "{ctx}: root is a candidate");
         assert!(t.is_dir(n), "{ctx}: {path} is not a directory");
         assert!(t.alloc[n] >= min_bytes, "{ctx}: {path} below threshold");
-        assert!(!path.split('/').any(|p| p == ".Trash"), "{ctx}: {path} under .Trash");
+        assert!(
+            !path.split('/').any(|p| p == ".Trash"),
+            "{ctx}: {path} under .Trash"
+        );
         if let Some(e) = enclosing[k] {
-            assert!(found[e].kind.descends(), "{ctx}: {path} nested in {:?}", found[e].kind);
+            assert!(
+                found[e].kind.descends(),
+                "{ctx}: {path} nested in {:?}",
+                found[e].kind
+            );
         }
         if c.kind == Kind::NodeModules {
             let parent = t.parents[n] as usize;
-            assert!(contains(&t, parent, &["package.json"]), "{ctx}: {path} without package.json");
+            assert!(
+                contains(&t, parent, &["package.json"]),
+                "{ctx}: {path} without package.json"
+            );
         }
         if !c.kind.descends() {
-            assert!(!contains(&t, n, GRADLE_CONFIG), "{ctx}: Gradle home {path} is a candidate");
+            assert!(
+                !contains(&t, n, GRADLE_CONFIG),
+                "{ctx}: Gradle home {path} is a candidate"
+            );
         }
         if c.kind == Kind::AgentTranscripts {
-            assert!(only_transcripts(&t, n), "{ctx}: {path} holds more than transcripts");
+            assert!(
+                only_transcripts(&t, n),
+                "{ctx}: {path} holds more than transcripts"
+            );
         }
         if c.kind == Kind::HaskellBuild || c.kind == Kind::PythonTestEnvironments {
             let parent = t.parents[n] as usize;
@@ -195,7 +360,8 @@ fn check(seed: u64) -> Vec<Kind> {
                 &["tox.ini", "noxfile.py", "pyproject.toml", "setup.cfg"]
             };
             assert!(
-                contains(&t, parent, markers) || any_kid(&t, parent, |name| name.ends_with(".cabal")),
+                contains(&t, parent, markers)
+                    || any_kid(&t, parent, |name| name.ends_with(".cabal")),
                 "{ctx}: {path} without its project file"
             );
         }
@@ -204,11 +370,17 @@ fn check(seed: u64) -> Vec<Kind> {
         for p in paths.iter().map(|p| p.trim_end_matches('/')) {
             for tail in NEVER_INSIDE {
                 let tail = tail.join("/");
-                let Some(cache) = p.strip_suffix(&tail).map(|x| x.trim_end_matches('/')) else { continue };
+                let Some(cache) = p.strip_suffix(&tail).map(|x| x.trim_end_matches('/')) else {
+                    continue;
+                };
                 let cache = format!("{cache}/.cache");
                 let cache = cache.trim_start_matches('/');
                 let hf = format!("{cache}/huggingface");
-                assert!(path != cache && *path != hf,"{ctx}: {path} ({:?}) holds {p}", c.kind);
+                assert!(
+                    path != cache && *path != hf,
+                    "{ctx}: {path} ({:?}) holds {p}",
+                    c.kind
+                );
             }
         }
         // No tool cache is offered whole with a token file anywhere inside it
@@ -242,9 +414,16 @@ fn check(seed: u64) -> Vec<Kind> {
                 home_path != *path && !home_path.starts_with(&format!("{path}/")),
                 "{ctx}: home or its ancestor {path} is a candidate"
             );
-            let inside = if h.is_empty() { Some(path.as_str()) } else { path.strip_prefix(&format!("{h}/")) };
+            let inside = if h.is_empty() {
+                Some(path.as_str())
+            } else {
+                path.strip_prefix(&format!("{h}/"))
+            };
             if let Some(inside) = inside {
-                assert!(!BROAD.contains(&inside), "{ctx}: broad home folder {path} is a candidate");
+                assert!(
+                    !BROAD.contains(&inside),
+                    "{ctx}: broad home folder {path} is a candidate"
+                );
                 assert!(
                     inside.contains('/') || inside.starts_with('.'),
                     "{ctx}: direct home child {path} is a candidate"
@@ -255,7 +434,8 @@ fn check(seed: u64) -> Vec<Kind> {
             let (a, b) = (found[k - 1].node as usize, n);
             assert!(
                 t.alloc[a] > t.alloc[b]
-                    || (t.alloc[a] == t.alloc[b] && t.compare_paths(a, b) == std::cmp::Ordering::Less),
+                    || (t.alloc[a] == t.alloc[b]
+                        && t.compare_paths(a, b) == std::cmp::Ordering::Less),
                 "{ctx}: order {} before {path}",
                 rels[k - 1]
             );
@@ -267,10 +447,11 @@ fn check(seed: u64) -> Vec<Kind> {
         rng.shuffle(&mut v);
         v
     });
-    let again: Vec<(String, Kind)> = find_with(&shuffled, min_bytes, &anchors, &|i| fake_git(&shuffled, i))
-        .iter()
-        .map(|c| (rel(&shuffled, c.node), c.kind))
-        .collect();
+    let again: Vec<(String, Kind)> =
+        find_with(&shuffled, min_bytes, &anchors, &|i| fake_git(&shuffled, i))
+            .iter()
+            .map(|c| (rel(&shuffled, c.node), c.kind))
+            .collect();
     let first: Vec<(String, Kind)> = rels.into_iter().zip(found.iter().map(|c| c.kind)).collect();
     assert_eq!(first, again, "{ctx}: sibling order changed the result");
     first.into_iter().map(|(_, kind)| kind).collect()
@@ -278,15 +459,24 @@ fn check(seed: u64) -> Vec<Kind> {
 
 #[test]
 fn random_trees_hold_the_cleanup_invariants() {
-    let base: u64 = std::env::var("BZ_STRESS_SEED").ok().and_then(|s| s.parse().ok()).unwrap_or(0xB117_7EE5);
-    let cases: u64 = std::env::var("BZ_STRESS_CASES").ok().and_then(|s| s.parse().ok()).unwrap_or(4000);
+    let base: u64 = std::env::var("BZ_STRESS_SEED")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(0xB117_7EE5);
+    let cases: u64 = std::env::var("BZ_STRESS_CASES")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(4000);
     let mut seen = std::collections::HashSet::new();
     for k in 0..cases {
         seen.extend(check(base.wrapping_add(k)));
     }
     // The generator must reach every rule, or the invariants prove little.
     let missed: Vec<_> = Kind::ALL.iter().filter(|k| !seen.contains(k)).collect();
-    assert!(missed.is_empty(), "base seed {base}: no case produced {missed:?}");
+    assert!(
+        missed.is_empty(),
+        "base seed {base}: no case produced {missed:?}"
+    );
 }
 
 #[test]
@@ -309,19 +499,36 @@ fn degenerate_trees_do_not_panic() {
     let deep: String = (0..64).map(|_| "a/").collect();
     let deep_marker = format!("{deep}package.json");
     let deep_modules = format!("{deep}node_modules/x");
-    let mut paths = vec![deep_marker.as_str(), deep_modules.as_str(), nested_git.as_str()];
-    let worktree_gits: Vec<String> = (1..32).map(|d| format!("{}.git", "worktrees/wt/".repeat(d))).collect();
+    let mut paths = vec![
+        deep_marker.as_str(),
+        deep_modules.as_str(),
+        nested_git.as_str(),
+    ];
+    let worktree_gits: Vec<String> = (1..32)
+        .map(|d| format!("{}.git", "worktrees/wt/".repeat(d)))
+        .collect();
     paths.extend(worktree_gits.iter().map(String::as_str));
     paths.push("worktrees/wt/x");
     let t = build_with("/w", &paths, &mut |v| v);
     let found = find_with(&t, 0, &none, &|_| GitFile::Worktree);
-    assert_eq!(found.iter().filter(|c| c.kind == Kind::GitWorktree).count(), 32);
-    assert_eq!(found.iter().filter(|c| c.kind == Kind::NodeModules).count(), 1);
+    assert_eq!(
+        found.iter().filter(|c| c.kind == Kind::GitWorktree).count(),
+        32
+    );
+    assert_eq!(
+        found.iter().filter(|c| c.kind == Kind::NodeModules).count(),
+        1
+    );
     let enc = enclosing(&t, &found);
     assert!(enc.iter().flatten().all(|&e| found[e].kind.descends()));
     // 10k siblings, each a project with a node_modules.
     let projects: Vec<String> = (0..10_000)
-        .flat_map(|i| [format!("p{i:05}/package.json"), format!("p{i:05}/node_modules/x")])
+        .flat_map(|i| {
+            [
+                format!("p{i:05}/package.json"),
+                format!("p{i:05}/node_modules/x"),
+            ]
+        })
         .collect();
     let projects: Vec<&str> = projects.iter().map(String::as_str).collect();
     let t = build_with("/Users/u", &projects, &mut |v| v);
@@ -346,7 +553,10 @@ fn hostile_git_files_are_never_linked_worktrees() {
     assert!(rel_admin.exists());
     s.gitdir_file("rel/deep", "../../main/.git/worktrees/rel");
     // A symlinked .git file, even to a valid one.
-    s.file("targets/gitfile", format!("gitdir: {}\n", admin.display()).as_bytes());
+    s.file(
+        "targets/gitfile",
+        format!("gitdir: {}\n", admin.display()).as_bytes(),
+    );
     s.file("linked/payload", b"x");
     std::os::unix::fs::symlink(s.path("targets/gitfile"), s.path("linked/.git")).unwrap();
     // gitdir: pointing nowhere, to a directory that is no worktree, with a
@@ -354,7 +564,10 @@ fn hostile_git_files_are_never_linked_worktrees() {
     s.gitdir_file("nowhere", &named("gone").display().to_string());
     s.file("main/.git/worktrees/nocommon/HEAD", b"x");
     s.gitdir_file("nocommon", &named("nocommon").display().to_string());
-    s.gitdir_file("climbs", &format!("{}main/.git/worktrees/ok", "../".repeat(64)));
+    s.gitdir_file(
+        "climbs",
+        &format!("{}main/.git/worktrees/ok", "../".repeat(64)),
+    );
     s.gitdir_file("selfpoint", &s.path("selfpoint").display().to_string());
     // Empty, oversized, multi-line, not UTF-8, a directory, a pipe.
     s.file("empty/.git", b"");
@@ -363,7 +576,10 @@ fn hostile_git_files_are_never_linked_worktrees() {
     big.extend(std::iter::repeat_n(b'x', 5000));
     s.file("big/.git", &big);
     s.file("big/payload", b"x");
-    s.file("twolines/.git", format!("gitdir: {0}\ngitdir: {0}\n", admin.display()).as_bytes());
+    s.file(
+        "twolines/.git",
+        format!("gitdir: {0}\ngitdir: {0}\n", admin.display()).as_bytes(),
+    );
     s.file("twolines/payload", b"x");
     let mut bytes = format!("gitdir: {}", admin.display()).into_bytes();
     bytes.extend([0xff, b'\n']);
@@ -376,7 +592,10 @@ fn hostile_git_files_are_never_linked_worktrees() {
 
     assert_eq!(
         s.found("", None),
-        vec![("ok".to_string(), "git_worktree"), ("rel/deep".to_string(), "git_worktree")]
+        vec![
+            ("ok".to_string(), "git_worktree"),
+            ("rel/deep".to_string(), "git_worktree")
+        ]
     );
 }
 
@@ -489,8 +708,14 @@ fn codex_worktrees_skip_what_is_not_a_linked_worktree() {
     s.gitdir_file(".codex/worktrees/good/app", &admin.display().to_string());
     s.file(".codex/worktrees/empty-git/app/.git", b"");
     s.file(".codex/worktrees/empty-git/app/payload", b"x");
-    s.gitdir_file(".codex/worktrees/gone/app", &s.path("code/app/.git/worktrees/gone").display().to_string());
+    s.gitdir_file(
+        ".codex/worktrees/gone/app",
+        &s.path("code/app/.git/worktrees/gone").display().to_string(),
+    );
     s.file(".codex/worktrees/loose-file", b"x");
     s.file(".codex/worktrees/no-git/artifacts/a.zip", b"x");
-    assert_eq!(s.found("", Some("")), vec![(".codex/worktrees/good/app".to_string(), "git_worktree")]);
+    assert_eq!(
+        s.found("", Some("")),
+        vec![(".codex/worktrees/good/app".to_string(), "git_worktree")]
+    );
 }

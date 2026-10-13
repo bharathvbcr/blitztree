@@ -7,6 +7,8 @@
 //! their NULL/zero answer; the rest only null-check and read. Locks tolerate
 //! poisoning, and a scan that panicked still finishes, with no tree.
 
+#![allow(clippy::not_unsafe_ptr_arg_deref)]
+
 use std::any::Any;
 use std::ffi::{c_char, c_int, CStr, CString, OsStr};
 use std::io::Write;
@@ -101,7 +103,11 @@ fn guarded<T>(fallback: T, work: impl FnOnce() -> T) -> T {
     catch_unwind(AssertUnwindSafe(work)).unwrap_or_else(|payload| {
         // Not eprintln!: it panics when stderr is closed, and this runs
         // outside the catch.
-        let _ = writeln!(std::io::stderr(), "[bz] internal error: {}", panic_message(&*payload));
+        let _ = writeln!(
+            std::io::stderr(),
+            "[bz] internal error: {}",
+            panic_message(&*payload)
+        );
         fallback
     })
 }
@@ -221,7 +227,9 @@ pub extern "C" fn bz_progress(
     done: *mut c_int,
 ) {
     let h = unsafe { h.as_ref() };
-    let count = |pick: fn(&Progress) -> &AtomicU64| h.map_or(0, |h| pick(&h.progress).load(Ordering::Relaxed));
+    let count = |pick: fn(&Progress) -> &AtomicU64| {
+        h.map_or(0, |h| pick(&h.progress).load(Ordering::Relaxed))
+    };
     unsafe {
         if let Some(files) = files.as_mut() {
             *files = count(|p| &p.files);
@@ -384,7 +392,11 @@ pub unsafe extern "C" fn bz_remove(h: *mut BzScan, nodes: *const u32, count: u32
         let Some(flat) = (unsafe { flat_of(h) }) else {
             return std::ptr::null_mut();
         };
-        let nodes = if count == 0 { &[][..] } else { unsafe { std::slice::from_raw_parts(nodes, count as usize) } };
+        let nodes = if count == 0 {
+            &[][..]
+        } else {
+            unsafe { std::slice::from_raw_parts(nodes, count as usize) }
+        };
         let tree = flat.tree.without(nodes);
         // The scan's coverage carries over; only the root's state and the
         // error total follow the smaller tree.
@@ -407,7 +419,10 @@ pub unsafe extern "C" fn bz_remove(h: *mut BzScan, nodes: *const u32, count: u32
 /// # Safety
 /// `h` must be NULL or a live scan handle, with no concurrent mutation or free.
 unsafe fn cleanup_kind(h: *mut BzScan, index: u64) -> Option<cleanup::Kind> {
-    unsafe { flat_of(h) }?.cleanup_kinds.get(usize::try_from(index).ok()?).copied()
+    unsafe { flat_of(h) }?
+        .cleanup_kinds
+        .get(usize::try_from(index).ok()?)
+        .copied()
 }
 
 /// Stable rule id (the CLI's `category`) at a candidate-list index; static,
@@ -553,7 +568,9 @@ pub extern "C" fn bz_search_free(s: *mut BzSearch) {
 #[no_mangle]
 pub extern "C" fn bz_types(h: *mut BzScan, root: u32) -> *mut Breakdown {
     guarded(std::ptr::null_mut(), || match unsafe { flat_of(h) } {
-        Some(flat) if (root as usize) < flat.tree.len() => Box::into_raw(Box::new(flat.tree.types(root as usize))),
+        Some(flat) if (root as usize) < flat.tree.len() => {
+            Box::into_raw(Box::new(flat.tree.types(root as usize)))
+        }
         _ => std::ptr::null_mut(),
     })
 }
@@ -858,7 +875,11 @@ mod tests {
         let kinds: Vec<_> = expected.iter().map(|c| c.kind).collect();
         assert_eq!(
             kinds,
-            [cleanup::Kind::GitWorktree, cleanup::Kind::TaggedCache, cleanup::Kind::NodeModules]
+            [
+                cleanup::Kind::GitWorktree,
+                cleanup::Kind::TaggedCache,
+                cleanup::Kind::NodeModules
+            ]
         );
         let flat = Flat {
             coverage: Coverage::default(),
@@ -880,7 +901,10 @@ mod tests {
                 assert_eq!(c(bz_cleanup_kind_id(h, i)), Some(kind.id()));
                 assert_eq!(c(bz_cleanup_section_id(h, i)), Some(kind.section().id()));
                 assert_eq!(bz_cleanup_group(h, i), kind.group() as u8);
-                assert_eq!(c(bz_cleanup_verify(h, i)), Some(kind.verify().unwrap_or("")));
+                assert_eq!(
+                    c(bz_cleanup_verify(h, i)),
+                    Some(kind.verify().unwrap_or(""))
+                );
             }
             assert_eq!(c(bz_cleanup_kind_id(h, 0)), Some("git_worktree"));
             assert_eq!(c(bz_cleanup_section_id(h, 0)), Some("worktrees"));
@@ -900,7 +924,10 @@ mod tests {
             assert_eq!(bz_cleanup_group(null, 0), 255);
         }
         // Before bz_take_tree there is no flat tree: everything is out of range.
-        let mut pending = BzScan { flat: None, ..handle };
+        let mut pending = BzScan {
+            flat: None,
+            ..handle
+        };
         let h = &mut pending as *mut BzScan;
         assert!(unsafe { bz_cleanup_section_id(h, 0) }.is_null());
         assert_eq!(unsafe { bz_cleanup_group(h, 0) }, 255);
@@ -928,17 +955,29 @@ mod tests {
         handle.progress.files.store(3, Ordering::Relaxed);
         handle.progress.bytes.store(total, Ordering::Relaxed);
         let h = &mut handle as *mut BzScan;
-        assert_eq!(unsafe { bz_cleanup_count(h) }, 1, "the folder is a Clean Up candidate");
+        assert_eq!(
+            unsafe { bz_cleanup_count(h) },
+            1,
+            "the folder is a Clean Up candidate"
+        );
 
         let gone = [junk];
         let new = unsafe { bz_remove(h, gone.as_ptr(), 1) };
         assert!(!new.is_null());
         let (mut files, mut dirs, mut bytes, mut done) = (9, 9, 9, 0);
         bz_progress(new, &mut files, &mut dirs, &mut bytes, &mut done);
-        assert_eq!((files, dirs, bytes, done), (0, 0, 0, 1), "its own counters, not the scan's pre-removal totals");
+        assert_eq!(
+            (files, dirs, bytes, done),
+            (0, 0, 0, 1),
+            "its own counters, not the scan's pre-removal totals"
+        );
         assert_eq!(bz_take_tree(new), 3);
         assert_eq!(unsafe { *bz_alloc(new) }, 10, "ancestor sizes dropped");
-        assert_eq!(unsafe { bz_cleanup_count(new) }, 0, "candidates are found again in the new tree");
+        assert_eq!(
+            unsafe { bz_cleanup_count(new) },
+            0,
+            "candidates are found again in the new tree"
+        );
         // The handle the UI is still reading was not touched.
         assert_eq!(bz_take_tree(h), 5);
         assert_eq!(unsafe { *bz_alloc(h) }, total);
@@ -956,7 +995,10 @@ mod tests {
             flat: None,
         };
         let u = Box::into_raw(Box::new(unscanned));
-        assert!(unsafe { bz_remove(u, gone.as_ptr(), 1) }.is_null(), "no tree yet");
+        assert!(
+            unsafe { bz_remove(u, gone.as_ptr(), 1) }.is_null(),
+            "no tree yet"
+        );
         bz_free(u);
     }
 
@@ -985,7 +1027,10 @@ mod tests {
         assert_eq!(bz_largest_count(l) as usize, expected.len());
         let nodes = unsafe { std::slice::from_raw_parts(bz_largest_nodes(l), expected.len()) };
         assert_eq!(nodes, [3, 2]); // b.bin, a.bin: not the directory, not c.bin
-        assert_eq!(nodes.iter().map(|&n| n as usize).collect::<Vec<_>>(), expected);
+        assert_eq!(
+            nodes.iter().map(|&n| n as usize).collect::<Vec<_>>(),
+            expected
+        );
         bz_largest_free(l);
         assert!(bz_largest_files(std::ptr::null_mut(), 5, 0).is_null());
     }
@@ -1053,7 +1098,9 @@ mod tests {
             )
         };
         let blob = unsafe { std::slice::from_raw_parts(bz_types_ext_blob(t), off[n] as usize) };
-        let exts: Vec<&[u8]> = (0..n).map(|i| &blob[off[i] as usize..off[i + 1] as usize]).collect();
+        let exts: Vec<&[u8]> = (0..n)
+            .map(|i| &blob[off[i] as usize..off[i + 1] as usize])
+            .collect();
         assert_eq!(exts, [&b"jpg"[..], b"png", b""]);
         assert_eq!(alloc, [900, 100, 3]);
         assert_eq!(files, [1, 1, 1]);
@@ -1146,7 +1193,11 @@ mod tests {
             result,
             flat: None,
         }));
-        assert_eq!(bz_take_tree(handle), 2, "the lock is taken despite the poison");
+        assert_eq!(
+            bz_take_tree(handle),
+            2,
+            "the lock is taken despite the poison"
+        );
         bz_free(handle);
     }
 
@@ -1161,19 +1212,41 @@ mod tests {
         let null: *mut BzScan = std::ptr::null_mut();
         let (mut files, mut dirs, mut bytes, mut done) = (9, 9, 9, 0);
         bz_progress(null, &mut files, &mut dirs, &mut bytes, &mut done);
-        assert_eq!((files, dirs, bytes, done), (0, 0, 0, 1), "a poller on no handle stops");
-        bz_progress(null, std::ptr::null_mut(), std::ptr::null_mut(), std::ptr::null_mut(), std::ptr::null_mut());
+        assert_eq!(
+            (files, dirs, bytes, done),
+            (0, 0, 0, 1),
+            "a poller on no handle stops"
+        );
+        bz_progress(
+            null,
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+        );
         let live = Box::into_raw(Box::new(BzScan {
             progress: Arc::new(Progress::default()),
             status: Arc::new(AtomicU8::new(ScanStatus::Running as u8)),
             result: Arc::new(Mutex::new(None)),
             flat: None,
         }));
-        bz_progress(live, std::ptr::null_mut(), std::ptr::null_mut(), std::ptr::null_mut(), std::ptr::null_mut());
+        bz_progress(
+            live,
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+        );
         bz_free(live);
 
         assert_eq!(bz_take_tree(null), 0);
-        for getter in [bz_parents as extern "C" fn(*mut BzScan) -> *const u32, bz_nfiles, bz_child_off, bz_children, bz_name_off] {
+        for getter in [
+            bz_parents as extern "C" fn(*mut BzScan) -> *const u32,
+            bz_nfiles,
+            bz_child_off,
+            bz_children,
+            bz_name_off,
+        ] {
             assert!(getter(null).is_null());
         }
         assert!(bz_alloc(null).is_null() && bz_logical(null).is_null());
@@ -1205,10 +1278,17 @@ mod tests {
     #[test]
     fn scan_start_takes_the_path_bytes_exactly_and_refuses_no_path() {
         assert!(bz_scan_start(std::ptr::null()).is_null());
-        assert!(bz_scan_start(c"".as_ptr()).is_null(), "an empty path is not the current directory");
+        assert!(
+            bz_scan_start(c"".as_ptr()).is_null(),
+            "an empty path is not the current directory"
+        );
 
         let raw: &[u8] = b"/tmp/bz-\xff\xfe-not-utf8/\xc3(x";
-        assert_eq!(scan_path(raw).unwrap().as_os_str().as_bytes(), raw, "no lossy conversion");
+        assert_eq!(
+            scan_path(raw).unwrap().as_os_str().as_bytes(),
+            raw,
+            "no lossy conversion"
+        );
         assert_eq!(scan_path(b"/a").unwrap(), PathBuf::from("/a"));
         assert!(scan_path(b"").is_none());
 
@@ -1255,7 +1335,13 @@ mod tests {
                         while !stop.load(Ordering::Acquire) {
                             // Before bz_take_tree there is no tree to search.
                             assert!(bz_search(h, c"f".as_ptr(), 5).is_null());
-                            bz_progress(h, std::ptr::null_mut(), std::ptr::null_mut(), std::ptr::null_mut(), std::ptr::null_mut());
+                            bz_progress(
+                                h,
+                                std::ptr::null_mut(),
+                                std::ptr::null_mut(),
+                                std::ptr::null_mut(),
+                                std::ptr::null_mut(),
+                            );
                             searches += 1;
                         }
                         searches

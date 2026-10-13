@@ -40,6 +40,4 @@ needed for `-default-isolation`):
 - [x] `cargo test`, `cargo fmt`, `cargo clippy` and the Python tests fail the
       build when they fail.
 - [x] No secrets required; push access only.
-- [ ] `cargo fmt --check` and `cargo clippy ... -D warnings` pass on `main`
-      (they failed at 21c43ac: 159 fmt hunks, 35 `not_unsafe_ptr_arg_deref` and
-      2 `type_complexity` clippy errors; a mechanical pass is pending).
+- [x] `cargo fmt --check` and `cargo clippy ... -D warnings` pass on `main`.

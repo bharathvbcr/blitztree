@@ -224,7 +224,10 @@ impl Anchors {
     pub fn from_env() -> Self {
         let home = std::env::var_os("HOME").map(std::path::PathBuf::from);
         let mut anchors = Self::new(home.as_deref());
-        if let Some(real) = home.filter(|h| h.is_absolute()).and_then(|h| std::fs::canonicalize(h).ok()) {
+        if let Some(real) = home
+            .filter(|h| h.is_absolute())
+            .and_then(|h| std::fs::canonicalize(h).ok())
+        {
             anchors.add(&real);
         }
         anchors
@@ -251,7 +254,11 @@ impl Anchors {
         let alias: Vec<String> = if parts.len() > DATA_VOLUME.len() && parts[..3] == DATA_VOLUME {
             parts[3..].to_vec()
         } else {
-            DATA_VOLUME.iter().map(|s| s.to_string()).chain(parts.iter().cloned()).collect()
+            DATA_VOLUME
+                .iter()
+                .map(|s| s.to_string())
+                .chain(parts.iter().cloned())
+                .collect()
         };
         for spelling in [parts, alias] {
             if !self.homes.contains(&spelling) {
@@ -275,7 +282,11 @@ fn upward(t: &Tree, i: usize) -> impl Iterator<Item = &str> {
             name
         })
     })
-    .chain(t.name(0).rsplit('/').filter(|part| !part.is_empty() && *part != "."))
+    .chain(
+        t.name(0)
+            .rsplit('/')
+            .filter(|part| !part.is_empty() && *part != "."),
+    )
 }
 
 /// Name of the `k`-th ancestor (0 = the node itself), "" above `/`.
@@ -289,7 +300,10 @@ impl Anchors {
         self.homes.iter().any(|home| {
             let mut path = upward(t, i).skip(skip);
             rel.iter().rev().all(|part| path.next() == Some(*part))
-                && home.iter().rev().all(|part| path.next() == Some(part.as_str()))
+                && home
+                    .iter()
+                    .rev()
+                    .all(|part| path.next() == Some(part.as_str()))
                 && path.next().is_none()
         })
     }
@@ -327,7 +341,10 @@ impl Anchors {
             never.extend((0..=home.len()).filter_map(|depth| locate(&home[..depth])));
             if let Some(h) = locate(&home) {
                 never.extend(
-                    t.kids(h).iter().map(|&k| k as usize).filter(|&k| !t.name(k).starts_with('.')),
+                    t.kids(h)
+                        .iter()
+                        .map(|&k| k as usize)
+                        .filter(|&k| !t.name(k).starts_with('.')),
                 );
             }
             for rel in NEVER_LISTED {
@@ -405,10 +422,22 @@ const HOME_CONTAINERS: &[(&[&str], Container)] = &[
     (&[".gradle"], Container::GradleHome),
 ];
 
-const GRADLE_CONFIG: &[&str] = &["gradle.properties", "init.d", "init.gradle", "init.gradle.kts"];
+const GRADLE_CONFIG: &[&str] = &[
+    "gradle.properties",
+    "init.d",
+    "init.gradle",
+    "init.gradle.kts",
+];
 /// Documented as recreated by Gradle; `native` and `.tmp` deliberately excluded.
-const GRADLE_CACHES: &[&str] =
-    &["caches", "wrapper", "daemon", "jdks", "workers", "kotlin-profile", "build-scan-data"];
+const GRADLE_CACHES: &[&str] = &[
+    "caches",
+    "wrapper",
+    "daemon",
+    "jdks",
+    "workers",
+    "kotlin-profile",
+    "build-scan-data",
+];
 const ELECTRON_CACHES: &[&str] = &[
     "Cache",
     "Code Cache",
@@ -438,7 +467,9 @@ fn contains(t: &Tree, directory: usize, names: &[&str]) -> bool {
 
 /// Whether any entry of `directory` satisfies `wanted` (e.g. a `*.cabal` file).
 fn any_kid(t: &Tree, directory: usize, wanted: impl Fn(&str) -> bool) -> bool {
-    t.kids(directory).iter().any(|&i| wanted(t.name(i as usize)))
+    t.kids(directory)
+        .iter()
+        .any(|&i| wanted(t.name(i as usize)))
 }
 
 #[derive(Default)]
@@ -486,7 +517,11 @@ fn single_line(bytes: &[u8]) -> Option<&str> {
 /// lexically; `None` when `..` climbs above the root.
 fn resolve(base: &Path, reference: &str) -> Option<PathBuf> {
     let reference = Path::new(reference);
-    let joined = if reference.is_absolute() { reference.to_path_buf() } else { base.join(reference) };
+    let joined = if reference.is_absolute() {
+        reference.to_path_buf()
+    } else {
+        base.join(reference)
+    };
     let mut dir = PathBuf::new();
     for component in joined.components() {
         match component {
@@ -523,7 +558,10 @@ fn parse_git_file(content: &[u8], folder: &Path) -> Option<(GitFile, PathBuf)> {
         .collect();
     let kind = if names.len() >= 2 && names[names.len() - 2] == "worktrees" {
         GitFile::Worktree
-    } else if names.windows(2).any(|pair| pair[0] == ".git" && pair[1] == "modules") {
+    } else if names
+        .windows(2)
+        .any(|pair| pair[0] == ".git" && pair[1] == "modules")
+    {
         GitFile::Submodule
     } else {
         GitFile::Other
@@ -560,7 +598,9 @@ fn read_marker(path: &Path) -> Option<(Vec<u8>, std::fs::Metadata)> {
         return None;
     }
     let mut content = Vec::new();
-    file.take(GIT_FILE_MAX as u64 + 1).read_to_end(&mut content).ok()?;
+    file.take(GIT_FILE_MAX as u64 + 1)
+        .read_to_end(&mut content)
+        .ok()?;
     (!content.is_empty() && content.len() <= GIT_FILE_MAX).then_some((content, opened))
 }
 
@@ -576,9 +616,13 @@ fn same_file(a: &std::fs::Metadata, b: &std::fs::Metadata) -> bool {
 fn is_linked_admin(admin: &Path, git: &std::fs::Metadata) -> bool {
     let line_of = |name: &str| {
         let (raw, _) = read_marker(&admin.join(name))?;
-        single_line(&raw).filter(|line| !line.is_empty()).and_then(|line| resolve(admin, line))
+        single_line(&raw)
+            .filter(|line| !line.is_empty())
+            .and_then(|line| resolve(admin, line))
     };
-    let Some(common) = line_of("commondir") else { return false };
+    let Some(common) = line_of("commondir") else {
+        return false;
+    };
     let linked = || {
         let admin_dir = std::fs::metadata(admin).ok().filter(|m| m.is_dir())?;
         std::fs::metadata(&common).ok().filter(|m| m.is_dir())?;
@@ -593,7 +637,9 @@ fn is_linked_admin(admin: &Path, git: &std::fs::Metadata) -> bool {
 /// Read `folder/.git` and say what it is (see `GitFile`). Every failure,
 /// including a file that changes underneath us, is `Other`.
 fn probe_git_file(folder: &Path) -> GitFile {
-    let Some((content, git)) = read_marker(&folder.join(".git")) else { return GitFile::Other };
+    let Some((content, git)) = read_marker(&folder.join(".git")) else {
+        return GitFile::Other;
+    };
     match parse_git_file(&content, folder) {
         Some((GitFile::Worktree, admin)) if !is_linked_admin(&admin, &git) => GitFile::Other,
         Some((kind, _)) => kind,
@@ -634,7 +680,9 @@ fn only_transcripts(t: &Tree, project: usize) -> bool {
             let name = t.name(kid);
             match t.is_dir(kid) {
                 true => matches!(name, "subagents" | "tool-results" | "workflows"),
-                false => matches!(name, "custom-title.json" | ".DS_Store") || name.ends_with(".jsonl"),
+                false => {
+                    matches!(name, "custom-title.json" | ".DS_Store") || name.ends_with(".jsonl")
+                }
             }
         })
     };
@@ -667,7 +715,12 @@ fn holds_token(t: &Tree, directory: usize) -> bool {
 
 /// Rules for a child `i` of a container, or `None` for a plain parent.
 /// `git` says what a folder's `.git` file is (see `GitFile`).
-fn container_rule(t: &Tree, i: usize, ctx: Container, git: &dyn Fn(usize) -> GitFile) -> Option<Outcome> {
+fn container_rule(
+    t: &Tree,
+    i: usize,
+    ctx: Container,
+    git: &dyn Fn(usize) -> GitFile,
+) -> Option<Outcome> {
     use Container as C;
     use Outcome::{Descend, Emit, Skip};
     let name = t.name(i);
@@ -693,7 +746,9 @@ fn container_rule(t: &Tree, i: usize, ctx: Container, git: &dyn Fn(usize) -> Git
         // Only the hub: `token`, `stored_tokens` and config live beside it.
         C::HuggingFace if name == "hub" => Descend(C::HfHub),
         C::HfHub
-            if ["models--", "datasets--", "spaces--"].iter().any(|p| name.starts_with(p)) =>
+            if ["models--", "datasets--", "spaces--"]
+                .iter()
+                .any(|p| name.starts_with(p)) =>
         {
             Emit(Kind::MlModel)
         }
@@ -748,15 +803,17 @@ fn plain_rule(t: &Tree, i: usize, anchors: &Anchors, git: &dyn Fn(usize) -> GitF
         // Wherever it is, never whole: `huggingface/token` and the like live in
         // it, and a home that is not $HOME's spelling is indistinguishable.
         ".cache" => Some(Descend(C::DotCache)),
-        "Caches" if parent_name() == "Library" => Some(if anchors.at(t, i, 0, &["Library", "Caches"]) {
-            Descend(C::LibraryCaches)
-        } else if anchors.inside(t, parent) {
-            // Containers/<app>/Data/Library/Caches and the like.
-            Emit(Kind::AppCaches)
-        } else {
-            // System /Library/Caches, other users' and other volumes' caches.
-            Skip
-        }),
+        "Caches" if parent_name() == "Library" => {
+            Some(if anchors.at(t, i, 0, &["Library", "Caches"]) {
+                Descend(C::LibraryCaches)
+            } else if anchors.inside(t, parent) {
+                // Containers/<app>/Data/Library/Caches and the like.
+                Emit(Kind::AppCaches)
+            } else {
+                // System /Library/Caches, other users' and other volumes' caches.
+                Skip
+            })
+        }
         "Caches" if parent_name() == "CoreSimulator" => Some(Emit(Kind::AppCaches)),
         ".cargo" => home_child(C::Cargo),
         ".m2" => home_child(C::Maven),
@@ -770,7 +827,11 @@ fn plain_rule(t: &Tree, i: usize, anchors: &Anchors, git: &dyn Fn(usize) -> GitF
             home_child(C::GradleHome).unwrap_or(Emit(Kind::ToolCaches))
         }),
         // A node_modules without package.json is a global prefix (installed CLIs).
-        "node_modules" => Some(if sibling(&["package.json"]) { Emit(Kind::NodeModules) } else { Skip }),
+        "node_modules" => Some(if sibling(&["package.json"]) {
+            Emit(Kind::NodeModules)
+        } else {
+            Skip
+        }),
         ".venv" => Some(Emit(Kind::PythonEnvironment)),
         "venv" if contains(t, i, &["pyvenv.cfg"]) => Some(Emit(Kind::PythonEnvironment)),
         "target" if sibling(&["Cargo.toml"]) => Some(Emit(Kind::RustBuild)),
@@ -785,10 +846,17 @@ fn plain_rule(t: &Tree, i: usize, anchors: &Anchors, git: &dyn Fn(usize) -> GitF
             Some(Emit(Kind::DeviceSupport))
         }
         ".npm" => Some(Emit(Kind::ToolCaches)),
-        "cache" if parent_name() == "install" && up(t, i, 2) == ".bun" => Some(Emit(Kind::BunCache)),
+        "cache" if parent_name() == "install" && up(t, i, 2) == ".bun" => {
+            Some(Emit(Kind::BunCache))
+        }
         ".build" if sibling(&["Package.swift"]) => Some(Emit(Kind::SwiftBuild)),
         "build"
-            if sibling(&["build.gradle", "build.gradle.kts", "settings.gradle", "settings.gradle.kts"]) =>
+            if sibling(&[
+                "build.gradle",
+                "build.gradle.kts",
+                "settings.gradle",
+                "settings.gradle.kts",
+            ]) =>
         {
             Some(Emit(Kind::GradleBuild))
         }
@@ -802,10 +870,14 @@ fn plain_rule(t: &Tree, i: usize, anchors: &Anchors, git: &dyn Fn(usize) -> GitF
         ".tox" | ".nox" if sibling(&["tox.ini", "noxfile.py", "pyproject.toml", "setup.cfg"]) => {
             Some(Emit(Kind::PythonTestEnvironments))
         }
-        ".zig-cache" | "zig-cache" | "zig-out" if sibling(&["build.zig"]) => Some(Emit(Kind::ZigBuild)),
+        ".zig-cache" | "zig-cache" | "zig-out" if sibling(&["build.zig"]) => {
+            Some(Emit(Kind::ZigBuild))
+        }
         "_build" | "deps" if sibling(&["mix.exs"]) => Some(Emit(Kind::ElixirBuild)),
         ".stack-work" | "dist-newstyle"
-            if any_kid(t, parent, |n| matches!(n, "stack.yaml" | "cabal.project") || n.ends_with(".cabal")) =>
+            if any_kid(t, parent, |n| {
+                matches!(n, "stack.yaml" | "cabal.project") || n.ends_with(".cabal")
+            }) =>
         {
             Some(Emit(Kind::HaskellBuild))
         }
@@ -827,7 +899,11 @@ fn plain_rule(t: &Tree, i: usize, anchors: &Anchors, git: &dyn Fn(usize) -> GitF
     if m.git_file && git(i) == GitFile::Worktree {
         Emit(Kind::GitWorktree)
     } else if m.cachedir_tag {
-        Emit(if in_claude_scratchpad(t, i) { Kind::AgentScratch } else { Kind::TaggedCache })
+        Emit(if in_claude_scratchpad(t, i) {
+            Kind::AgentScratch
+        } else {
+            Kind::TaggedCache
+        })
     } else {
         Outcome::Pass
     }
@@ -845,9 +921,9 @@ fn in_claude_scratchpad(t: &Tree, i: usize) -> bool {
         above[0] == "scratchpad"
             && rest(1).is_some_and(is_uuid)
             && rest(2).is_some_and(|p| !p.is_empty())
-            && rest(3).and_then(|c| c.strip_prefix("claude-")).is_some_and(|uid| {
-                !uid.is_empty() && uid.bytes().all(|b| b.is_ascii_digit())
-            })
+            && rest(3)
+                .and_then(|c| c.strip_prefix("claude-"))
+                .is_some_and(|uid| !uid.is_empty() && uid.bytes().all(|b| b.is_ascii_digit()))
             && rest(4) == Some("tmp")
             && rest(5) == Some("private")
             && (above.len() == 6 || above[6..] == ["Data", "Volumes", "System"])
@@ -858,7 +934,11 @@ fn in_claude_scratchpad(t: &Tree, i: usize) -> bool {
 fn is_uuid(name: &str) -> bool {
     name.len() == 36
         && name.bytes().enumerate().all(|(k, b)| {
-            if matches!(k, 8 | 13 | 18 | 23) { b == b'-' } else { b.is_ascii_hexdigit() }
+            if matches!(k, 8 | 13 | 18 | 23) {
+                b == b'-'
+            } else {
+                b.is_ascii_hexdigit()
+            }
         })
 }
 
@@ -868,11 +948,13 @@ fn root_container(t: &Tree, anchors: &Anchors) -> Container {
         .iter()
         .find(|(rel, _)| anchors.at(t, 0, 0, rel))
         .map(|&(_, container)| container)
-        .unwrap_or(if up(t, 0, 0) == ".gradle" && contains(t, 0, GRADLE_CONFIG) {
-            Container::GradleHome
-        } else {
-            Container::Plain
-        })
+        .unwrap_or(
+            if up(t, 0, 0) == ".gradle" && contains(t, 0, GRADLE_CONFIG) {
+                Container::GradleHome
+            } else {
+                Container::Plain
+            },
+        )
 }
 
 /// Panel semantics: visit descendants (not the scan root), skip `.Trash` and
@@ -909,9 +991,14 @@ pub(crate) fn find_with(
             if t.alloc[c] < min_bytes || !t.is_dir(c) || t.name(c) == ".Trash" {
                 continue;
             }
-            let outcome = match container_rule(t, c, ctx, git).unwrap_or_else(|| plain_rule(t, c, anchors, git)) {
+            let outcome = match container_rule(t, c, ctx, git)
+                .unwrap_or_else(|| plain_rule(t, c, anchors, git))
+            {
                 Outcome::Emit(kind) if never.binary_search(&c).is_ok() => {
-                    if matches!(kind, Kind::GitWorktree | Kind::TaggedCache | Kind::AgentScratch) {
+                    if matches!(
+                        kind,
+                        Kind::GitWorktree | Kind::TaggedCache | Kind::AgentScratch
+                    ) {
                         // A user folder that merely carries a marker: look inside.
                         Outcome::Pass
                     } else {
@@ -1022,7 +1109,12 @@ mod tests {
             size: u64,
             kids: std::collections::BTreeMap<String, usize>,
         }
-        let mut nodes = vec![N { name: root.into(), dir: true, size: 0, kids: Default::default() }];
+        let mut nodes = vec![N {
+            name: root.into(),
+            dir: true,
+            size: 0,
+            kids: Default::default(),
+        }];
         for path in paths {
             let (path, dir_leaf) = match path.strip_suffix('/') {
                 Some(p) => (p, true),
@@ -1039,7 +1131,12 @@ mod tests {
                         next
                     }
                     None => {
-                        nodes.push(N { name: part.to_string(), dir, size: 0, kids: Default::default() });
+                        nodes.push(N {
+                            name: part.to_string(),
+                            dir,
+                            size: 0,
+                            kids: Default::default(),
+                        });
                         let next = nodes.len() - 1;
                         nodes[at].kids.insert(part.to_string(), next);
                         next
@@ -1094,10 +1191,12 @@ mod tests {
     /// read `.git` files are tested against real files (`Scratch`) and the
     /// classifier directly.
     fn found(t: &Tree, home: Option<&str>) -> Vec<(String, &'static str)> {
-        let mut v: Vec<_> = find_with(t, MIN_BYTES, &Anchors::new(home.map(Path::new)), &|_| GitFile::Worktree)
-            .iter()
-            .map(|c| (rel(t, c.node), c.kind.id()))
-            .collect();
+        let mut v: Vec<_> = find_with(t, MIN_BYTES, &Anchors::new(home.map(Path::new)), &|_| {
+            GitFile::Worktree
+        })
+        .iter()
+        .map(|c| (rel(t, c.node), c.kind.id()))
+        .collect();
         v.sort();
         v
     }
@@ -1110,8 +1209,18 @@ mod tests {
 
     #[test]
     fn node_modules_requires_a_sibling_package_json() {
-        let t = build("/w", &["global/lib/node_modules/npm/x", "app/package.json", "app/node_modules/x"]);
-        assert_eq!(found(&t, None), expect(&[("app/node_modules", "node_modules")]));
+        let t = build(
+            "/w",
+            &[
+                "global/lib/node_modules/npm/x",
+                "app/package.json",
+                "app/node_modules/x",
+            ],
+        );
+        assert_eq!(
+            found(&t, None),
+            expect(&[("app/node_modules", "node_modules")])
+        );
     }
 
     #[test]
@@ -1131,7 +1240,10 @@ mod tests {
                 "Users/u/app/node_modules/x",
             ],
         );
-        assert_eq!(found(&t, Some("/Users/u")), expect(&[("Users/u/app/node_modules", "node_modules")]));
+        assert_eq!(
+            found(&t, Some("/Users/u")),
+            expect(&[("Users/u/app/node_modules", "node_modules")])
+        );
     }
 
     #[test]
@@ -1171,11 +1283,16 @@ mod tests {
             expect(&[(".claude/projects/clean", "agent_transcripts")])
         );
         // Also when the scan is rooted at ~/.claude/projects.
-        let rooted: Vec<String> =
-            paths.iter().map(|p| p.trim_start_matches(".claude/projects/").to_string()).collect();
+        let rooted: Vec<String> = paths
+            .iter()
+            .map(|p| p.trim_start_matches(".claude/projects/").to_string())
+            .collect();
         let rooted: Vec<&str> = rooted.iter().map(String::as_str).collect();
         let t = build("/Users/u/.claude/projects", &rooted);
-        assert_eq!(found(&t, Some("/Users/u")), expect(&[("clean", "agent_transcripts")]));
+        assert_eq!(
+            found(&t, Some("/Users/u")),
+            expect(&[("clean", "agent_transcripts")])
+        );
     }
 
     #[test]
@@ -1217,23 +1334,49 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::type_complexity)]
     fn build_tool_folders_need_their_project_files() {
         let cases: &[(&[&str], &[(&str, &str)])] = &[
             (&["p/.tox/x"], &[]),
             (&["p/.nox/x"], &[]),
-            (&["p/.tox/x", "p/tox.ini"], &[("p/.tox", "python_test_environments")]),
-            (&["p/.nox/x", "p/noxfile.py"], &[("p/.nox", "python_test_environments")]),
-            (&["p/.tox/x", "p/pyproject.toml"], &[("p/.tox", "python_test_environments")]),
-            (&["p/.tox/x", "p/setup.cfg"], &[("p/.tox", "python_test_environments")]),
+            (
+                &["p/.tox/x", "p/tox.ini"],
+                &[("p/.tox", "python_test_environments")],
+            ),
+            (
+                &["p/.nox/x", "p/noxfile.py"],
+                &[("p/.nox", "python_test_environments")],
+            ),
+            (
+                &["p/.tox/x", "p/pyproject.toml"],
+                &[("p/.tox", "python_test_environments")],
+            ),
+            (
+                &["p/.tox/x", "p/setup.cfg"],
+                &[("p/.tox", "python_test_environments")],
+            ),
             (&["p/.stack-work/x"], &[]),
             (&["p/dist-newstyle/x"], &[]),
-            (&["p/.stack-work/x", "p/stack.yaml"], &[("p/.stack-work", "haskell_build")]),
-            (&["p/dist-newstyle/x", "p/cabal.project"], &[("p/dist-newstyle", "haskell_build")]),
-            (&["p/dist-newstyle/x", "p/app.cabal"], &[("p/dist-newstyle", "haskell_build")]),
+            (
+                &["p/.stack-work/x", "p/stack.yaml"],
+                &[("p/.stack-work", "haskell_build")],
+            ),
+            (
+                &["p/dist-newstyle/x", "p/cabal.project"],
+                &[("p/dist-newstyle", "haskell_build")],
+            ),
+            (
+                &["p/dist-newstyle/x", "p/app.cabal"],
+                &[("p/dist-newstyle", "haskell_build")],
+            ),
             (&["p/dist-newstyle/x", "p/app.cabal.bak"], &[]),
         ];
         for (paths, expected) in cases {
-            assert_eq!(found(&build("/root", paths), None), expect(expected), "{paths:?}");
+            assert_eq!(
+                found(&build("/root", paths), None),
+                expect(expected),
+                "{paths:?}"
+            );
         }
     }
 
@@ -1249,7 +1392,10 @@ mod tests {
         );
         assert_eq!(
             found(&t, Some("/Users/u")),
-            expect(&[(".cache/pip", "tool_caches"), ("Library/Caches/com.example.app", "app_caches")])
+            expect(&[
+                (".cache/pip", "tool_caches"),
+                ("Library/Caches/com.example.app", "app_caches")
+            ])
         );
     }
 
@@ -1257,11 +1403,19 @@ mod tests {
     fn gradle_home_with_config_is_never_a_candidate_but_its_caches_are() {
         let t = build(
             "/Users/u",
-            &[".gradle/gradle.properties", ".gradle/caches/x", ".gradle/init.d/x", ".gradle/wrapper/x"],
+            &[
+                ".gradle/gradle.properties",
+                ".gradle/caches/x",
+                ".gradle/init.d/x",
+                ".gradle/wrapper/x",
+            ],
         );
         assert_eq!(
             found(&t, Some("/Users/u")),
-            expect(&[(".gradle/caches", "gradle_cache"), (".gradle/wrapper", "gradle_cache")])
+            expect(&[
+                (".gradle/caches", "gradle_cache"),
+                (".gradle/wrapper", "gradle_cache")
+            ])
         );
     }
 
@@ -1269,11 +1423,20 @@ mod tests {
     fn cargo_home_is_never_a_candidate_but_registry_and_git_are() {
         let t = build(
             "/Users/u",
-            &[".cargo/registry/x", ".cargo/git/x", ".cargo/bin/x", ".cargo/credentials.toml", ".cargo/env"],
+            &[
+                ".cargo/registry/x",
+                ".cargo/git/x",
+                ".cargo/bin/x",
+                ".cargo/credentials.toml",
+                ".cargo/env",
+            ],
         );
         assert_eq!(
             found(&t, Some("/Users/u")),
-            expect(&[(".cargo/git", "cargo_cache"), (".cargo/registry", "cargo_cache")])
+            expect(&[
+                (".cargo/git", "cargo_cache"),
+                (".cargo/registry", "cargo_cache")
+            ])
         );
     }
 
@@ -1292,11 +1455,17 @@ mod tests {
             tagged(&format!("{scratch}/devmap-target")),
             tagged(&format!("{scratch}/p2/target")),
             // Not a scratchpad: the session's own folder and its tasks.
-            tagged(&format!("private/tmp/claude-501/-Users-u-p/{SESSION}/tasks/t")),
+            tagged(&format!(
+                "private/tmp/claude-501/-Users-u-p/{SESSION}/tasks/t"
+            )),
             // Not a session id, not a claude-<uid> folder, not under /private/tmp.
             tagged("private/tmp/claude-501/-Users-u-p/not-a-session/scratchpad/t"),
-            tagged(&format!("private/tmp/claude-x/-Users-u-p/{SESSION}/scratchpad/t")),
-            tagged(&format!("private/var/claude-501/-Users-u-p/{SESSION}/scratchpad/t")),
+            tagged(&format!(
+                "private/tmp/claude-x/-Users-u-p/{SESSION}/scratchpad/t"
+            )),
+            tagged(&format!(
+                "private/var/claude-501/-Users-u-p/{SESSION}/scratchpad/t"
+            )),
         ]
         .concat();
         let paths: Vec<&str> = paths.iter().map(String::as_str).collect();
@@ -1316,12 +1485,24 @@ mod tests {
         assert_eq!(found(&build("/", &paths), None), want);
 
         // The whole-disk spelling, and a scan rooted at the scratchpad itself.
-        let data: Vec<String> = paths.iter().map(|p| format!("System/Volumes/Data/{p}")).collect();
+        let data: Vec<String> = paths
+            .iter()
+            .map(|p| format!("System/Volumes/Data/{p}"))
+            .collect();
         let data: Vec<&str> = data.iter().map(String::as_str).collect();
-        let kinds: Vec<_> = found(&build("/", &data), None).into_iter().map(|(_, k)| k).collect();
+        let kinds: Vec<_> = found(&build("/", &data), None)
+            .into_iter()
+            .map(|(_, k)| k)
+            .collect();
         assert_eq!(kinds.iter().filter(|k| **k == "agent_scratch").count(), 2);
-        let rooted = build(&format!("/{scratch}"), &["devmap-target/CACHEDIR.TAG", "devmap-target/blob"]);
-        assert_eq!(found(&rooted, None), expect(&[("devmap-target", "agent_scratch")]));
+        let rooted = build(
+            &format!("/{scratch}"),
+            &["devmap-target/CACHEDIR.TAG", "devmap-target/blob"],
+        );
+        assert_eq!(
+            found(&rooted, None),
+            expect(&[("devmap-target", "agent_scratch")])
+        );
     }
 
     #[test]
@@ -1355,7 +1536,10 @@ mod tests {
             expect(&[
                 ("loose", "git_worktree"),
                 ("repo/.claude/worktrees/feature", "git_worktree"),
-                ("repo/.claude/worktrees/feature/node_modules", "node_modules"),
+                (
+                    "repo/.claude/worktrees/feature/node_modules",
+                    "node_modules"
+                ),
             ])
         );
     }
@@ -1363,30 +1547,53 @@ mod tests {
     #[test]
     fn git_files_are_classified_from_their_content_alone() {
         let folder = Path::new("/Users/u/Code/repo/vendor/sub");
-        let check = |content: &[u8]| parse_git_file(content, folder).map(|(kind, dir)| (kind, dir.display().to_string()));
+        let check = |content: &[u8]| {
+            parse_git_file(content, folder).map(|(kind, dir)| (kind, dir.display().to_string()))
+        };
         let worktree = |dir: &str| Some((GitFile::Worktree, dir.to_string()));
         // Absolute and relative links to a linked worktree's admin directory.
-        assert_eq!(check(b"gitdir: /r/.git/worktrees/x\n"), worktree("/r/.git/worktrees/x"));
-        assert_eq!(check(b"gitdir: /r/.git/worktrees/x"), worktree("/r/.git/worktrees/x"));
+        assert_eq!(
+            check(b"gitdir: /r/.git/worktrees/x\n"),
+            worktree("/r/.git/worktrees/x")
+        );
+        assert_eq!(
+            check(b"gitdir: /r/.git/worktrees/x"),
+            worktree("/r/.git/worktrees/x")
+        );
         assert_eq!(
             check(b"gitdir: ../../.git/worktrees/x\n"),
             worktree("/Users/u/Code/repo/.git/worktrees/x")
         );
-        assert_eq!(check(b"gitdir: /r/./a/../.git/worktrees/x\n"), worktree("/r/.git/worktrees/x"));
+        assert_eq!(
+            check(b"gitdir: /r/./a/../.git/worktrees/x\n"),
+            worktree("/r/.git/worktrees/x")
+        );
         // A worktree of a submodule is still a linked worktree.
-        assert_eq!(check(b"gitdir: /r/.git/modules/m/worktrees/x\n"), worktree("/r/.git/modules/m/worktrees/x"));
+        assert_eq!(
+            check(b"gitdir: /r/.git/modules/m/worktrees/x\n"),
+            worktree("/r/.git/modules/m/worktrees/x")
+        );
         // Submodules, by relative or absolute path.
         let submodule = |dir: &str| Some((GitFile::Submodule, dir.to_string()));
         assert_eq!(
             check(b"gitdir: ../../.git/modules/sub\n"),
             submodule("/Users/u/Code/repo/.git/modules/sub")
         );
-        assert_eq!(check(b"gitdir: /r/.git/modules/a/modules/b\n"), submodule("/r/.git/modules/a/modules/b"));
+        assert_eq!(
+            check(b"gitdir: /r/.git/modules/a/modules/b\n"),
+            submodule("/r/.git/modules/a/modules/b")
+        );
         // --separate-git-dir: neither, even under a folder that is named worktrees.
         let other = |dir: &str| Some((GitFile::Other, dir.to_string()));
         assert_eq!(check(b"gitdir: /r/proj.git\n"), other("/r/proj.git"));
-        assert_eq!(check(b"gitdir: /r/modules/proj\n"), other("/r/modules/proj"));
-        assert_eq!(check(b"gitdir: /r/.git/worktrees\n"), other("/r/.git/worktrees"));
+        assert_eq!(
+            check(b"gitdir: /r/modules/proj\n"),
+            other("/r/modules/proj")
+        );
+        assert_eq!(
+            check(b"gitdir: /r/.git/worktrees\n"),
+            other("/r/.git/worktrees")
+        );
         assert_eq!(check(b"gitdir: /worktrees\n"), other("/worktrees"));
         // Not a git file at all: nothing is claimed.
         let mut long = b"gitdir: /r/.git/worktrees/".to_vec();
@@ -1422,10 +1629,16 @@ mod tests {
     fn global_node_modules_prefixes_are_never_candidates_on_disk() {
         let s = Scratch::new("global");
         s.file("opt/homebrew/lib/node_modules/npm/index.js", b"x");
-        s.file("home/.nvm/versions/node/v20.1.0/lib/node_modules/codex/index.js", b"x");
+        s.file(
+            "home/.nvm/versions/node/v20.1.0/lib/node_modules/codex/index.js",
+            b"x",
+        );
         s.file("home/proj/package.json", b"{}");
         s.file("home/proj/node_modules/dep/index.js", b"x");
-        assert_eq!(s.found("", None), expect(&[("home/proj/node_modules", "node_modules")]));
+        assert_eq!(
+            s.found("", None),
+            expect(&[("home/proj/node_modules", "node_modules")])
+        );
     }
 
     /// A real directory tree for the rules that read `.git` files. Removed on drop.
@@ -1433,7 +1646,8 @@ mod tests {
 
     impl Scratch {
         pub(super) fn new(tag: &str) -> Self {
-            let root = std::env::temp_dir().join(format!("bz-cleanup-{}-{tag}", std::process::id()));
+            let root =
+                std::env::temp_dir().join(format!("bz-cleanup-{}-{tag}", std::process::id()));
             let _ = std::fs::remove_dir_all(&root);
             std::fs::create_dir_all(&root).unwrap();
             Self(root)
@@ -1454,8 +1668,14 @@ mod tests {
 
         /// The admin directory a linked worktree's `.git` file names.
         pub(super) fn admin(&self, repo: &str, name: &str) -> std::path::PathBuf {
-            self.file(&format!("{repo}/.git/worktrees/{name}/commondir"), b"../..\n");
-            self.file(&format!("{repo}/.git/worktrees/{name}/HEAD"), b"ref: refs/heads/x\n");
+            self.file(
+                &format!("{repo}/.git/worktrees/{name}/commondir"),
+                b"../..\n",
+            );
+            self.file(
+                &format!("{repo}/.git/worktrees/{name}/HEAD"),
+                b"ref: refs/heads/x\n",
+            );
             self.path(&format!("{repo}/.git/worktrees/{name}"))
         }
 
@@ -1463,11 +1683,18 @@ mod tests {
         /// When `target` is an existing worktree admin directory, its `gitdir`
         /// is pointed back at this folder's `.git`, as `git worktree add` does.
         pub(super) fn gitdir_file(&self, folder: &str, target: &str) {
-            self.file(&format!("{folder}/.git"), format!("gitdir: {target}\n").as_bytes());
+            self.file(
+                &format!("{folder}/.git"),
+                format!("gitdir: {target}\n").as_bytes(),
+            );
             self.file(&format!("{folder}/payload"), b"x");
             let admin = self.path(folder).join(target);
             if admin.join("commondir").is_file() {
-                std::fs::write(admin.join("gitdir"), format!("{}\n", self.path(folder).join(".git").display())).unwrap();
+                std::fs::write(
+                    admin.join("gitdir"),
+                    format!("{}\n", self.path(folder).join(".git").display()),
+                )
+                .unwrap();
             }
         }
 
@@ -1481,7 +1708,12 @@ mod tests {
                 .iter()
                 .map(|c| {
                     let full = tree.path(c.node as usize);
-                    let rel = full.strip_prefix(&self.0).unwrap().to_str().unwrap().to_string();
+                    let rel = full
+                        .strip_prefix(&self.0)
+                        .unwrap()
+                        .to_str()
+                        .unwrap()
+                        .to_string();
                     (rel, c.kind.id())
                 })
                 .collect();
@@ -1505,13 +1737,22 @@ mod tests {
         s.gitdir_file("main/vendor/sub", "../../.git/modules/sub");
         // An absolute gitdir does the same.
         s.file("main/.git/modules/abs/HEAD", b"ref: refs/heads/main\n");
-        s.gitdir_file("main/vendor/abs", &s.path("main/.git/modules/abs").display().to_string());
+        s.gitdir_file(
+            "main/vendor/abs",
+            &s.path("main/.git/modules/abs").display().to_string(),
+        );
         // A repository created with --separate-git-dir, even one whose git
         // directory sits under a folder named `worktrees`.
         s.file("elsewhere/proj.git/HEAD", b"ref: refs/heads/main\n");
-        s.gitdir_file("loose/proj", &s.path("elsewhere/proj.git").display().to_string());
+        s.gitdir_file(
+            "loose/proj",
+            &s.path("elsewhere/proj.git").display().to_string(),
+        );
         s.file("worktrees/proj2.git/HEAD", b"ref: refs/heads/main\n");
-        s.gitdir_file("loose/proj2", &s.path("worktrees/proj2.git").display().to_string());
+        s.gitdir_file(
+            "loose/proj2",
+            &s.path("worktrees/proj2.git").display().to_string(),
+        );
         // A real linked worktree.
         let admin = s.admin("main", "feature");
         s.gitdir_file("main/feature-wt", &admin.display().to_string());
@@ -1532,12 +1773,18 @@ mod tests {
         s.gitdir_file("orig", &admin.display().to_string());
         // `cp -R orig copy`: the same .git file, but the admin dir's `gitdir`
         // still names orig/.git.
-        s.file("copy/.git", format!("gitdir: {}\n", admin.display()).as_bytes());
+        s.file(
+            "copy/.git",
+            format!("gitdir: {}\n", admin.display()).as_bytes(),
+        );
         s.file("copy/payload", b"x");
         // A commondir that names nothing, one that names the admin dir itself
         // (not the folder that holds `worktrees`), and one that is a link.
         s.file("fake/worktrees/w/commondir", b"garbage\n");
-        s.file("fake/worktrees/w/gitdir", format!("{}\n", s.path("fakewt/.git").display()).as_bytes());
+        s.file(
+            "fake/worktrees/w/gitdir",
+            format!("{}\n", s.path("fakewt/.git").display()).as_bytes(),
+        );
         s.gitdir_file("fakewt", &s.path("fake/worktrees/w").display().to_string());
         s.file("self/worktrees/w/commondir", b".\n");
         s.gitdir_file("selfwt", &s.path("self/worktrees/w").display().to_string());
@@ -1545,7 +1792,11 @@ mod tests {
         std::os::unix::fs::symlink("real", s.path("link/worktrees/w/commondir")).unwrap();
         s.gitdir_file("linkwt", &s.path("link/worktrees/w").display().to_string());
         // A missing, empty or multi-line back link.
-        for (name, back) in [("noback", None), ("emptyback", Some("")), ("twoback", Some("a\nb\n"))] {
+        for (name, back) in [
+            ("noback", None),
+            ("emptyback", Some("")),
+            ("twoback", Some("a\nb\n")),
+        ] {
             let admin = s.admin("main", name);
             s.gitdir_file(name, &admin.display().to_string());
             let file = admin.join("gitdir");
@@ -1569,16 +1820,25 @@ mod tests {
         let admin = s.admin("code/lib", "w2");
         s.gitdir_file(".codex/worktrees/c3d4", &admin.display().to_string());
         // Real install on the dev machine: user artifacts, no .git anywhere.
-        s.file(".codex/worktrees/git-client-release/artifacts/GitPulse.zip", b"zip");
+        s.file(
+            ".codex/worktrees/git-client-release/artifacts/GitPulse.zip",
+            b"zip",
+        );
         s.file(".codex/worktrees/git-client-release/evidence/a.json", b"{}");
         // A full clone is a repository, never a leftover.
         s.file(".codex/worktrees/e5f6/.git/HEAD", b"ref: refs/heads/main\n");
         s.file(".codex/worktrees/e5f6/work", b"x");
-        s.file(".codex/worktrees/g7h8/repo/.git/HEAD", b"ref: refs/heads/main\n");
+        s.file(
+            ".codex/worktrees/g7h8/repo/.git/HEAD",
+            b"ref: refs/heads/main\n",
+        );
         s.file(".codex/worktrees/g7h8/repo/work", b"x");
         // A submodule's .git file is not a linked worktree either.
         s.file("code/app/.git/modules/m/HEAD", b"ref: refs/heads/main\n");
-        s.gitdir_file(".codex/worktrees/i9j0/m", "../../../../code/app/.git/modules/m");
+        s.gitdir_file(
+            ".codex/worktrees/i9j0/m",
+            "../../../../code/app/.git/modules/m",
+        );
 
         let want = expect(&[
             (".codex/worktrees/a1b2/app", "git_worktree"),
@@ -1592,7 +1852,11 @@ mod tests {
 
     #[test]
     fn home_rules_follow_the_data_volume_alias_and_roots_inside_home() {
-        let paths = ["Users/u/.cache/pip/x", "Users/u/.cargo/registry/x", "Users/u/.cargo/bin/x"];
+        let paths = [
+            "Users/u/.cache/pip/x",
+            "Users/u/.cargo/registry/x",
+            "Users/u/.cargo/bin/x",
+        ];
         let expected = expect(&[
             ("Users/u/.cache/pip", "tool_caches"),
             ("Users/u/.cargo/registry", "cargo_cache"),
@@ -1603,18 +1867,28 @@ mod tests {
         assert_eq!(found(&t, Some("/Users/u")), expected);
         // A scan rooted inside the home anchors by the root's own path.
         let t = build("/Users/u/.cache", &["pip/x", "uv/x"]);
-        assert_eq!(found(&t, Some("/Users/u")), expect(&[("pip", "tool_caches"), ("uv", "tool_caches")]));
+        assert_eq!(
+            found(&t, Some("/Users/u")),
+            expect(&[("pip", "tool_caches"), ("uv", "tool_caches")])
+        );
         let t = build("/Users/u/Library/", &["Caches/com.example/x"]);
-        assert_eq!(found(&t, Some("/Users/u")), expect(&[("Caches/com.example", "app_caches")]));
+        assert_eq!(
+            found(&t, Some("/Users/u")),
+            expect(&[("Caches/com.example", "app_caches")])
+        );
         // Outside the home, home rules never match, but a .cache is a container wherever it is.
         let t = build("/Volumes/X", &[".cache/pip/x", ".cargo/registry/x"]);
-        assert_eq!(found(&t, Some("/Users/u")), expect(&[(".cache/pip", "tool_caches")]));
+        assert_eq!(
+            found(&t, Some("/Users/u")),
+            expect(&[(".cache/pip", "tool_caches")])
+        );
     }
 
     /// The complete rule set. Every row of the old nine-rule table whose
     /// behavior is unchanged is kept; changed rows say what changed. Each row
     /// is an independent tree: (root, home, entries, expected candidates).
     #[test]
+    #[allow(clippy::type_complexity)]
     fn recognizes_the_cleanup_category_rules_and_no_others() {
         const H: Option<&str> = Some("/Users/u");
         #[rustfmt::skip]
@@ -1725,13 +1999,18 @@ mod tests {
             ("/root", None, &["Downloads/x"], &[]),
         ];
         for (root, home, paths, expected) in cases {
-            assert_eq!(found(&build(root, paths), *home), expect(expected), "{root} {paths:?}");
+            assert_eq!(
+                found(&build(root, paths), *home),
+                expect(expected),
+                "{root} {paths:?}"
+            );
         }
     }
 
     /// Every ancestor-name rule must match when that ancestor is the scan
     /// root, whose node name is a full path.
     #[test]
+    #[allow(clippy::type_complexity)]
     fn ancestor_name_rules_match_when_the_ancestor_is_the_scan_root() {
         const H: Option<&str> = Some("/Users/u");
         #[rustfmt::skip]
@@ -1765,7 +2044,11 @@ mod tests {
             ("/Users/u/", H, &[".cache/pip/x"], &[(".cache/pip", "tool_caches")]),
         ];
         for (root, home, paths, expected) in cases {
-            assert_eq!(found(&build(root, paths), *home), expect(expected), "{root} {paths:?}");
+            assert_eq!(
+                found(&build(root, paths), *home),
+                expect(expected),
+                "{root} {paths:?}"
+            );
         }
     }
 
@@ -1774,12 +2057,27 @@ mod tests {
     fn every_home_container_is_the_same_as_a_root_and_inside_the_walk() {
         for (rel, _) in HOME_CONTAINERS {
             let prefix = rel.join("/");
-            let children = ["models--m/x", "registry/x", "caches/x", "projects/x", "2025/x", "a/x", "hub/x", "toolchains/x"];
+            let children = [
+                "models--m/x",
+                "registry/x",
+                "caches/x",
+                "projects/x",
+                "2025/x",
+                "a/x",
+                "hub/x",
+                "toolchains/x",
+            ];
             let nested: Vec<String> = children.iter().map(|c| format!("{prefix}/{c}")).collect();
             let nested: Vec<&str> = nested.iter().map(String::as_str).collect();
             let from_home = found(&build("/Users/u", &nested), Some("/Users/u"));
-            let from_root = found(&build(&format!("/Users/u/{prefix}"), &children), Some("/Users/u"));
-            let rebased: Vec<_> = from_root.into_iter().map(|(p, k)| (format!("{prefix}/{p}"), k)).collect();
+            let from_root = found(
+                &build(&format!("/Users/u/{prefix}"), &children),
+                Some("/Users/u"),
+            );
+            let rebased: Vec<_> = from_root
+                .into_iter()
+                .map(|(p, k)| (format!("{prefix}/{p}"), k))
+                .collect();
             assert_eq!(from_home, rebased, "{prefix}");
         }
     }
@@ -1787,8 +2085,19 @@ mod tests {
     #[test]
     fn the_home_and_its_ancestors_are_never_candidates() {
         // A dotfiles `.git` file or a stray CACHEDIR.TAG must not make the home one.
-        let t = build("/", &["Users/CACHEDIR.TAG", "Users/u/.git", "Users/u/p/package.json", "Users/u/p/node_modules/x"]);
-        assert_eq!(found(&t, Some("/Users/u")), expect(&[("Users/u/p/node_modules", "node_modules")]));
+        let t = build(
+            "/",
+            &[
+                "Users/CACHEDIR.TAG",
+                "Users/u/.git",
+                "Users/u/p/package.json",
+                "Users/u/p/node_modules/x",
+            ],
+        );
+        assert_eq!(
+            found(&t, Some("/Users/u")),
+            expect(&[("Users/u/p/node_modules", "node_modules")])
+        );
         // Without a home anchor the same tree reports the tagged folder (review in Swift).
         assert_eq!(found(&t, None), expect(&[("Users", "tagged_cache")]));
         // Nor folders the Swift guard always refuses: broad home folders and the
@@ -1796,23 +2105,39 @@ mod tests {
         let t = build(
             "/Users/u",
             &[
-                "Library/CACHEDIR.TAG", "Library/Developer/.git", "Library/Developer/x",
-                "Downloads/CACHEDIR.TAG", "Downloads/x",
-                "wt/.git", "wt/package.json", "wt/node_modules/x",
-                "node_modules/x", "package.json", "Pods/x", "Podfile",
-                ".hidden/CACHEDIR.TAG", ".hidden/x",
+                "Library/CACHEDIR.TAG",
+                "Library/Developer/.git",
+                "Library/Developer/x",
+                "Downloads/CACHEDIR.TAG",
+                "Downloads/x",
+                "wt/.git",
+                "wt/package.json",
+                "wt/node_modules/x",
+                "node_modules/x",
+                "package.json",
+                "Pods/x",
+                "Podfile",
+                ".hidden/CACHEDIR.TAG",
+                ".hidden/x",
             ],
         );
         assert_eq!(
             found(&t, Some("/Users/u")),
-            expect(&[(".hidden", "tagged_cache"), ("wt/node_modules", "node_modules")])
+            expect(&[
+                (".hidden", "tagged_cache"),
+                ("wt/node_modules", "node_modules")
+            ])
         );
     }
 
     #[test]
     fn anchors_reject_unusable_homes_and_add_the_data_volume_spelling() {
         for bad in ["relative", "/", "/Users/../etc", ""] {
-            assert_eq!(Anchors::new(Some(Path::new(bad))), Anchors::default(), "{bad}");
+            assert_eq!(
+                Anchors::new(Some(Path::new(bad))),
+                Anchors::default(),
+                "{bad}"
+            );
         }
         assert_eq!(Anchors::new(None), Anchors::default());
         let a = Anchors::new(Some(Path::new("/Users/u/")));
@@ -1834,31 +2159,64 @@ mod tests {
                 kind.verify(),
                 None | Some("cachedir_tag" | "git_worktree" | "recent_activity" | "agent_session")
             ));
-            assert_eq!(kind.c_verify().to_str().unwrap(), kind.verify().unwrap_or(""));
+            assert_eq!(
+                kind.c_verify().to_str().unwrap(),
+                kind.verify().unwrap_or("")
+            );
             assert!(Section::ALL.contains(&kind.section()));
         }
         assert_eq!(Kind::ALL.len(), 34);
         for (kind, id) in [
-            (Kind::NodeModules, "node_modules"), (Kind::PythonEnvironment, "python_environment"),
-            (Kind::RustBuild, "rust_build"), (Kind::NextBuild, "next_build"),
-            (Kind::XcodeDerivedData, "xcode_derived_data"), (Kind::DeviceSupport, "device_support"),
-            (Kind::AppCaches, "app_caches"), (Kind::ToolCaches, "tool_caches"), (Kind::BunCache, "bun_cache"),
+            (Kind::NodeModules, "node_modules"),
+            (Kind::PythonEnvironment, "python_environment"),
+            (Kind::RustBuild, "rust_build"),
+            (Kind::NextBuild, "next_build"),
+            (Kind::XcodeDerivedData, "xcode_derived_data"),
+            (Kind::DeviceSupport, "device_support"),
+            (Kind::AppCaches, "app_caches"),
+            (Kind::ToolCaches, "tool_caches"),
+            (Kind::BunCache, "bun_cache"),
         ] {
             assert_eq!(kind.id(), id, "existing ids are stable");
         }
         let sections: Vec<_> = Section::ALL.iter().map(|s| s.id()).collect();
-        assert_eq!(sections, ["build", "packages", "apps", "devtools", "models", "agents", "worktrees"]);
+        assert_eq!(
+            sections,
+            [
+                "build",
+                "packages",
+                "apps",
+                "devtools",
+                "models",
+                "agents",
+                "worktrees"
+            ]
+        );
         assert_eq!(Section::Build.c_id().to_str().unwrap(), "build");
         assert_eq!((Group::Safe.id(), Group::Review.id()), ("safe", "review"));
         assert_eq!((Group::Safe as u8, Group::Review as u8), (0, 1));
-        for review in [Kind::MavenRepository, Kind::MlModel, Kind::GitWorktree, Kind::AgentTranscripts] {
+        for review in [
+            Kind::MavenRepository,
+            Kind::MlModel,
+            Kind::GitWorktree,
+            Kind::AgentTranscripts,
+        ] {
             assert_eq!(review.group(), Group::Review);
         }
     }
 
     #[test]
     fn enclosing_reports_only_container_parents() {
-        let t = build("/w", &["wt/.git", "wt/package.json", "wt/node_modules/x", "p/package.json", "p/node_modules/x"]);
+        let t = build(
+            "/w",
+            &[
+                "wt/.git",
+                "wt/package.json",
+                "wt/node_modules/x",
+                "p/package.json",
+                "p/node_modules/x",
+            ],
+        );
         let f = find_with(&t, MIN_BYTES, &Anchors::default(), &|_| GitFile::Worktree);
         let enc = enclosing(&t, &f);
         for (k, c) in f.iter().enumerate() {

@@ -149,8 +149,12 @@ fn main() {
                         errors: bz_errors(handle),
                         cleanup: (0..bz_cleanup_count(handle))
                             .map(|i| {
-                                let label = std::ffi::CStr::from_ptr(bz_cleanup_description(handle, i));
-                                (*bz_cleanup_nodes(handle).add(i as usize), label.to_string_lossy().into_owned())
+                                let label =
+                                    std::ffi::CStr::from_ptr(bz_cleanup_description(handle, i));
+                                (
+                                    *bz_cleanup_nodes(handle).add(i as usize),
+                                    label.to_string_lossy().into_owned(),
+                                )
                             })
                             .collect(),
                     }
@@ -220,8 +224,15 @@ fn main() {
             // folder (a zoomed-in view), with the totals checked against the tree.
             let progress = Progress::default();
             let tree = scan(&path, &progress);
-            let runs: usize = std::env::var("BZ_RUNS").ok().and_then(|s| s.parse().ok()).unwrap_or(11);
-            let largest_dir = tree.kids(0).iter().map(|&k| k as usize).find(|&k| tree.is_dir(k));
+            let runs: usize = std::env::var("BZ_RUNS")
+                .ok()
+                .and_then(|s| s.parse().ok())
+                .unwrap_or(11);
+            let largest_dir = tree
+                .kids(0)
+                .iter()
+                .map(|&k| k as usize)
+                .find(|&k| tree.is_dir(k));
             for (label, root) in [("root", Some(0)), ("largest-folder", largest_dir)] {
                 let Some(root) = root else { continue };
                 let mut times = Vec::with_capacity(runs);
@@ -230,8 +241,16 @@ fn main() {
                     let t0 = Instant::now();
                     let b = tree.types(root);
                     times.push(t0.elapsed());
-                    assert_eq!(b.alloc.iter().sum::<u64>(), tree.alloc[root], "rows add up to the folder");
-                    assert_eq!(b.files.iter().sum::<u64>(), tree.n_files[root] as u64, "every file counted once");
+                    assert_eq!(
+                        b.alloc.iter().sum::<u64>(),
+                        tree.alloc[root],
+                        "rows add up to the folder"
+                    );
+                    assert_eq!(
+                        b.files.iter().sum::<u64>(),
+                        tree.n_files[root] as u64,
+                        "every file counted once"
+                    );
                     rows = b.len();
                 }
                 times.sort();
@@ -525,7 +544,9 @@ fn fnv(mut h: u64, bytes: &[u8]) -> u64 {
 fn digest(f: &View) {
     let n = f.parents.len();
     let name = |i: usize| &f.name_blob[f.name_off[i] as usize..f.name_off[i + 1] as usize];
-    assert!(f.alloc.len() == n && f.logical.len() == n && f.n_files.len() == n && f.flags.len() == n);
+    assert!(
+        f.alloc.len() == n && f.logical.len() == n && f.n_files.len() == n && f.flags.len() == n
+    );
     assert!(f.child_off.len() == n + 1 && f.name_off.len() == n + 1);
     assert_eq!(f.child_off[0], 0);
     assert_eq!(f.name_off[0], 0);
@@ -544,13 +565,20 @@ fn digest(f: &View) {
             assert_eq!(f.parents[k] as usize, i, "child's parent");
             assert!(!seen[k], "child listed twice");
             seen[k] = true;
-            assert!(j == 0 || f.alloc[kids[j - 1] as usize] >= f.alloc[k], "children sorted by alloc desc");
+            assert!(
+                j == 0 || f.alloc[kids[j - 1] as usize] >= f.alloc[k],
+                "children sorted by alloc desc"
+            );
             a += f.alloc[k];
             l += f.logical[k];
             nf += if f.flags[k] & 1 != 0 { f.n_files[k] } else { 1 };
         }
         if is_dir {
-            assert_eq!((f.alloc[i], f.logical[i], f.n_files[i]), (a, l, nf), "dir totals");
+            assert_eq!(
+                (f.alloc[i], f.logical[i], f.n_files[i]),
+                (a, l, nf),
+                "dir totals"
+            );
         }
     }
     // Children always come after their parent, so paths hash in one pass.
@@ -567,10 +595,20 @@ fn digest(f: &View) {
     // Child order by name: ties in size keep the directory's listing order.
     let order = |i: usize| {
         let kids = &f.children[f.child_off[i] as usize..f.child_off[i + 1] as usize];
-        kids.iter().fold(FNV, |h, &k| fnv(fnv(h, name(k as usize)), &[0xff]))
+        kids.iter()
+            .fold(FNV, |h, &k| fnv(fnv(h, name(k as usize)), &[0xff]))
     };
     let mut rows: Vec<_> = (0..n)
-        .map(|i| (ph[i], f.alloc[i], f.logical[i], f.n_files[i], f.flags[i], order(i)))
+        .map(|i| {
+            (
+                ph[i],
+                f.alloc[i],
+                f.logical[i],
+                f.n_files[i],
+                f.flags[i],
+                order(i),
+            )
+        })
         .collect();
     rows.sort_unstable();
     // `shape` leaves out sizes and order.
@@ -588,7 +626,10 @@ fn digest(f: &View) {
     }
     let mut cleanup = FNV;
     for (node, label) in &f.cleanup {
-        cleanup = fnv(fnv(cleanup, &ph[*node as usize].to_le_bytes()), label.as_bytes());
+        cleanup = fnv(
+            fnv(cleanup, &ph[*node as usize].to_le_bytes()),
+            label.as_bytes(),
+        );
     }
     println!(
         "digest {h:016x}  shape {shape:016x}  cleanup {cleanup:016x} ({})  nodes {n}  alloc {}  logical {}  files {}  errors {}  (invariants ok)",
@@ -600,11 +641,25 @@ fn digest(f: &View) {
         for i in 0..n {
             let nm = String::from_utf8_lossy(name(i));
             let p = f.parents[i];
-            let path = if p == u32::MAX { nm.into_owned() } else { format!("{}/{}", paths[p as usize], nm) };
+            let path = if p == u32::MAX {
+                nm.into_owned()
+            } else {
+                format!("{}/{}", paths[p as usize], nm)
+            };
             let kids = &f.children[f.child_off[i] as usize..f.child_off[i + 1] as usize];
-            let kids: Vec<_> = kids.iter().map(|&k| String::from_utf8_lossy(name(k as usize))).collect();
+            let kids: Vec<_> = kids
+                .iter()
+                .map(|&k| String::from_utf8_lossy(name(k as usize)))
+                .collect();
             let row = (f.alloc[i], f.logical[i], f.n_files[i], f.flags[i]);
-            lines.push(format!("{path}\t{}\t{}\t{}\t{}\t{}", row.0, row.1, row.2, row.3, kids.join("\x1f")));
+            lines.push(format!(
+                "{path}\t{}\t{}\t{}\t{}\t{}",
+                row.0,
+                row.1,
+                row.2,
+                row.3,
+                kids.join("\x1f")
+            ));
             paths.push(path);
         }
         lines.sort_unstable();

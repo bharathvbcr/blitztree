@@ -7,8 +7,8 @@
 pub mod cleanup;
 pub mod export;
 pub mod ffi;
-pub mod ranking;
 mod pool;
+pub mod ranking;
 mod search;
 pub use search::{AsciiToken, PatternToken, QueryMatcher};
 pub mod types;
@@ -429,7 +429,12 @@ const MAX_INTERRUPTS: u32 = 8;
 fn retry_interrupted(mut call: impl FnMut() -> c_int) -> c_int {
     let mut n = call();
     for _ in 0..MAX_INTERRUPTS {
-        if n >= 0 || !matches!(std::io::Error::last_os_error().raw_os_error(), Some(libc::EINTR | libc::EAGAIN)) {
+        if n >= 0
+            || !matches!(
+                std::io::Error::last_os_error().raw_os_error(),
+                Some(libc::EINTR | libc::EAGAIN)
+            )
+        {
             break;
         }
         n = call();
@@ -439,7 +444,12 @@ fn retry_interrupted(mut call: impl FnMut() -> c_int) -> c_int {
 
 /// # Safety
 /// `fd` is an open directory and `buf` holds `BUF_SIZE` writable bytes.
-unsafe fn bulk_syscall(fd: c_int, attrlist: &mut AttrList, buf: *mut c_void, options: u64) -> c_int {
+unsafe fn bulk_syscall(
+    fd: c_int,
+    attrlist: &mut AttrList,
+    buf: *mut c_void,
+    options: u64,
+) -> c_int {
     #[cfg(test)]
     if tests::take_injected_interrupt() {
         *libc::__error() = libc::EINTR;
@@ -469,7 +479,13 @@ fn read_dir_bulk(path: &CStr, s: &mut Scratch, progress: &Progress) -> Option<bo
     };
     if fd < 0 {
         progress.errors.fetch_add(1, Ordering::Relaxed);
-        log_error(|| format!("skip {} ({})", path.to_string_lossy(), std::io::Error::last_os_error()));
+        log_error(|| {
+            format!(
+                "skip {} ({})",
+                path.to_string_lossy(),
+                std::io::Error::last_os_error()
+            )
+        });
         return None;
     }
 
@@ -503,7 +519,12 @@ fn read_dir_bulk(path: &CStr, s: &mut Scratch, progress: &Progress) -> Option<bo
             break;
         }
         let n = retry_interrupted(|| unsafe {
-            bulk_syscall(fd, &mut attrlist, s.buf.as_mut_ptr() as *mut c_void, options)
+            bulk_syscall(
+                fd,
+                &mut attrlist,
+                s.buf.as_mut_ptr() as *mut c_void,
+                options,
+            )
         });
         if n < 0
             && options != 0
@@ -521,7 +542,13 @@ fn read_dir_bulk(path: &CStr, s: &mut Scratch, progress: &Progress) -> Option<bo
             if n < 0 {
                 progress.errors.fetch_add(1, Ordering::Relaxed);
                 complete = false;
-                log_error(|| format!("read {} ({})", path.to_string_lossy(), std::io::Error::last_os_error()));
+                log_error(|| {
+                    format!(
+                        "read {} ({})",
+                        path.to_string_lossy(),
+                        std::io::Error::last_os_error()
+                    )
+                });
             }
             break;
         }
@@ -597,7 +624,12 @@ fn fill_missing_alloc(dir_fd: c_int, s: &mut Scratch, progress: &Progress) -> bo
         path.push(0);
         let mut st: libc::stat = unsafe { std::mem::zeroed() };
         let status = unsafe {
-            libc::fstatat(dir_fd, path.as_ptr().cast(), &mut st, libc::AT_SYMLINK_NOFOLLOW)
+            libc::fstatat(
+                dir_fd,
+                path.as_ptr().cast(),
+                &mut st,
+                libc::AT_SYMLINK_NOFOLLOW,
+            )
         };
         if status == 0 {
             e.alloc = (st.st_blocks.max(0) as u64).saturating_mul(512);
@@ -606,7 +638,13 @@ fn fill_missing_alloc(dir_fd: c_int, s: &mut Scratch, progress: &Progress) -> bo
             progress.errors.fetch_add(1, Ordering::Relaxed);
             e.alloc = e.size;
             complete = false;
-            log_error(|| format!("stat {} ({})", String::from_utf8_lossy(name), std::io::Error::last_os_error()));
+            log_error(|| {
+                format!(
+                    "stat {} ({})",
+                    String::from_utf8_lossy(name),
+                    std::io::Error::last_os_error()
+                )
+            });
         }
     }
     complete
@@ -646,8 +684,8 @@ fn parse_entry(e: &[u8], out: &mut Vec<Entry>, names: &mut Vec<u8>, progress: &P
     let ret_file = u32_at(e, off + 12);
     let ret_ext = u32_at(e, off + 16);
     off += 20; // attribute_set_t: 5 x u32
-    // Every fixed-size field the entry claims must fit inside it; the parse
-    // below then reads only within `e`.
+               // Every fixed-size field the entry claims must fit inside it; the parse
+               // below then reads only within `e`.
     let fixed: usize = [
         (ret_common & ATTR_CMN_ERROR, 4),
         (ret_common & ATTR_CMN_NAME, 8),
@@ -772,8 +810,16 @@ fn parse_entry(e: &[u8], out: &mut Vec<Entry>, names: &mut Vec<u8>, progress: &P
         return malformed();
     };
     let key = match clone_id {
-        Some(id) => DataStream { dev, id, by_clone_id: true },
-        None => DataStream { dev, id: file_id, by_clone_id: false },
+        Some(id) => DataStream {
+            dev,
+            id,
+            by_clone_id: true,
+        },
+        None => DataStream {
+            dev,
+            id: file_id,
+            by_clone_id: false,
+        },
     };
     let stream = (!is_dir && (links > 1 || (may_share && clone_id.is_some()))).then_some(key);
     out.push(Entry {
@@ -844,7 +890,10 @@ struct Limits {
 }
 
 impl Limits {
-    const ABI: Limits = Limits { nodes: u32::MAX as u64, name_bytes: u32::MAX as u64 };
+    const ABI: Limits = Limits {
+        nodes: u32::MAX as u64,
+        name_bytes: u32::MAX as u64,
+    };
 }
 
 struct Shared<'a> {
@@ -904,7 +953,9 @@ fn walk<'s>(scope: &rayon::Scope<'s>, shared: &'s Shared<'s>, path: CString, dir
             }
             n_dirs += 1;
             if e.mount_point {
-                progress.skipped_mount_points.fetch_add(1, Ordering::Relaxed);
+                progress
+                    .skipped_mount_points
+                    .fetch_add(1, Ordering::Relaxed);
             } else if e.dataless {
                 progress.skipped_cloud_dirs.fetch_add(1, Ordering::Relaxed);
             }
@@ -923,11 +974,13 @@ fn walk<'s>(scope: &rayon::Scope<'s>, shared: &'s Shared<'s>, path: CString, dir
                 t.complete[dir_idx as usize] = complete;
                 // `fits` bounds every count below by `u32::MAX`.
                 let base = t.parents.len() as u32;
-                t.parents.extend(std::iter::repeat_n(dir_idx, entries.len()));
+                t.parents
+                    .extend(std::iter::repeat_n(dir_idx, entries.len()));
                 t.alloc.extend(entries.iter().map(|e| e.alloc));
                 t.logical.extend(entries.iter().map(|e| e.size));
                 t.flags.extend(entries.iter().map(|e| e.is_dir as u8));
-                t.complete.extend(entries.iter().map(|e| !e.is_dir || e.descend()));
+                t.complete
+                    .extend(entries.iter().map(|e| !e.is_dir || e.descend()));
                 let blob = t.name_blob.len() as u32;
                 t.name_off.extend(entries.iter().map(|e| blob + e.name_end));
                 t.name_blob.extend_from_slice(names);
@@ -940,20 +993,29 @@ fn walk<'s>(scope: &rayon::Scope<'s>, shared: &'s Shared<'s>, path: CString, dir
                         shared_bytes += e.alloc - added;
                     }
                 }
-                progress.shared_bytes.fetch_add(shared_bytes, Ordering::Relaxed);
+                progress
+                    .shared_bytes
+                    .fetch_add(shared_bytes, Ordering::Relaxed);
                 Some((base, bytes))
             }
         };
         let Some((base, bytes)) = appended else {
             progress.errors.fetch_add(1, Ordering::Relaxed);
-            log_error(|| format!("tree too large for the 32-bit layout; {} left unlisted", path.to_string_lossy()));
+            log_error(|| {
+                format!(
+                    "tree too large for the 32-bit layout; {} left unlisted",
+                    path.to_string_lossy()
+                )
+            });
             return;
         };
         progress.files.fetch_add(n_files, Ordering::Relaxed);
         progress.dirs.fetch_add(n_dirs, Ordering::Relaxed);
         progress.bytes.fetch_add(bytes, Ordering::Relaxed);
         if entries.iter().any(|e| e.no_clone_id) {
-            progress.clone_ids_unavailable_dirs.fetch_add(1, Ordering::Relaxed);
+            progress
+                .clone_ids_unavailable_dirs
+                .fetch_add(1, Ordering::Relaxed);
         }
 
         let mut start = 0;
@@ -978,7 +1040,10 @@ fn runs(parents: &[u32]) -> Vec<(u32, u32, u32)> {
     let mut out = Vec::new();
     let mut i = 1;
     while i < parents.len() {
-        let j = i + parents[i..].iter().take_while(|&&p| p == parents[i]).count();
+        let j = i + parents[i..]
+            .iter()
+            .take_while(|&&p| p == parents[i])
+            .count();
         out.push((parents[i], i as u32, (j - i) as u32));
         i = j;
     }
@@ -1095,7 +1160,11 @@ impl Tree {
                 continue;
             }
             renumber[i] = t.parents.len() as u32;
-            t.parents.push(if parent == NO_PARENT { parent } else { renumber[parent as usize] });
+            t.parents.push(if parent == NO_PARENT {
+                parent
+            } else {
+                renumber[parent as usize]
+            });
             t.alloc.push(self.alloc[i]);
             t.logical.push(self.logical[i]);
             t.n_files.push(self.n_files[i]);
@@ -1106,7 +1175,11 @@ impl Tree {
         }
         // Ancestors of a removed node all survive (it is outermost).
         for &top in &tops {
-            let files = if self.is_dir(top) { self.n_files[top] } else { 1 };
+            let files = if self.is_dir(top) {
+                self.n_files[top]
+            } else {
+                1
+            };
             let mut up = self.parents[top];
             while up != NO_PARENT {
                 let a = renumber[up as usize] as usize;
@@ -1119,7 +1192,9 @@ impl Tree {
         let runs = runs(&t.parents);
         // Bottom-up, as in `finish`: every child's run before its parent's.
         for &(p, first, len) in runs.iter().rev() {
-            let c = t.complete[first as usize..(first + len) as usize].iter().all(|&c| c);
+            let c = t.complete[first as usize..(first + len) as usize]
+                .iter()
+                .all(|&c| c);
             t.complete[p as usize] &= c;
         }
         link(&mut t, &runs);
@@ -1131,12 +1206,22 @@ impl Tree {
 #[cfg(test)]
 impl Tree {
     pub(crate) fn with_root(name: &str) -> Tree {
-        let mut t = Tree { name_off: vec![0], ..Default::default() };
+        let mut t = Tree {
+            name_off: vec![0],
+            ..Default::default()
+        };
         t.push(name, NO_PARENT, 0, 0, true);
         t
     }
     /// Append a node as the walk does: each directory's children in one batch.
-    pub(crate) fn push(&mut self, name: &str, parent: u32, logical: u64, alloc: u64, is_dir: bool) -> u32 {
+    pub(crate) fn push(
+        &mut self,
+        name: &str,
+        parent: u32,
+        logical: u64,
+        alloc: u64,
+        is_dir: bool,
+    ) -> u32 {
         self.parents.push(parent);
         self.logical.push(logical);
         self.alloc.push(alloc);
@@ -1202,12 +1287,18 @@ fn local_path_at(p: &Path, hops: &mut u32) -> Result<PathBuf, String> {
         let m = std::fs::symlink_metadata(&resolved)
             .map_err(|e| format!("Cannot resolve {}: {e}", resolved.display()))?;
         if m.st_flags() & SF_DATALESS != 0 {
-            return Err(format!("Cloud-only path; refusing to materialize {}", resolved.display()));
+            return Err(format!(
+                "Cloud-only path; refusing to materialize {}",
+                resolved.display()
+            ));
         }
         if m.file_type().is_symlink() {
             *hops += 1;
             if *hops > MAX_SYMLINK_HOPS {
-                return Err(format!("Too many levels of symbolic links: {}", resolved.display()));
+                return Err(format!(
+                    "Too many levels of symbolic links: {}",
+                    resolved.display()
+                ));
             }
             let target = std::fs::read_link(&resolved).map_err(|e| e.to_string())?;
             let target = if target.is_absolute() {
@@ -1216,7 +1307,9 @@ fn local_path_at(p: &Path, hops: &mut u32) -> Result<PathBuf, String> {
                 resolved.parent().unwrap_or(Path::new("/")).join(target)
             };
             resolved = local_path_at(&target, hops)?;
-            is_directory = std::fs::metadata(&resolved).map_err(|e| e.to_string())?.is_dir();
+            is_directory = std::fs::metadata(&resolved)
+                .map_err(|e| e.to_string())?
+                .is_dir();
         } else {
             is_directory = m.is_dir();
         }
@@ -1251,7 +1344,11 @@ fn scan_at(
     limits: Limits,
 ) -> Tree {
     let root_name = root.to_string_lossy();
-    let root_name = if u32::try_from(root_name.len()).is_ok() { root_name.as_bytes() } else { &[] };
+    let root_name = if u32::try_from(root_name.len()).is_ok() {
+        root_name.as_bytes()
+    } else {
+        &[]
+    };
     let tree = Tree {
         parents: vec![NO_PARENT],
         alloc: vec![0],
@@ -1369,7 +1466,11 @@ mod tests {
         } else {
             ATTR_FILE_LINKCOUNT | ATTR_FILE_TOTALSIZE | ATTR_FILE_ALLOCSIZE
         };
-        let ext_bits = if ext.is_some() { ATTR_CMNEXT_CLONEID | ATTR_CMNEXT_EXT_FLAGS } else { 0 };
+        let ext_bits = if ext.is_some() {
+            ATTR_CMNEXT_CLONEID | ATTR_CMNEXT_EXT_FLAGS
+        } else {
+            0
+        };
         for value in [common, 0, dir, file, ext_bits, 0] {
             e.extend_from_slice(&value.to_le_bytes());
         }
@@ -1410,17 +1511,36 @@ mod tests {
             ("linked-é", false, 0, 0, 2),
         ] {
             let record = bulk_record(name, dir, flags, mount, links, None);
-            assert!(parse_entry(&record, &mut entries, &mut names, &Progress::default()));
+            assert!(parse_entry(
+                &record,
+                &mut entries,
+                &mut names,
+                &Progress::default()
+            ));
         }
         assert_eq!(entries.len(), 4);
         assert!(entries[..3].iter().all(|e| e.is_dir) && !entries[3].is_dir);
         assert!(entries[0].dataless && !entries[0].mount_point);
         assert!(!entries[1].dataless && entries[1].mount_point);
         let descend: Vec<_> = entries.iter().map(|e| e.descend()).collect();
-        assert_eq!(descend, [false, false, true, false], "cloud-only and mount points are skipped");
-        assert_eq!(&names[entries[2].name_end as usize..], "linked-é".as_bytes());
+        assert_eq!(
+            descend,
+            [false, false, true, false],
+            "cloud-only and mount points are skipped"
+        );
+        assert_eq!(
+            &names[entries[2].name_end as usize..],
+            "linked-é".as_bytes()
+        );
         // No clone id from the volume: hard links still key by file id.
-        assert_eq!(entries[3].stream, Some(DataStream { dev: 17, id: 123456, by_clone_id: false }));
+        assert_eq!(
+            entries[3].stream,
+            Some(DataStream {
+                dev: 17,
+                id: 123456,
+                by_clone_id: false
+            })
+        );
         assert!(entries[3].no_clone_id && !entries[2].no_clone_id);
         assert_eq!((entries[3].size, entries[3].alloc), (12345, 16384));
     }
@@ -1430,19 +1550,38 @@ mod tests {
         let parse = |links, ext, is_dir| {
             let (mut entries, mut names) = (Vec::new(), Vec::new());
             let record = bulk_record("f", is_dir, 0, 0, links, ext);
-            assert!(parse_entry(&record, &mut entries, &mut names, &Progress::default()));
-            assert_eq!(&names[..], b"f", "the name is read past the extended attributes");
+            assert!(parse_entry(
+                &record,
+                &mut entries,
+                &mut names,
+                &Progress::default()
+            ));
+            assert_eq!(
+                &names[..],
+                b"f",
+                "the name is read past the extended attributes"
+            );
             entries.pop().unwrap()
         };
-        let clone = |id| DataStream { dev: 17, id, by_clone_id: true };
+        let clone = |id| DataStream {
+            dev: 17,
+            id,
+            by_clone_id: true,
+        };
         // A clone (or a clone's source): keyed by clone id, sizes intact.
         let e = parse(1, Some((99, EF_MAY_SHARE_BLOCKS | 0x40)), false);
         assert_eq!(e.stream, Some(clone(99)));
         assert_eq!((e.size, e.alloc, e.no_clone_id), (12345, 16384, false));
         // A hard-linked clone: the clone id still names the shared data.
-        assert_eq!(parse(3, Some((99, EF_MAY_SHARE_BLOCKS)), false).stream, Some(clone(99)));
+        assert_eq!(
+            parse(3, Some((99, EF_MAY_SHARE_BLOCKS)), false).stream,
+            Some(clone(99))
+        );
         // A hard link that was never cloned: APFS reports clone id == file id.
-        assert_eq!(parse(2, Some((123456, 0)), false).stream, Some(clone(123456)));
+        assert_eq!(
+            parse(2, Some((123456, 0)), false).stream,
+            Some(clone(123456))
+        );
         // Plain files and directories are not tracked.
         assert_eq!(parse(1, Some((123456, 0)), false).stream, None);
         assert_eq!(parse(1, Some((5, EF_MAY_SHARE_BLOCKS)), true).stream, None);
@@ -1459,7 +1598,10 @@ mod tests {
         std::fs::write(root.join("here"), vec![1u8; 70_000]).unwrap();
         let expected = {
             use std::os::unix::fs::MetadataExt;
-            std::fs::symlink_metadata(root.join("here")).unwrap().blocks() * 512
+            std::fs::symlink_metadata(root.join("here"))
+                .unwrap()
+                .blocks()
+                * 512
         };
         let mut s = Scratch::default();
         for (name, missing) in [("here", true), ("gone", true), ("kept", false)] {
@@ -1483,10 +1625,19 @@ mod tests {
         let complete = fill_missing_alloc(fd, &mut s, &progress);
         unsafe { libc::close(fd) };
         let _ = std::fs::remove_dir_all(&root);
-        assert!(!complete, "a file that vanished leaves the directory incomplete");
+        assert!(
+            !complete,
+            "a file that vanished leaves the directory incomplete"
+        );
         assert_eq!(s.entries[0].alloc, expected, "read from the file's blocks");
-        assert_eq!(s.entries[1].alloc, 70_000, "unknown: logical size, reported as an error");
-        assert_eq!(s.entries[2].alloc, 12_345, "sizes the volume reported are kept");
+        assert_eq!(
+            s.entries[1].alloc, 70_000,
+            "unknown: logical size, reported as an error"
+        );
+        assert_eq!(
+            s.entries[2].alloc, 12_345,
+            "sizes the volume reported are kept"
+        );
         assert_eq!(progress.errors.load(Ordering::Relaxed), 1);
     }
 
@@ -1498,7 +1649,10 @@ mod tests {
             let progress = Progress::default();
             let (mut entries, mut names) = (Vec::new(), Vec::new());
             let ok = parse_entry(&full[..cut], &mut entries, &mut names, &progress);
-            assert!(!ok, "a record cut at {cut} of {name_end} bytes must be dropped");
+            assert!(
+                !ok,
+                "a record cut at {cut} of {name_end} bytes must be dropped"
+            );
             assert!(entries.is_empty() && names.is_empty());
             assert_eq!(progress.errors.load(Ordering::Relaxed), 1, "cut at {cut}");
         }
@@ -1506,11 +1660,21 @@ mod tests {
         let mut bad = full.clone();
         bad[28..32].copy_from_slice(&0x7fff_fff0u32.to_le_bytes());
         let progress = Progress::default();
-        assert!(!parse_entry(&bad, &mut Vec::new(), &mut Vec::new(), &progress));
+        assert!(!parse_entry(
+            &bad,
+            &mut Vec::new(),
+            &mut Vec::new(),
+            &progress
+        ));
         assert_eq!(progress.entry_errors.load(Ordering::Relaxed), 1);
         let mut negative = full;
         negative[28..32].copy_from_slice(&(-1000i32 as u32).to_le_bytes());
-        assert!(!parse_entry(&negative, &mut Vec::new(), &mut Vec::new(), &Progress::default()));
+        assert!(!parse_entry(
+            &negative,
+            &mut Vec::new(),
+            &mut Vec::new(),
+            &Progress::default()
+        ));
     }
 
     /// Every child is listed once, under its parent, after it.
@@ -1587,7 +1751,13 @@ mod tests {
             for file in 0..files_per_dir {
                 let size = (file as u64 * 7919 + dir as u64 * 104729) % 1_000_000;
                 let name = format!("document-{dir}-{file}-é-日本語.txt");
-                t.push(&name, dir as u32 + 1, size, size.div_ceil(4096) * 4096, false);
+                t.push(
+                    &name,
+                    dir as u32 + 1,
+                    size,
+                    size.div_ceil(4096) * 4096,
+                    false,
+                );
             }
         }
         // One unreadable directory, to exercise incompleteness propagation.
@@ -1665,10 +1835,22 @@ mod tests {
             tree.push("a", 2, 8192, 4096, false);
             tree.push("z", 1, 8192, 4096, false);
             tree.push("y", 1, 8192, 4096, false);
-            let mut arena = Arena { tree, streams: HashMap::new() };
+            let mut arena = Arena {
+                tree,
+                streams: HashMap::new(),
+            };
             let added: u64 = order
                 .into_iter()
-                .map(|i| arena.account_file(i, Some(DataStream { dev: 7, id: 42, by_clone_id: true })))
+                .map(|i| {
+                    arena.account_file(
+                        i,
+                        Some(DataStream {
+                            dev: 7,
+                            id: 42,
+                            by_clone_id: true,
+                        }),
+                    )
+                })
                 .sum();
             let t = &mut arena.tree;
             assert_eq!(added, 4096, "progress counts the inode once");
@@ -1710,7 +1892,10 @@ mod tests {
         t.complete[skipped as usize] = false;
         finish(&mut t);
         assert_eq!(t.complete[..3], [false, false, true]);
-        assert_eq!(t.alloc[0], 4096, "partial scans still expose observed bytes");
+        assert_eq!(
+            t.alloc[0], 4096,
+            "partial scans still expose observed bytes"
+        );
     }
 
     #[test]
@@ -1787,7 +1972,9 @@ mod tests {
         for d in ["a", "b", "c", "d"] {
             std::fs::create_dir_all(root.join(d)).unwrap();
         }
-        let data: Vec<u8> = (0..1u32 << 20).map(|i| (i.wrapping_mul(2654435761) >> 13) as u8).collect();
+        let data: Vec<u8> = (0..1u32 << 20)
+            .map(|i| (i.wrapping_mul(2654435761) >> 13) as u8)
+            .collect();
         std::fs::write(root.join("a/orig"), &data).unwrap();
         clone_file(&root.join("a/orig"), &root.join("b/clone"));
         clone_file(&root.join("b/clone"), &root.join("c/clone-of-clone"));
@@ -1797,7 +1984,10 @@ mod tests {
         clone_file(&root.join("a/orig"), &root.join("d/edited"));
         {
             use std::io::{Seek, SeekFrom, Write};
-            let mut f = std::fs::OpenOptions::new().write(true).open(root.join("d/edited")).unwrap();
+            let mut f = std::fs::OpenOptions::new()
+                .write(true)
+                .open(root.join("d/edited"))
+                .unwrap();
             f.seek(SeekFrom::Start(4096)).unwrap();
             f.write_all(b"edited").unwrap();
             f.sync_all().unwrap();
@@ -1812,10 +2002,22 @@ mod tests {
         let _ = std::fs::remove_dir_all(&root);
 
         assert_eq!(tree.n_files[0], 5, "every name is listed");
-        assert_eq!(tree.alloc[node(&tree, "a/orig")], one_alloc, "first path owns the stream");
+        assert_eq!(
+            tree.alloc[node(&tree, "a/orig")],
+            one_alloc,
+            "first path owns the stream"
+        );
         for shared in ["b/clone", "c/clone-of-clone", "c/link-to-clone"] {
-            assert_eq!(tree.alloc[node(&tree, shared)], 0, "{shared} shares a's blocks");
-            assert_eq!(tree.logical[node(&tree, shared)], 0, "{shared} shares a's bytes");
+            assert_eq!(
+                tree.alloc[node(&tree, shared)],
+                0,
+                "{shared} shares a's blocks"
+            );
+            assert_eq!(
+                tree.logical[node(&tree, shared)],
+                0,
+                "{shared} shares a's bytes"
+            );
         }
         assert_eq!(tree.alloc[node(&tree, "d/edited")], one_alloc);
         assert_eq!(tree.alloc[0], 2 * one_alloc);
@@ -1839,11 +2041,21 @@ mod tests {
         let _ = std::fs::remove_dir_all(&root);
 
         assert_eq!(tree.n_files[0], 3);
-        assert_eq!(tree.logical[0], 2 << 20, "the clone counts again, the hard link does not");
-        assert_eq!(progress.clone_ids_unavailable_dirs.load(Ordering::Relaxed), 1);
+        assert_eq!(
+            tree.logical[0],
+            2 << 20,
+            "the clone counts again, the hard link does not"
+        );
+        assert_eq!(
+            progress.clone_ids_unavailable_dirs.load(Ordering::Relaxed),
+            1
+        );
         // "link" sorts first, so it owns the inode's bytes.
         assert_eq!(tree.alloc[node(&tree, "orig")], 0);
-        assert_eq!(progress.shared_bytes.load(Ordering::Relaxed), tree.alloc[node(&tree, "link")]);
+        assert_eq!(
+            progress.shared_bytes.load(Ordering::Relaxed),
+            tree.alloc[node(&tree, "link")]
+        );
     }
 
     #[test]
@@ -1859,8 +2071,16 @@ mod tests {
         let _ = std::fs::remove_dir_all(&root);
 
         assert_eq!(t.len(), 6);
-        assert_eq!((t.child_off.len(), t.name_off.len(), t.children.len()), (7, 7, 5));
-        let names = |i: usize| t.kids(i).iter().map(|&c| t.name(c as usize)).collect::<Vec<_>>();
+        assert_eq!(
+            (t.child_off.len(), t.name_off.len(), t.children.len()),
+            (7, 7, 5)
+        );
+        let names = |i: usize| {
+            t.kids(i)
+                .iter()
+                .map(|&c| t.name(c as usize))
+                .collect::<Vec<_>>()
+        };
         assert_eq!(names(0), ["big", "small", "empty"], "largest first");
         let big = t.kids(0)[0] as usize;
         assert_eq!(names(big), ["deep"]);
@@ -1909,17 +2129,33 @@ mod tests {
         assert_eq!(t.children.len(), n.saturating_sub(1));
         let mut seen = vec![0u32; n];
         for i in 0..n {
-            assert!(i == 0 || (t.parents[i] as usize) < i, "parent before child at {i}");
+            assert!(
+                i == 0 || (t.parents[i] as usize) < i,
+                "parent before child at {i}"
+            );
             let kids = t.kids(i);
-            assert!(kids.windows(2).all(|w| t.alloc[w[0] as usize] >= t.alloc[w[1] as usize]));
+            assert!(kids
+                .windows(2)
+                .all(|w| t.alloc[w[0] as usize] >= t.alloc[w[1] as usize]));
             for &k in kids {
                 assert_eq!(t.parents[k as usize] as usize, i);
                 seen[k as usize] += 1;
             }
             if t.is_dir(i) {
-                let sum = |f: &dyn Fn(usize) -> u64| kids.iter().map(|&k| f(k as usize)).sum::<u64>();
-                assert_eq!(t.alloc[i], sum(&|k| t.alloc[k]), "alloc of {}", t.path(i).display());
-                assert_eq!(t.logical[i], sum(&|k| t.logical[k]), "logical of {}", t.path(i).display());
+                let sum =
+                    |f: &dyn Fn(usize) -> u64| kids.iter().map(|&k| f(k as usize)).sum::<u64>();
+                assert_eq!(
+                    t.alloc[i],
+                    sum(&|k| t.alloc[k]),
+                    "alloc of {}",
+                    t.path(i).display()
+                );
+                assert_eq!(
+                    t.logical[i],
+                    sum(&|k| t.logical[k]),
+                    "logical of {}",
+                    t.path(i).display()
+                );
                 assert_eq!(
                     t.n_files[i] as u64,
                     sum(&|k| if t.is_dir(k) { t.n_files[k] as u64 } else { 1 }),
@@ -1946,7 +2182,9 @@ mod tests {
     }
 
     fn find(t: &Tree, path: &str) -> u32 {
-        (0..t.len()).find(|&i| t.path(i) == Path::new("/root").join(path)).unwrap() as u32
+        (0..t.len())
+            .find(|&i| t.path(i) == Path::new("/root").join(path))
+            .unwrap() as u32
     }
 
     #[test]
@@ -1958,7 +2196,10 @@ mod tests {
         assert_eq!(r.len(), t.len() - 1);
         assert!((0..r.len()).all(|i| r.name(i) != "deep"));
         let (c, d) = (find(&r, "c") as usize, find(&r, "c/d") as usize);
-        assert_eq!((r.alloc[0], r.logical[0], r.n_files[0]), (t.alloc[0] - 30, t.logical[0] - 20, 3));
+        assert_eq!(
+            (r.alloc[0], r.logical[0], r.n_files[0]),
+            (t.alloc[0] - 30, t.logical[0] - 20, 3)
+        );
         assert_eq!((r.alloc[c], r.alloc[d], r.n_files[d]), (0, 0, 0));
         // The tree it was made from is untouched.
         assert_eq!(t, removal_fixture());
@@ -1972,11 +2213,17 @@ mod tests {
         let r = t.without(&[find(&t, "a")]);
         assert_consistent(&r);
         assert_eq!(r.len(), t.len() - 3);
-        assert_eq!((r.alloc[0], r.logical[0], r.n_files[0]), (64 + 30, 50 + 20, 2));
+        assert_eq!(
+            (r.alloc[0], r.logical[0], r.n_files[0]),
+            (64 + 30, 50 + 20, 2)
+        );
         assert_eq!(r.name(r.kids(0)[0] as usize), "b");
         assert!((0..r.len()).all(|i| !["a", "big", "small"].contains(&r.name(i))));
         // Names still line up with their nodes after the renumbering.
-        assert_eq!(r.path(find(&r, "c/d/deep") as usize), Path::new("/root/c/d/deep"));
+        assert_eq!(
+            r.path(find(&r, "c/d/deep") as usize),
+            Path::new("/root/c/d/deep")
+        );
     }
 
     #[test]
@@ -1985,14 +2232,26 @@ mod tests {
         let a = find(&t, "a");
         let r = t.without(&[0, a, a, find(&t, "a/big"), 999]);
         assert_consistent(&r);
-        assert_eq!((r.len(), r.alloc[0]), (t.len() - 3, 94), "a's bytes leave once");
+        assert_eq!(
+            (r.len(), r.alloc[0]),
+            (t.len() - 3, 94),
+            "a's bytes leave once"
+        );
         assert_eq!(t.without(&[0, 999]), t.without(&[]));
-        assert_eq!(t.without(&[a]).without(&[find(&t.without(&[a]), "b")]).alloc[0], 30);
+        assert_eq!(
+            t.without(&[a])
+                .without(&[find(&t.without(&[a]), "b")])
+                .alloc[0],
+            30
+        );
         // Everything removed leaves the empty root.
         let all: Vec<u32> = t.kids(0).to_vec();
         let r = t.without(&all);
         assert_consistent(&r);
-        assert_eq!((r.len(), r.alloc[0], r.n_files[0], r.kids(0).len()), (1, 0, 0, 0));
+        assert_eq!(
+            (r.len(), r.alloc[0], r.n_files[0], r.kids(0).len()),
+            (1, 0, 0, 0)
+        );
     }
 
     /// Two names, one inode: the scan puts the bytes on the first path and
@@ -2008,7 +2267,10 @@ mod tests {
         let t = scan(&root, &Progress::default());
         assert_consistent(&t);
         let (owner, loser) = (node(&t, "a-file"), node(&t, "sub/link"));
-        assert!(t.alloc[owner] > 0 && t.alloc[loser] == 0, "bytes counted once, on the first path");
+        assert!(
+            t.alloc[owner] > 0 && t.alloc[loser] == 0,
+            "bytes counted once, on the first path"
+        );
         let total = t.alloc[0];
 
         // The extra name costs nothing: the same result as rescanning without it.
@@ -2018,7 +2280,10 @@ mod tests {
         assert_eq!(r.n_files[0], t.n_files[0] - 1);
         std::fs::remove_file(root.join("sub/link")).unwrap();
         let rescanned = scan(&root, &Progress::default());
-        assert_eq!((r.alloc[0], r.n_files[0], r.len()), (rescanned.alloc[0], rescanned.n_files[0], rescanned.len()));
+        assert_eq!(
+            (r.alloc[0], r.n_files[0], r.len()),
+            (rescanned.alloc[0], rescanned.n_files[0], rescanned.len())
+        );
 
         // The counted path goes: its bytes come off, once. (A surviving link
         // is not re-credited; see `Tree::without`.)
@@ -2059,7 +2324,20 @@ mod tests {
 
     /// Every node's totals, completeness and kind, by path.
     fn by_path(t: &Tree) -> std::collections::BTreeMap<PathBuf, (u64, u64, u32, bool, u8)> {
-        (0..t.len()).map(|i| (t.path(i), (t.alloc[i], t.logical[i], t.n_files[i], t.complete[i], t.flags[i]))).collect()
+        (0..t.len())
+            .map(|i| {
+                (
+                    t.path(i),
+                    (
+                        t.alloc[i],
+                        t.logical[i],
+                        t.n_files[i],
+                        t.complete[i],
+                        t.flags[i],
+                    ),
+                )
+            })
+            .collect()
     }
 
     #[test]
@@ -2080,8 +2358,14 @@ mod tests {
 
         let r = t.without(&[partial]);
         assert_consistent(&r);
-        assert!(r.complete[find(&r, "a") as usize], "a's only incomplete subtree is gone");
-        assert!(!r.complete[find(&r, "b") as usize], "b itself was not fully read; that stays");
+        assert!(
+            r.complete[find(&r, "a") as usize],
+            "a's only incomplete subtree is gone"
+        );
+        assert!(
+            !r.complete[find(&r, "b") as usize],
+            "b itself was not fully read; that stays"
+        );
         assert!(!r.complete[0], "the root still holds b");
         assert!(r.complete[find(&r, "b/unread") as usize]);
 
@@ -2115,7 +2399,8 @@ mod tests {
                 gone[i] = true;
             }
         }
-        let (mut alloc, mut logical, mut n_files) = (s.alloc.clone(), s.logical.clone(), s.n_files.clone());
+        let (mut alloc, mut logical, mut n_files) =
+            (s.alloc.clone(), s.logical.clone(), s.n_files.clone());
         for &top in &tops {
             let files = if s.is_dir(top) { s.n_files[top] } else { 1 };
             let mut up = s.parents[top];
@@ -2128,7 +2413,11 @@ mod tests {
             }
         }
         fn kept<T: Copy>(v: &[T], gone: &[bool]) -> Vec<T> {
-            v.iter().zip(gone).filter(|(_, &g)| !g).map(|(&x, _)| x).collect()
+            v.iter()
+                .zip(gone)
+                .filter(|(_, &g)| !g)
+                .map(|(&x, _)| x)
+                .collect()
         }
         let mut renumber = vec![NO_PARENT; n];
         let mut next = 0u32;
@@ -2139,7 +2428,13 @@ mod tests {
         let mut t = Tree {
             parents: kept(&s.parents, &gone)
                 .into_iter()
-                .map(|p| if p == NO_PARENT { p } else { renumber[p as usize] })
+                .map(|p| {
+                    if p == NO_PARENT {
+                        p
+                    } else {
+                        renumber[p as usize]
+                    }
+                })
                 .collect(),
             alloc: kept(&alloc, &gone),
             logical: kept(&logical, &gone),
@@ -2164,7 +2459,13 @@ mod tests {
     /// nodes inside chosen folders, repeats, the root and strays.
     fn removal_picks(t: &Tree) -> Vec<u32> {
         let mut picks: Vec<u32> = (1..t.len() as u32)
-            .filter(|&i| if t.is_dir(i as usize) { i % 7 == 0 } else { i % 13 == 0 })
+            .filter(|&i| {
+                if t.is_dir(i as usize) {
+                    i % 7 == 0
+                } else {
+                    i % 13 == 0
+                }
+            })
             .collect();
         picks.extend([0, 1, 1, u32::MAX, t.len() as u32]);
         picks
@@ -2188,11 +2489,19 @@ mod tests {
                     let p = want.parents[i] as usize;
                     want.complete[p] &= want.complete[i];
                 }
-                assert_eq!(got, want, "{dirs} dirs x {files} files, {} picks", picks.len());
+                assert_eq!(
+                    got,
+                    want,
+                    "{dirs} dirs x {files} files, {} picks",
+                    picks.len()
+                );
             }
         }
         let t = removal_fixture();
-        assert_eq!(t.without(&[find(&t, "a")]), reference_without(&t, &[find(&t, "a")]));
+        assert_eq!(
+            t.without(&[find(&t, "a")]),
+            reference_without(&t, &[find(&t, "a")])
+        );
     }
 
     #[test]
@@ -2206,16 +2515,24 @@ mod tests {
         for round in 0..12 {
             for variant in [round % 2, 1 - round % 2] {
                 let start = std::time::Instant::now();
-                let r = if variant == 0 { reference_without(&t, &picks) } else { t.without(&picks) };
+                let r = if variant == 0 {
+                    reference_without(&t, &picks)
+                } else {
+                    t.without(&picks)
+                };
                 let elapsed = start.elapsed().as_nanos();
                 std::hint::black_box(&r);
                 best[variant] = best[variant].min(elapsed);
                 println!("without,{round},{variant},{elapsed}");
             }
         }
-        println!("without min ns: reference {} one-pass {} ({} nodes)", best[0], best[1], t.len());
+        println!(
+            "without min ns: reference {} one-pass {} ({} nodes)",
+            best[0],
+            best[1],
+            t.len()
+        );
     }
-
 
     thread_local! {
         static INTERRUPTS: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
@@ -2326,11 +2643,22 @@ mod tests {
             })
         };
         assert_eq!(interrupted(0), 7);
-        assert_eq!(interrupted(MAX_INTERRUPTS), 7, "the last allowed retry succeeds");
+        assert_eq!(
+            interrupted(MAX_INTERRUPTS),
+            7,
+            "the last allowed retry succeeds"
+        );
         assert_eq!(calls.get(), MAX_INTERRUPTS + 1);
-        assert_eq!(interrupted(MAX_INTERRUPTS + 1), -1, "gives up after the bound");
+        assert_eq!(
+            interrupted(MAX_INTERRUPTS + 1),
+            -1,
+            "gives up after the bound"
+        );
         assert_eq!(calls.get(), MAX_INTERRUPTS + 1);
-        assert_eq!(std::io::Error::last_os_error().raw_os_error(), Some(libc::EINTR));
+        assert_eq!(
+            std::io::Error::last_os_error().raw_os_error(),
+            Some(libc::EINTR)
+        );
         // Any other failure is final on the first call.
         calls.set(0);
         let n = retry_interrupted(|| {
@@ -2381,7 +2709,11 @@ mod tests {
             assert_eq!(t.len(), 3, "{link}: root, sub, f");
             assert_eq!(t.errors, 0, "{link}");
             assert!(t.complete[0], "{link}");
-            assert_eq!(t.name(0), base.join(link).to_str().unwrap(), "the root keeps the name it was given");
+            assert_eq!(
+                t.name(0),
+                base.join(link).to_str().unwrap(),
+                "the root keeps the name it was given"
+            );
             assert_eq!(t.name(2), "f");
         }
 
@@ -2398,11 +2730,16 @@ mod tests {
 
     #[test]
     fn local_path_resolves_every_link_and_dot_segment() {
-        let base = std::fs::canonicalize(std::env::temp_dir()).unwrap().join(format!("bz-test-local-{}", std::process::id()));
+        let base = std::fs::canonicalize(std::env::temp_dir())
+            .unwrap()
+            .join(format!("bz-test-local-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&base);
         std::fs::create_dir_all(base.join("a/b")).unwrap();
         std::os::unix::fs::symlink("..", base.join("a/b/up")).unwrap();
-        assert_eq!(local_path(&base.join("a/b/up/./b/../b")).unwrap(), base.join("a/b"));
+        assert_eq!(
+            local_path(&base.join("a/b/up/./b/../b")).unwrap(),
+            base.join("a/b")
+        );
         assert!(local_path(&base.join("missing")).is_err());
         let _ = std::fs::remove_dir_all(&base);
     }
@@ -2428,25 +2765,50 @@ mod tests {
 
         // Root + its five entries fit exactly; the two files under `s` would be node 7 and 8.
         let progress = Progress::default();
-        let t = scan_with(&root, &progress, Limits { nodes: 6, name_bytes: u32::MAX as u64 });
+        let t = scan_with(
+            &root,
+            &progress,
+            Limits {
+                nodes: 6,
+                name_bytes: u32::MAX as u64,
+            },
+        );
         assert_eq!(t.len(), 6, "s's listing is dropped whole, not cut");
         assert!(!t.complete[0], "the tree is marked incomplete");
         let s = (0..t.len()).find(|&i| t.name(i) == "s").unwrap();
         assert!(!t.complete[s] && t.kids(s).is_empty());
         assert_eq!(t.errors, 1);
-        assert_eq!(progress.files.load(Ordering::Relaxed), 4, "dropped entries are not counted as scanned");
+        assert_eq!(
+            progress.files.load(Ordering::Relaxed),
+            4,
+            "dropped entries are not counted as scanned"
+        );
         assert_eq!(t.n_files[0], 4);
         assert_partition(&t);
 
         // The same for the name blob: the root label plus the five names fit, s's two do not.
-        let t = scan_with(&root, &Progress::default(), Limits { nodes: u32::MAX as u64, name_bytes: label + 9 });
+        let t = scan_with(
+            &root,
+            &Progress::default(),
+            Limits {
+                nodes: u32::MAX as u64,
+                name_bytes: label + 9,
+            },
+        );
         assert_eq!(t.len(), 6);
         assert!(!t.complete[0]);
         assert_eq!(t.errors, 1);
         assert_eq!(*t.name_off.last().unwrap() as u64, label + 9);
 
         // A limit the root listing already passes leaves just the root, incomplete.
-        let t = scan_with(&root, &Progress::default(), Limits { nodes: 3, name_bytes: u32::MAX as u64 });
+        let t = scan_with(
+            &root,
+            &Progress::default(),
+            Limits {
+                nodes: 3,
+                name_bytes: u32::MAX as u64,
+            },
+        );
         assert_eq!((t.len(), t.complete[0], t.errors), (1, false, 1));
         let _ = std::fs::remove_dir_all(&root);
     }
@@ -2458,7 +2820,11 @@ mod tests {
         let _ = std::fs::remove_dir_all(&base);
         std::fs::create_dir_all(&base).unwrap();
         for k in 0..22 {
-            std::os::unix::fs::symlink(format!("L{}/L{}", k + 1, k + 1), base.join(format!("L{k}"))).unwrap();
+            std::os::unix::fs::symlink(
+                format!("L{}/L{}", k + 1, k + 1),
+                base.join(format!("L{k}")),
+            )
+            .unwrap();
         }
         std::os::unix::fs::symlink(".", base.join("L22")).unwrap();
 
@@ -2473,16 +2839,28 @@ mod tests {
         let (resolved, errors, nodes, elapsed) = receiver
             .recv_timeout(std::time::Duration::from_secs(5))
             .expect("resolving the chain did not finish");
-        assert!(resolved.unwrap_err().contains("Too many levels of symbolic links"));
-        assert_eq!((errors, nodes), (1, 1), "the scan counts the root as unreadable");
-        assert!(elapsed < std::time::Duration::from_secs(1), "took {elapsed:?}");
+        assert!(resolved
+            .unwrap_err()
+            .contains("Too many levels of symbolic links"));
+        assert_eq!(
+            (errors, nodes),
+            (1, 1),
+            "the scan counts the root as unreadable"
+        );
+        assert!(
+            elapsed < std::time::Duration::from_secs(1),
+            "took {elapsed:?}"
+        );
 
         // A chain within the limit still resolves.
         for k in 0..30 {
             std::os::unix::fs::symlink(format!("M{}", k + 1), base.join(format!("M{k}"))).unwrap();
         }
         std::fs::create_dir(base.join("M30")).unwrap();
-        assert_eq!(local_path(&base.join("M0")).unwrap(), std::fs::canonicalize(&base).unwrap().join("M30"));
+        assert_eq!(
+            local_path(&base.join("M0")).unwrap(),
+            std::fs::canonicalize(&base).unwrap().join("M30")
+        );
         let _ = std::fs::remove_dir_all(&base);
     }
 

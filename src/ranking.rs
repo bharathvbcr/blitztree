@@ -144,7 +144,10 @@ mod tests {
     use std::time::Instant;
 
     fn fixture(directories: usize, files: usize, ties: bool) -> Tree {
-        let mut t = Tree { name_off: vec![0], ..Tree::default() };
+        let mut t = Tree {
+            name_off: vec![0],
+            ..Tree::default()
+        };
         let mut push = |parent, name: &str, is_dir: bool, bytes| {
             t.parents.push(parent);
             t.flags.push(u8::from(is_dir));
@@ -158,7 +161,11 @@ mod tests {
         }
         for d in 0..directories {
             for f in 0..files {
-                let bytes = if ties { 4096 } else { ((f * 7919 + d * 104729) % 100_000) as u64 * 4096 };
+                let bytes = if ties {
+                    4096
+                } else {
+                    ((f * 7919 + d * 104729) % 100_000) as u64 * 4096
+                };
                 push(d as u32 + 1, &format!("file-{f:06}-日本語"), false, bytes);
             }
         }
@@ -167,11 +174,17 @@ mod tests {
 
     // Exact pre-change bounded heap, retained only as a benchmark reference.
     fn reference(t: &Tree, indices: impl Iterator<Item = usize>, limit: usize) -> Vec<usize> {
-        if limit == 0 { return Vec::new(); }
+        if limit == 0 {
+            return Vec::new();
+        }
         let mut heap: BinaryHeap<Reverse<(u64, Reverse<PathBuf>, usize)>> = BinaryHeap::new();
         for i in indices {
             let alloc = t.alloc[i];
-            if heap.len() == limit && heap.peek().is_some_and(|Reverse((minimum, _, _))| alloc < *minimum) {
+            if heap.len() == limit
+                && heap
+                    .peek()
+                    .is_some_and(|Reverse((minimum, _, _))| alloc < *minimum)
+            {
                 continue;
             }
             let candidate = (alloc, Reverse(t.path(i)), i);
@@ -237,11 +250,17 @@ mod tests {
                     };
                     let elapsed = start.elapsed().as_secs_f64() * 1000.0;
                     assert_eq!(found, expected);
-                    if round > 0 { samples[which].push(elapsed); }
+                    if round > 0 {
+                        samples[which].push(elapsed);
+                    }
                 }
             }
-            println!("{name} nodes={} baseline_ms={:?} candidate_ms={:?}", t.len(), samples[0], samples[1]);
+            println!(
+                "{name} nodes={} baseline_ms={:?} candidate_ms={:?}",
+                t.len(),
+                samples[0],
+                samples[1]
+            );
         }
     }
 }
-

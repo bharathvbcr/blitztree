@@ -48,7 +48,10 @@ pub fn extension(name: &[u8]) -> Option<&[u8]> {
 /// Names hold no zero bytes, so distinct extensions never share a key and
 /// the bytes can be read back from it.
 fn pack(ext: &[u8]) -> Option<u128> {
-    (ext.len() <= 16).then(|| ext.iter().fold(0u128, |k, &b| k << 8 | b.to_ascii_lowercase() as u128))
+    (ext.len() <= 16).then(|| {
+        ext.iter()
+            .fold(0u128, |k, &b| k << 8 | b.to_ascii_lowercase() as u128)
+    })
 }
 
 fn unpack(mut key: u128, out: &mut Vec<u8>) {
@@ -71,7 +74,8 @@ impl Hasher for KeyHasher {
         }
     }
     fn write_u128(&mut self, v: u128) {
-        self.0 = (v as u64 ^ ((v >> 64) as u64).rotate_left(29)).wrapping_mul(0x9E37_79B9_7F4A_7C15);
+        self.0 =
+            (v as u64 ^ ((v >> 64) as u64).rotate_left(29)).wrapping_mul(0x9E37_79B9_7F4A_7C15);
     }
     fn finish(&self) -> u64 {
         self.0 ^ self.0 >> 31
@@ -100,7 +104,11 @@ impl Totals {
 
     /// Folds the smaller map into the larger one.
     fn merge(self, other: Totals) -> Totals {
-        let (mut big, small) = if self.short.len() >= other.short.len() { (self, other) } else { (other, self) };
+        let (mut big, small) = if self.short.len() >= other.short.len() {
+            (self, other)
+        } else {
+            (other, self)
+        };
         for (k, (a, n)) in small.short {
             let slot = big.short.entry(k).or_default();
             slot.0 += a;
@@ -129,16 +137,29 @@ impl Tree {
                 totals.add(self.name_bytes(root), self.alloc[root]);
             }
         }
-        let mut rows: Vec<(Vec<u8>, u64, u64)> = Vec::with_capacity(totals.short.len() + totals.long.len());
+        let mut rows: Vec<(Vec<u8>, u64, u64)> =
+            Vec::with_capacity(totals.short.len() + totals.long.len());
         for (key, (alloc, files)) in totals.short {
             let mut ext = Vec::new();
             unpack(key, &mut ext);
             rows.push((ext, alloc, files));
         }
-        rows.extend(totals.long.into_iter().map(|(ext, (alloc, files))| (ext, alloc, files)));
-        rows.sort_unstable_by(|a, b| b.1.cmp(&a.1).then(b.2.cmp(&a.2)).then_with(|| a.0.cmp(&b.0)));
+        rows.extend(
+            totals
+                .long
+                .into_iter()
+                .map(|(ext, (alloc, files))| (ext, alloc, files)),
+        );
+        rows.sort_unstable_by(|a, b| {
+            b.1.cmp(&a.1)
+                .then(b.2.cmp(&a.2))
+                .then_with(|| a.0.cmp(&b.0))
+        });
 
-        let mut out = Breakdown { ext_off: Vec::with_capacity(rows.len() + 1), ..Default::default() };
+        let mut out = Breakdown {
+            ext_off: Vec::with_capacity(rows.len() + 1),
+            ..Default::default()
+        };
         out.ext_off.push(0);
         for (ext, alloc, files) in rows {
             out.ext_blob.extend_from_slice(&ext);
@@ -175,7 +196,9 @@ impl Tree {
         };
         let kids = self.kids(dir);
         if self.n_files[dir] >= PARALLEL_FILES {
-            kids.par_iter().fold(Totals::default, visit).reduce(Totals::default, Totals::merge)
+            kids.par_iter()
+                .fold(Totals::default, visit)
+                .reduce(Totals::default, Totals::merge)
         } else {
             kids.iter().fold(Totals::default(), visit)
         }
@@ -188,7 +211,13 @@ mod tests {
 
     fn rows(b: &Breakdown) -> Vec<(String, u64, u64)> {
         (0..b.len())
-            .map(|i| (String::from_utf8(b.ext(i).to_vec()).unwrap(), b.alloc[i], b.files[i]))
+            .map(|i| {
+                (
+                    String::from_utf8(b.ext(i).to_vec()).unwrap(),
+                    b.alloc[i],
+                    b.files[i],
+                )
+            })
             .collect()
     }
 
@@ -253,7 +282,14 @@ mod tests {
 
         // Scoped to one folder: its sibling's files are not counted.
         let only = t.types(photos as usize);
-        assert_eq!(rows(&only), [("jpg".into(), 400, 2), ("png".into(), 300, 1), ("".into(), 5, 1)]);
+        assert_eq!(
+            rows(&only),
+            [
+                ("jpg".into(), 400, 2),
+                ("png".into(), 300, 1),
+                ("".into(), 5, 1)
+            ]
+        );
         assert_eq!(only.alloc.iter().sum::<u64>(), t.alloc[photos as usize]);
 
         // A file as the root, and an index past the end.
@@ -282,14 +318,23 @@ mod tests {
             }
         }
         crate::finish(&mut t);
-        let nested = t.kids(0).iter().filter(|&&k| t.n_files[k as usize] >= PARALLEL_FILES).count();
-        assert!(nested > 0, "some folder below the root is split across threads too");
+        let nested = t
+            .kids(0)
+            .iter()
+            .filter(|&&k| t.n_files[k as usize] >= PARALLEL_FILES)
+            .count();
+        assert!(
+            nested > 0,
+            "some folder below the root is split across threads too"
+        );
 
         let fast = t.types(0);
         let mut slow: HashMap<Vec<u8>, (u64, u64)> = HashMap::new();
         for i in 1..t.len() {
             if !t.is_dir(i) {
-                let ext = extension(t.name_bytes(i)).unwrap_or_default().to_ascii_lowercase();
+                let ext = extension(t.name_bytes(i))
+                    .unwrap_or_default()
+                    .to_ascii_lowercase();
                 let s = slow.entry(ext).or_default();
                 s.0 += t.alloc[i];
                 s.1 += 1;
