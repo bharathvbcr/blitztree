@@ -191,6 +191,13 @@
 
 "Save changes" = "Değişiklikleri kaydet";
 "HTTP %lld: %@" = "HTTP %lld: %@";
+"HTTP %lld" = "HTTP %lld";
+"The installation was cancelled." = "Kurulum iptal edildi.";
+"The installation timed out after %lld seconds." = "Kurulum %lld saniye sonra zaman aşımına uğradı.";
+"The installer exited with status %lld." = "Yükleyici %lld durumuyla çıktı.";
+"A base URL cannot include a user name or a password. Put the API key in the key field, and use a URL like https://gateway.example/v1." = "Bir temel URL kullanıcı adı veya parola içeremez. API anahtarını anahtar alanına yazın ve https://gateway.example/v1 gibi bir URL kullanın.";
+"A base URL cannot include a query string. Use a URL like https://gateway.example/v1." = "Bir temel URL sorgu dizesi içeremez. https://gateway.example/v1 gibi bir URL kullanın.";
+"Left git worktree metadata in place because it could not be read: %@ (errno %lld)" = "Git çalışma ağacı meta verileri okunamadığı için olduğu gibi bırakıldı: %@ (errno %lld)";
 /* Step lines */
 "Reading your scan" = "Taramanız okunuyor";
 "Asking %@ what can go" = "%@ adlı modele nelerin gidebileceği soruluyor";

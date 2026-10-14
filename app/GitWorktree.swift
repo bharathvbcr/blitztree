@@ -282,6 +282,14 @@ nonisolated enum GitWorktree {
     /// file. Returns nil on success, otherwise why it was left in place.
     static func removeAdminEntry(_ entry: WorktreeAdminEntry, erase: (String) -> String?) -> String? {
         let admin = entry.adminDir
+        switch inspect(admin) {
+        case .missing:
+            return nil
+        case .unreadable(let code):
+            return String(localized: "Left git worktree metadata in place because it could not be read: \(admin) (errno \(Int(code)))")
+        case .present:
+            break
+        }
         let parent = (admin as NSString).deletingLastPathComponent
         let common = (parent as NSString).deletingLastPathComponent
         guard (parent as NSString).lastPathComponent == "worktrees",
@@ -668,6 +676,18 @@ nonisolated enum GitWorktree {
             }
         }
         return false
+    }
+
+    private enum Inspection {
+        case present, missing, unreadable(Int32)
+    }
+
+    /// lstat of the admin entry itself. A missing entry is already gone.
+    /// Any other failure is unread, not "changed".
+    private static func inspect(_ file: String) -> Inspection {
+        var info = stat()
+        if Darwin.lstat(file, &info) == 0 { return .present }
+        return errno == ENOENT ? .missing : .unreadable(errno)
     }
 
     private static func isMissing(_ file: String) -> Bool {

@@ -191,6 +191,13 @@
 
 "Save changes" = "Guardar cambios";
 "HTTP %lld: %@" = "HTTP %lld: %@";
+"HTTP %lld" = "HTTP %lld";
+"The installation was cancelled." = "La instalación se canceló.";
+"The installation timed out after %lld seconds." = "La instalación superó el tiempo de espera tras %lld segundos.";
+"The installer exited with status %lld." = "El instalador terminó con el estado %lld.";
+"A base URL cannot include a user name or a password. Put the API key in the key field, and use a URL like https://gateway.example/v1." = "Una URL base no puede incluir un nombre de usuario ni una contraseña. Ponga la clave de API en el campo de la clave y use una URL como https://gateway.example/v1.";
+"A base URL cannot include a query string. Use a URL like https://gateway.example/v1." = "Una URL base no puede incluir una cadena de consulta. Use una URL como https://gateway.example/v1.";
+"Left git worktree metadata in place because it could not be read: %@ (errno %lld)" = "Se dejaron los metadatos del worktree de git porque no se pudieron leer: %@ (errno %lld)";
 /* Step lines */
 "Reading your scan" = "Leyendo tu escaneo";
 "Asking %@ what can go" = "Preguntando a %@ qué puede eliminarse";

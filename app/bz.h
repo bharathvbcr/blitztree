@@ -73,9 +73,9 @@ typedef struct {
     uint64_t skipped_cloud_directories; // cloud-only folders left unread (reading would download them)
     uint64_t skipped_mount_points;   // mount points left unread (a scan measures one volume)
     uint64_t shared_allocated_bytes; // bytes not counted again: hard links, whole APFS clones
-    uint64_t clone_ids_unavailable_directories; // folders whose volume reported no clone ids
+    uint64_t clone_ids_unavailable_directories; // folders that listed a regular file with no clone id; symlinks and sockets do not count
     bool complete;                   // every folder was read in full (bz_complete of the root)
-    bool workers_degraded;           // a worker pool could not be started, so work ran on rayon's global pool and may have been slower; results are the same and `complete` does not depend on it
+    bool workers_degraded;           // the scan worker pool could not be started, so the walk ran on rayon's global pool and may have been slower; a query-pool outage is not this; results are the same and `complete` does not depend on it
 } BzCoverage;
 // Fill `out` and return true. Returns false and leaves `out` untouched for a
 // NULL handle, a NULL `out`, or a handle without a tree (before

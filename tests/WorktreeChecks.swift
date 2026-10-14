@@ -36,6 +36,7 @@ enum WorktreeChecks {
         try sharedEvidence(base: base, worktree: worktree)
         try await staleRefresh(fixture: fixture, base: base, worktree: worktree)
         try await settlement(fixture: fixture, base: base, repo: repo, worktree: worktree)
+        try adminEntryMessages(base: base)
         print("PASS WorktreeChecks")
     }
 
@@ -1065,6 +1066,47 @@ enum WorktreeChecks {
 
     /// The panel only moves a worktree to the Trash. Its admin entry goes once
     /// the Trash copy is gone, never while it can still be put back.
+    /// A missing admin entry is already gone. An unreadable one says so.
+    /// Only a real identity mismatch says the entry changed. Nothing is deleted.
+    private static func adminEntryMessages(base: URL) throws {
+        let root = base.appendingPathComponent("admin-messages")
+        let worktrees = root.appendingPathComponent("worktrees")
+        try fm.createDirectory(at: worktrees, withIntermediateDirectories: true)
+        let placeholder = CleanupIdentity(device: 1, inode: 2, type: UInt16(S_IFDIR))
+        func entry(_ admin: String, identity: CleanupIdentity) -> WorktreeAdminEntry {
+            WorktreeAdminEntry(adminDir: admin, adminIdentity: identity, worktreesIdentity: identity,
+                               commonIdentity: identity, gitdirIdentity: identity,
+                               gitdirContent: Data("gitdir: /tmp/x/.git\n".utf8), gitFile: "/tmp/x/.git")
+        }
+        var erased: [String] = []
+        let missing = worktrees.appendingPathComponent("gone").path
+        let gone = GitWorktree.removeAdminEntry(entry(missing, identity: placeholder)) { path in
+            erased.append(path); return nil
+        }
+        precondition(gone == nil && erased.isEmpty, "a missing admin entry is already gone: \(gone ?? "nil")")
+
+        let real = worktrees.appendingPathComponent("real")
+        try fm.createDirectory(at: real, withIntermediateDirectories: true)
+        let changed = GitWorktree.removeAdminEntry(entry(real.path, identity: placeholder)) { path in
+            erased.append(path); return nil
+        }
+        precondition(changed?.contains("changed") == true && changed?.contains("could not be read") != true,
+                     "a different identity says changed: \(changed ?? "nil")")
+        precondition(erased.isEmpty && fm.fileExists(atPath: real.path), "a mismatch deletes nothing")
+
+        if geteuid() != 0 {
+            chmod(worktrees.path, 0)
+            defer { chmod(worktrees.path, 0o755) }
+            let blocked = worktrees.appendingPathComponent("hidden").path
+            let unread = GitWorktree.removeAdminEntry(entry(blocked, identity: placeholder)) { path in
+                erased.append(path); return nil
+            }
+            precondition(unread?.contains("could not be read") == true && unread?.contains("changed") != true,
+                         "an unreadable admin entry is not reported as changed: \(unread ?? "nil")")
+            precondition(erased.isEmpty, "an unreadable entry deletes nothing")
+        }
+    }
+
     private static func settlement(fixture: GitFixture, base: URL, repo: String,
                                    worktree: (String) -> String) async throws {
         let trash = base.appendingPathComponent("settle-trash")

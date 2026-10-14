@@ -34,8 +34,9 @@
 //!
 //! If a pool cannot be built (the system refused the threads), callers run on
 //! rayon's global pool: correct, but possibly on the efficiency cores. That is
-//! reported once per outage on stderr and stays readable through `degraded`
-//! (the app reads it in `Coverage`; a GUI never sees stderr). A failed build is
+//! reported once per outage on stderr. A scan's `Coverage` reads only the scan
+//! pool, through `workers_degraded_for_scan`: a query-pool outage does not
+//! change what the scan read. A GUI never sees stderr. A failed build is
 //! retried no sooner than a doubling delay (2 s, 4 s, ... capped at 60 s)
 //! later, so an outage costs one thread-spawn attempt per interval and not one
 //! per call.
@@ -124,11 +125,23 @@ impl Outage {
     }
 }
 
-/// Whether a worker pool is unavailable right now, so that work is running on
-/// rayon's global pool (possibly on the efficiency cores). The results are the
-/// same either way.
+/// Whether `role`'s pool is unavailable right now.
+pub(crate) fn role_outage(role: Role) -> bool {
+    role.outage().degraded.load(Ordering::Relaxed)
+}
+
+/// `workers_degraded` on a scan's coverage. A query-pool outage is ignored:
+/// search and the type breakdown run on their own pool and do not change
+/// what the scan read. The query flag is an argument so the two cannot be
+/// combined again without a test noticing.
+pub(crate) fn workers_degraded_for_scan(scan_outage: bool, query_outage: bool) -> bool {
+    let _ = query_outage;
+    scan_outage
+}
+
+/// Whether the scan pool is unavailable. A query-pool outage is not included.
 pub(crate) fn degraded() -> bool {
-    SCAN_OUTAGE.degraded.load(Ordering::Relaxed) || QUERY_OUTAGE.degraded.load(Ordering::Relaxed)
+    workers_degraded_for_scan(role_outage(Role::Scan), role_outage(Role::Query))
 }
 
 impl Role {
@@ -646,6 +659,14 @@ mod tests {
         run(Role::Scan, || ());
         run(Role::Query, || ());
         assert!(!degraded());
+    }
+
+    #[test]
+    fn scan_coverage_ignores_a_query_pool_outage() {
+        assert!(!workers_degraded_for_scan(false, false));
+        assert!(!workers_degraded_for_scan(false, true));
+        assert!(workers_degraded_for_scan(true, false));
+        assert!(workers_degraded_for_scan(true, true));
     }
 
     #[test]

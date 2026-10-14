@@ -54,6 +54,10 @@ nonisolated enum ProviderURL {
         /// address this rule refuses); the request was stopped before it was
         /// repeated there.
         case redirected(host: String)
+        /// A user name or password in the URL. The API key has its own field.
+        case credentials
+        /// A query string. The base URL is scheme, host, port and path.
+        case query
 
         var errorDescription: String? {
             switch self {
@@ -67,17 +71,40 @@ nonisolated enum ProviderURL {
                 return String(localized: "“\(scheme)://” isn't supported. Use https://.")
             case .insecure(let host):
                 return String(localized: "“\(host)” is reached over plain http, so your API key and folder paths would cross the network unencrypted. Use https://. Plain http is allowed only for localhost, 127.0.0.1 and ::1.")
+            case .credentials:
+                return String(localized: "A base URL cannot include a user name or a password. Put the API key in the key field, and use a URL like https://gateway.example/v1.")
+            case .query:
+                return String(localized: "A base URL cannot include a query string. Use a URL like https://gateway.example/v1.")
             }
         }
     }
 
-    /// The URL if it may be used, else why not.
+    /// The URL if it may be used, else why not. The returned URL keeps only
+    /// the scheme, host, port and path.
     static func validate(_ text: String) -> Result<URL, Problem> {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return .failure(.empty) }
         guard let url = URL(string: trimmed) else { return .failure(.unreadable) }
+        return accepted(url)
+    }
+
+    /// The same check as `validate`, for a URL that is already parsed. What
+    /// it returns is what gets stored.
+    static func accepted(_ url: URL) -> Result<URL, Problem> {
         if let problem = problem(for: url) { return .failure(problem) }
-        return .success(url)
+        guard var parts = URLComponents(url: url, resolvingAgainstBaseURL: false) else {
+            return .failure(.unreadable)
+        }
+        parts.user = nil
+        parts.password = nil
+        parts.query = nil
+        parts.fragment = nil
+        parts.percentEncodedUser = nil
+        parts.percentEncodedPassword = nil
+        parts.percentEncodedQuery = nil
+        parts.percentEncodedFragment = nil
+        guard let canonical = parts.url else { return .failure(.unreadable) }
+        return .success(canonical)
     }
 
     static func problem(for url: URL) -> Problem? {
@@ -87,6 +114,11 @@ nonisolated enum ProviderURL {
         guard let rawHost = parts.host, !rawHost.isEmpty else { return .noHost }
         let host = bareHost(rawHost)
         if scheme == "http", !isLoopback(host) { return .insecure(host: host) }
+        if parts.user != nil || parts.password != nil
+            || parts.percentEncodedUser != nil || parts.percentEncodedPassword != nil {
+            return .credentials
+        }
+        if parts.query != nil || parts.percentEncodedQuery != nil { return .query }
         return nil
     }
 
@@ -234,7 +266,8 @@ final class ProviderStore {
     /// anything when the URL is not allowed or the Keychain refuses the key:
     /// a provider saved without its key would only fail later as a 401.
     func save(_ provider: LLMProvider, key: String?, keychain: KeychainClient = .system) throws {
-        if let problem = ProviderURL.problem(for: provider.baseURL) { throw problem }
+        var provider = provider
+        provider.baseURL = try ProviderURL.accepted(provider.baseURL).get()
         if let key, !key.isEmpty { try Self.setKey(key, for: provider.id, keychain: keychain) }
         providers.removeAll { $0.id == provider.id }
         providers.append(provider)
@@ -492,8 +525,12 @@ extension PlanError: LocalizedError {
         case let .baseURL(problem):
             return problem.errorDescription
         case let .http(code, body):
-            let line = body.split(separator: "\n").first ?? ""
-            return "HTTP \(code)\(line.isEmpty ? "" : ": \(line.prefix(200))")"
+            let line = body.split(separator: "\n").first.map(String.init) ?? ""
+            let snippet = String(line.prefix(200))
+            if snippet.isEmpty {
+                return String(localized: "HTTP \(code)")
+            }
+            return String(localized: "HTTP \(code): \(snippet)")
         }
     }
 }

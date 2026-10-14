@@ -642,6 +642,25 @@ fn a_cancel_at_start_middle_and_end_leaves_no_file_and_no_temporary() {
 }
 
 #[test]
+fn a_cancel_after_the_last_row_does_not_sync_or_replace() {
+    let root = scratch("cancel-sync");
+    let dest = root.join("out.csv");
+    std::fs::write(&dest, b"precious").unwrap();
+    let tree = sample();
+    let ctl = Control::new();
+    ctl.before_sync(|ctl| ctl.cancel());
+    let err = export_file(&tree, 0, &dest, &ctl).unwrap_err();
+    assert!(matches!(err, Error::Cancelled), "{err}");
+    assert!(
+        !ctl.did_sync(),
+        "a cancel after the last row must not sync a file that will be discarded"
+    );
+    assert_eq!(std::fs::read(&dest).unwrap(), b"precious");
+    assert!(leftovers(&root).is_empty(), "{:?}", leftovers(&root));
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[test]
 fn a_cancelled_replacement_keeps_the_file_that_was_there() {
     let root = scratch("keep");
     let dest = root.join("out.csv");

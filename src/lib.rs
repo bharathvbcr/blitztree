@@ -64,7 +64,12 @@ const ATTR_CMNEXT_EXT_FLAGS: u32 = 0x0000_0200;
 /// The file may share blocks with another (an APFS clone, or a clone's source).
 const EF_MAY_SHARE_BLOCKS: u64 = 0x0000_0001;
 
+const VREG: u32 = 1;
 const VDIR: u32 = 2;
+#[cfg(test)]
+const VLNK: u32 = 5;
+#[cfg(test)]
+const VSOCK: u32 = 6;
 /// Contents live in the cloud (iCloud Drive, File Provider). Opening such a
 /// directory asks the provider to materialize it, i.e. download.
 const SF_DATALESS: u32 = 0x4000_0000;
@@ -110,7 +115,8 @@ pub struct Tree {
     /// largest allocated size first (treemap layout order).
     pub child_off: Vec<u32>,
     pub children: Vec<u32>,
-    /// Node i's name is name_blob[name_off[i]..name_off[i + 1]], UTF-8.
+    /// Node i's name is name_blob[name_off[i]..name_off[i + 1]]. A child's name
+    /// is valid UTF-8. The root's name is the scan path's encoded bytes.
     pub name_off: Vec<u32>,
     pub name_blob: Vec<u8>,
     pub errors: u64,
@@ -132,7 +138,8 @@ impl Tree {
     fn name_bytes(&self, i: usize) -> &[u8] {
         &self.name_blob[self.name_off[i] as usize..self.name_off[i + 1] as usize]
     }
-    /// Names are validated UTF-8 when scanned.
+    /// A child's name is valid UTF-8. The root's name is the path's encoded
+    /// bytes, and this returns an empty string when those are not UTF-8.
     pub fn name(&self, i: usize) -> &str {
         std::str::from_utf8(self.name_bytes(i)).unwrap_or("")
     }
@@ -298,14 +305,16 @@ pub struct Coverage {
     /// Allocated bytes not counted again because another scanned path holds
     /// the same data (hard links, whole APFS clones).
     pub shared_allocated_bytes: u64,
-    /// Directories whose volume reported no clone ids.
+    /// Directories that listed a regular file whose volume reported no clone id.
+    /// A symlink or a socket has none, and does not count.
     pub clone_ids_unavailable_directories: u64,
     /// Every directory was read in full: nothing unreadable or skipped.
     pub complete: bool,
-    /// A worker pool could not be started when this was built, so work ran on
-    /// rayon's global pool and may have been slower (the engine reports it on
-    /// stderr too, which a GUI never sees). The results are the same:
-    /// `complete` does not depend on it.
+    /// The scan worker pool could not be started when this was built, so the
+    /// walk ran on rayon's global pool and may have been slower (the engine
+    /// reports it on stderr too, which a GUI never sees). A query-pool outage
+    /// is not this: search and the type breakdown have their own pool. The
+    /// results are the same: `complete` does not depend on it.
     pub workers_degraded: bool,
 }
 
@@ -382,7 +391,8 @@ struct Entry {
     /// Set when the file has more than one hard link or may share blocks
     /// with a clone, so its bytes are counted once per data stream.
     stream: Option<DataStream>,
-    /// The volume reported no clone id for this file.
+    /// A regular file whose volume reported no clone id. Symlinks, sockets and
+    /// directories do not set this.
     no_clone_id: bool,
     /// The volume listed the file without its allocated size.
     alloc_missing: bool,
@@ -748,11 +758,12 @@ fn parse_entry(e: &[u8], out: &mut Vec<Entry>, names: &mut Vec<u8>, progress: &P
         off += 4;
     }
 
-    let mut is_dir = false;
+    let mut objtype = 0u32;
     if ret_common & ATTR_CMN_OBJTYPE != 0 {
-        is_dir = u32_at(e, off) == VDIR;
+        objtype = u32_at(e, off);
         off += 4;
     }
+    let is_dir = objtype == VDIR;
 
     let mut flags = 0u32;
     if ret_common & ATTR_CMN_FLAGS != 0 {
@@ -830,7 +841,7 @@ fn parse_entry(e: &[u8], out: &mut Vec<Entry>, names: &mut Vec<u8>, progress: &P
         size,
         alloc,
         stream,
-        no_clone_id: !is_dir && clone_id.is_none(),
+        no_clone_id: objtype == VREG && clone_id.is_none(),
         alloc_missing: !is_dir && ret_file & ATTR_FILE_ALLOCSIZE == 0,
     });
     true
@@ -1319,7 +1330,8 @@ fn local_path_at(p: &Path, hops: &mut u32) -> Result<PathBuf, String> {
 
 /// Scan `root` and return the finished tree, ready for the UI. A symlinked
 /// root is followed (see `local_path`); the root node keeps the name it was
-/// given, as far as it is UTF-8 (the path that is read is always exact). A
+/// given, as the path's encoded bytes (the path that is read is the resolved
+/// one). A name that does not fit in the 32-bit layout is stored empty. A
 /// root that cannot be resolved is counted as an error and left unread. Since
 /// the root keeps its given name, Clean Up refuses every action in a tree
 /// scanned through a symlinked root (it fails closed); scan the resolved path
@@ -1343,9 +1355,9 @@ fn scan_at(
     progress: &Progress,
     limits: Limits,
 ) -> Tree {
-    let root_name = root.to_string_lossy();
-    let root_name = if u32::try_from(root_name.len()).is_ok() {
-        root_name.as_bytes()
+    let encoded = root.as_os_str().as_encoded_bytes();
+    let root_name: &[u8] = if u32::try_from(encoded.len()).is_ok() {
+        encoded
     } else {
         &[]
     };
@@ -1451,7 +1463,26 @@ mod tests {
         links: u32,
         ext: Option<(u64, u64)>,
     ) -> Vec<u8> {
+        bulk_record_kind(
+            name,
+            if is_dir { VDIR } else { VREG },
+            flags,
+            mount_status,
+            links,
+            ext,
+        )
+    }
+
+    fn bulk_record_kind(
+        name: impl AsRef<[u8]>,
+        objtype: u32,
+        flags: u32,
+        mount_status: u32,
+        links: u32,
+        ext: Option<(u64, u64)>,
+    ) -> Vec<u8> {
         let name = name.as_ref();
+        let is_dir = objtype == VDIR;
         let mut e = vec![0u8; 4];
         let common = ATTR_CMN_RETURNED_ATTRS
             | ATTR_CMN_ERROR
@@ -1476,7 +1507,7 @@ mod tests {
         }
         let name_ref = e.len();
         e.extend_from_slice(&[0u8; 8]);
-        for value in [17u32, if is_dir { VDIR } else { 1 }, flags] {
+        for value in [17u32, objtype, flags] {
             e.extend_from_slice(&value.to_le_bytes());
         }
         e.extend_from_slice(&123456u64.to_le_bytes());
@@ -1588,6 +1619,39 @@ mod tests {
         // May share, but the clone id is missing (0): nothing to key on.
         assert_eq!(parse(1, Some((0, EF_MAY_SHARE_BLOCKS)), false).stream, None);
         assert!(parse(1, Some((0, EF_MAY_SHARE_BLOCKS)), false).no_clone_id);
+    }
+
+    #[test]
+    fn a_symlink_or_socket_without_a_clone_id_does_not_mark_the_directory() {
+        let (mut entries, mut names) = (Vec::new(), Vec::new());
+        for (name, objtype) in [("link", VLNK), ("sock", VSOCK)] {
+            let record = bulk_record_kind(name, objtype, 0, 0, 1, None);
+            assert!(parse_entry(
+                &record,
+                &mut entries,
+                &mut names,
+                &Progress::default()
+            ));
+        }
+        assert!(
+            entries.iter().all(|e| !e.is_dir && !e.no_clone_id),
+            "a symlink or socket has no clone id to report"
+        );
+        assert!(
+            !entries.iter().any(|e| e.no_clone_id),
+            "the directory counter must stay clear"
+        );
+        let file = bulk_record_kind("file", VREG, 0, 0, 1, None);
+        assert!(parse_entry(
+            &file,
+            &mut entries,
+            &mut names,
+            &Progress::default()
+        ));
+        assert!(
+            entries[2].no_clone_id,
+            "a regular file with no clone id still counts"
+        );
     }
 
     #[test]
@@ -2055,6 +2119,24 @@ mod tests {
         assert_eq!(
             progress.shared_bytes.load(Ordering::Relaxed),
             tree.alloc[node(&tree, "link")]
+        );
+    }
+
+    #[test]
+    fn the_scan_root_keeps_a_name_that_is_not_utf8() {
+        use std::ffi::OsStr;
+        use std::os::unix::ffi::OsStrExt;
+        // The name is stored before the walk. This volume refuses to create a
+        // directory whose name is not UTF-8 (EILSEQ), so the path is not created.
+        let mut bytes = format!("/tmp/bz-test-rootname-{}", std::process::id()).into_bytes();
+        bytes.push(0xff);
+        let root = PathBuf::from(OsStr::from_bytes(&bytes));
+        let tree = scan(&root, &Progress::default());
+        assert_eq!(tree.name_bytes(0), root.as_os_str().as_encoded_bytes());
+        assert_ne!(
+            tree.name_bytes(0),
+            root.to_string_lossy().as_bytes(),
+            "a non-UTF-8 root name must not be stored lossily"
         );
     }
 

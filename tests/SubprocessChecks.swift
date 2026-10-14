@@ -237,7 +237,7 @@ struct SubprocessChecks {
         let worker = pid_t(text!.trimmingCharacters(in: .whitespacesAndNewlines))!
         install.cancel()
         let error = await install.value
-        precondition(error == "cancelled", "\(error ?? "nil")")
+        precondition(error == String(localized: "The installation was cancelled."), "\(error ?? "nil")")
         let dead = await goneSoon(worker)
         precondition(dead, "cancelling an install left its download running (\(worker))")
         print("PASS timeout and cancel stop the whole process tree, installer included")
@@ -248,41 +248,55 @@ struct SubprocessChecks {
     private static func failedStartLeavesNoDanglingInput(_ base: URL) async {
         var limit = rlimit()
         getrlimit(RLIMIT_NOFILE, &limit)
-        let original = limit
-        var restore = original
-        defer { setrlimit(RLIMIT_NOFILE, &restore) }
+        var original = limit
         let highest = ((try? FileManager.default.contentsOfDirectory(atPath: "/dev/fd")) ?? []).compactMap { Int($0) }.max() ?? 3
-        var failures = 0
-        for spare in 0...4 {
-            var squeezed = original
-            squeezed.rlim_cur = rlim_t(highest + 1 + spare)
-            setrlimit(RLIMIT_NOFILE, &squeezed)
-            let job = Subprocess.Job(Subprocess.Spec("/bin/cat", input: .open), stdout: .capture(cap: 100))
-            var failed = false
-            do { try job.start() } catch { failed = true }
-            setrlimit(RLIMIT_NOFILE, &restore)
-            guard failed else { job.terminate(); continue }
-            failures += 1
-            // The freed numbers are reused by these files; the dead job must
-            // not write to or close any of them.
-            var files: [(URL, FileHandle)] = []
-            for index in 0..<4 {
-                let file = base.appendingPathComponent("reused-\(spare)-\(index)")
-                FileManager.default.createFile(atPath: file.path, contents: nil)
-                files.append((file, try! FileHandle(forWritingTo: file)))
-            }
-            job.write(Data("intruder".utf8))
-            job.closeInput()
-            try? await Task.sleep(for: .milliseconds(100))
-            for (file, handle) in files {
-                precondition(fcntl(handle.fileDescriptor, F_GETFD) != -1, "the dead job closed someone else's descriptor (spare \(spare))")
-                try? handle.close()
-                let content = try! String(contentsOf: file, encoding: .utf8)
-                precondition(content.isEmpty, "the dead job wrote into a reused descriptor: \(content)")
-            }
+        // The old spare loop only lowered the soft limit. Holes below the
+        // highest live descriptor still let pipe() succeed, so the check
+        // never ran. Fill every free slot under a small ceiling instead.
+        var ceiling = original
+        ceiling.rlim_cur = min(original.rlim_max, rlim_t(highest + 16))
+        precondition(setrlimit(RLIMIT_NOFILE, &ceiling) == 0,
+                     "could not lower RLIMIT_NOFILE to \(ceiling.rlim_cur) (errno \(errno))")
+        var fillers: [Int32] = []
+        defer {
+            for fd in fillers { Darwin.close(fd) }
+            setrlimit(RLIMIT_NOFILE, &original)
         }
-        precondition(failures > 0, "no squeezed limit made a start fail; the check did not run")
-        print("PASS a failed start leaves no input descriptor to misuse (\(failures) partial failures)")
+        while true {
+            let fd = Darwin.open("/dev/null", O_RDONLY)
+            if fd < 0 { break }
+            fillers.append(fd)
+        }
+        // Two free numbers: the input pipe is created, the stdout pipe is not,
+        // and start() has to drop the write end it just kept.
+        precondition(fillers.count >= 2, "the descriptor table had no free slot to fill")
+        Darwin.close(fillers.removeLast())
+        Darwin.close(fillers.removeLast())
+
+        let job = Subprocess.Job(Subprocess.Spec("/bin/cat", input: .open), stdout: .capture(cap: 100))
+        var failed = false
+        do { try job.start() } catch { failed = true }
+        if !failed { job.terminate() }
+        precondition(failed, "start succeeded with only one pipe's worth of descriptors left")
+
+        // Room for the files that reuse the numbers the failed start closed.
+        setrlimit(RLIMIT_NOFILE, &original)
+        var files: [(URL, FileHandle)] = []
+        for index in 0..<4 {
+            let file = base.appendingPathComponent("reused-\(index)")
+            FileManager.default.createFile(atPath: file.path, contents: nil)
+            files.append((file, try! FileHandle(forWritingTo: file)))
+        }
+        job.write(Data("intruder".utf8))
+        job.closeInput()
+        try? await Task.sleep(for: .milliseconds(100))
+        for (file, handle) in files {
+            precondition(fcntl(handle.fileDescriptor, F_GETFD) != -1, "the dead job closed someone else's descriptor")
+            try? handle.close()
+            let content = try! String(contentsOf: file, encoding: .utf8)
+            precondition(content.isEmpty, "the dead job wrote into a reused descriptor: \(content)")
+        }
+        print("PASS a failed start leaves no input descriptor to misuse")
     }
 
     private static func terminalTakesNoInput() async {
@@ -411,7 +425,13 @@ struct SubprocessChecks {
         let blank = await AgentSetup.runInstall(AgentSetup.claudeInstallScript(url: "file://" + empty.path))
         precondition(blank?.contains("empty") == true, "an empty download is refused: \(blank ?? "nil")")
         let slow = await AgentSetup.runInstall("sleep 30", timeout: 1)
-        precondition(slow?.contains("timed out") == true, "a stalled install is cut off: \(slow ?? "nil")")
+        precondition(slow == String(localized: "The installation timed out after \(1) seconds."),
+                     "a stalled install is cut off: \(slow ?? "nil")")
+        let status = await AgentSetup.runInstall("exit 9")
+        precondition(status == String(localized: "The installer exited with status \(Int(9))."),
+                     "a silent failure names the status: \(status ?? "nil")")
+        let noisy = await AgentSetup.runInstall("echo 'disk full' >&2; exit 1")
+        precondition(noisy == "disk full", "tool output stays as the installer wrote it: \(noisy ?? "nil")")
         print("PASS install script: temp file, no pipe, failures reported, bounded")
     }
 

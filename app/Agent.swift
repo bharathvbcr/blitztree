@@ -345,10 +345,15 @@ final class AgentSetup {
                                    directory: NSHomeDirectory())
         let outcome = await Subprocess.run(spec, stdout: .discard, stderr: .stream { tail.feed($0) }, timeout: timeout)
         if let error = outcome.launchError { return error }
-        if outcome.cancelled { return "cancelled" }
-        if outcome.timedOut { return "timed out after \(Int(timeout)) seconds" }
+        if outcome.cancelled { return String(localized: "The installation was cancelled.") }
+        if outcome.timedOut {
+            return String(localized: "The installation timed out after \(Int(timeout)) seconds.")
+        }
         guard outcome.status != 0 else { return nil }
-        return tail.last.isEmpty ? "exit \(outcome.status)" : tail.last
+        if tail.last.isEmpty {
+            return String(localized: "The installer exited with status \(Int(outcome.status)).")
+        }
+        return tail.last
     }
 }
 

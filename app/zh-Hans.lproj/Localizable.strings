@@ -191,6 +191,13 @@
 
 "Save changes" = "保存更改";
 "HTTP %lld: %@" = "HTTP %lld: %@";
+"HTTP %lld" = "HTTP %lld";
+"The installation was cancelled." = "安装已取消。";
+"The installation timed out after %lld seconds." = "安装在 %lld 秒后超时。";
+"The installer exited with status %lld." = "安装程序以状态 %lld 退出。";
+"A base URL cannot include a user name or a password. Put the API key in the key field, and use a URL like https://gateway.example/v1." = "基础 URL 不能包含用户名或密码。请把 API 密钥填在密钥栏，并使用类似 https://gateway.example/v1 的 URL。";
+"A base URL cannot include a query string. Use a URL like https://gateway.example/v1." = "基础 URL 不能包含查询字符串。请使用类似 https://gateway.example/v1 的 URL。";
+"Left git worktree metadata in place because it could not be read: %@ (errno %lld)" = "无法读取 git 工作树元数据，已保留原样：%@（errno %lld）";
 /* Step lines */
 "Reading your scan" = "正在读取你的扫描";
 "Asking %@ what can go" = "正在询问 %@ 哪些内容可以删除";

@@ -138,9 +138,9 @@ xmllint --noout appcast.xml
 
 shasum -a 256 BlitzTree.dmg > SHA256SUMS.txt
 if gh release view "v$V" >/dev/null 2>&1; then
-    # Re-running over an existing (e.g. draft) release replaces its files.
-    gh release upload "v$V" BlitzTree.dmg SHA256SUMS.txt appcast.xml --clobber
-    gh release edit "v$V" --title "BlitzTree $V" --notes "$NOTES" --draft=false --latest
+    # Uploading again would attach this build to the existing tag, which may
+    # name an older commit. This script does not move a published tag.
+    die "release v$V already exists. Refusing to upload files onto it or to move tag v$V. Delete the release and the tag, then run this again so v$V is created at the tested commit $HEAD_SHA."
 else
     # --target pins the tag to the commit that was tested and built.
     gh release create "v$V" BlitzTree.dmg SHA256SUMS.txt appcast.xml \

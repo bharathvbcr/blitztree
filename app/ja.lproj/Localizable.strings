@@ -191,6 +191,13 @@
 
 "Save changes" = "変更を保存";
 "HTTP %lld: %@" = "HTTP %lld: %@";
+"HTTP %lld" = "HTTP %lld";
+"The installation was cancelled." = "インストールはキャンセルされました。";
+"The installation timed out after %lld seconds." = "インストールは %lld 秒でタイムアウトしました。";
+"The installer exited with status %lld." = "インストーラはステータス %lld で終了しました。";
+"A base URL cannot include a user name or a password. Put the API key in the key field, and use a URL like https://gateway.example/v1." = "ベース URL にユーザー名やパスワードは含められません。API キーはキー欄に入れ、https://gateway.example/v1 のような URL を使ってください。";
+"A base URL cannot include a query string. Use a URL like https://gateway.example/v1." = "ベース URL にクエリ文字列は含められません。https://gateway.example/v1 のような URL を使ってください。";
+"Left git worktree metadata in place because it could not be read: %@ (errno %lld)" = "読み取れなかったため、Git ワークツリーのメタデータはそのまま残しました: %@ (errno %lld)";
 /* Step lines */
 "Reading your scan" = "スキャンを読み取り中";
 "Asking %@ what can go" = "%@に削除できるものを確認中";

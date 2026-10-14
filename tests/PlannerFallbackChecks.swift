@@ -55,6 +55,7 @@ struct PlannerFallbackChecks {
         precondition(model.plannerName == nil, "with no ready agent there is still no planner")
 
         providerURLs()
+        planErrors()
         await requestTimeURLCheck()
         keychainFailures()
         realKeychainRoundTrip()
@@ -156,6 +157,11 @@ struct PlannerFallbackChecks {
             ("http://127.0.0.256", .insecure(host: "127.0.0.256")),
             ("http://localhost@evil.com", .insecure(host: "evil.com")),
             ("http://127.0.0.1@evil.com", .insecure(host: "evil.com")),
+            ("https://user:secret@api.example.com/v1", .credentials),
+            ("https://user@api.example.com/v1", .credentials),
+            ("https://:secret@api.example.com/v1", .credentials),
+            ("http://localhost/v1?token=1", .query),
+            ("https://api.example.com/v1?x=1", .query),
             ("http://[::2]", .insecure(host: "::2")),
             ("http://[::ffff:127.0.0.1]", .insecure(host: "::ffff:127.0.0.1")),
             ("http://localhost.", .insecure(host: "localhost.")),
@@ -179,7 +185,31 @@ struct PlannerFallbackChecks {
         }
         // The reason names what to do.
         precondition(ProviderURL.Problem.insecure(host: "example.com").errorDescription?.contains("https://") == true)
+        guard case .failure(let queried) = ProviderURL.validate("https://api.example.com/v1?x=1#notes") else {
+            preconditionFailure("a query is refused before a fragment can be stored")
+        }
+        precondition(queried == .query, "\(queried)")
+        guard case .success(let canonical) = ProviderURL.validate("https://api.example.com:8443/v1#notes") else {
+            preconditionFailure("a fragment is not part of the base URL")
+        }
+        let parts = URLComponents(url: canonical, resolvingAgainstBaseURL: false)
+        precondition(canonical.scheme == "https" && canonical.host == "api.example.com"
+                     && canonical.port == 8443 && canonical.path == "/v1"
+                     && parts?.user == nil && parts?.password == nil
+                     && parts?.query == nil && parts?.fragment == nil,
+                     "stored URL keeps scheme, host, port and path: \(canonical)")
         print("PASS provider base URL: \(allowed.count) allowed, \(refused.count) refused with a reason")
+    }
+
+    private static func planErrors() {
+        let empty = PlanError.http(503, "").errorDescription
+        precondition(empty == String(localized: "HTTP \(503)"), "\(empty ?? "nil")")
+        let body = PlanError.http(429, "slow down\nmore").errorDescription
+        precondition(body == String(localized: "HTTP \(429): \("slow down")"), "\(body ?? "nil")")
+        let long = String(repeating: "a", count: 250)
+        let clipped = PlanError.http(400, long).errorDescription
+        precondition(clipped == String(localized: "HTTP \(400): \(String(long.prefix(200)))"), "\(clipped ?? "nil")")
+        print("PASS plan HTTP errors are localized")
     }
 
     /// A provider saved by an older build may still hold an http URL; the key
@@ -278,6 +308,15 @@ struct PlannerFallbackChecks {
             let ok = make(update: errSecSuccess, add: errSecSuccess)
             try! store.save(good, key: "k", keychain: ok.0)
             precondition(store.providers == [good] && ProviderStore(defaults: defaults).providers == [good])
+
+            let decorated = LLMProvider(id: "noted", displayName: "Noted",
+                                        baseURL: URL(string: "https://gw.example/v1#notes")!,
+                                        api: .openAIChat, model: "m")
+            try! store.save(decorated, key: nil, keychain: ok.0)
+            let kept = store.providers.first { $0.id == "noted" }
+            precondition(kept?.baseURL.fragment == nil && kept?.baseURL.query == nil
+                         && kept?.baseURL.path == "/v1" && kept?.baseURL.host == "gw.example",
+                         "a saved provider keeps scheme, host, port and path: \(kept?.baseURL.absoluteString ?? "nil")")
         }
         print("PASS Keychain failures propagate; a refused key or URL saves nothing")
     }

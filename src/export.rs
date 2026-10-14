@@ -36,10 +36,10 @@
 //!
 //! A field is quoted when it contains a comma, a double quote, CR or LF, or
 //! begins or ends with a space; a quote inside is doubled. Bytes are written
-//! as the tree stores them. Names in a scanned tree are valid UTF-8: the scan
-//! drops an entry whose name is not (and counts it in `invalid_names`), so
-//! such an entry has no row; the root's name was made UTF-8 lossily when the
-//! scan started. A tree built some other way with other bytes in a name has
+//! as the tree stores them. A child's name is valid UTF-8: the scan drops an
+//! entry whose name is not (and counts it in `invalid_names`), so such an
+//! entry has no row. The root's name is the path's encoded bytes, which may
+//! not be UTF-8. A tree built some other way with other bytes in a name has
 //! those bytes written unchanged, never replaced or skipped.
 //!
 //! # Spreadsheet formulas
@@ -73,6 +73,8 @@ const BUFFER: usize = 256 * 1024;
 
 #[cfg(test)]
 type RowHook = Box<dyn Fn(u64, &Control) + Send>;
+#[cfg(test)]
+type SyncHook = Box<dyn Fn(&Control) + Send>;
 
 /// Progress and the stop switch of one export, shared with whoever watches
 /// it. All of it is safe to read and set from any thread.
@@ -84,6 +86,13 @@ pub struct Control {
     /// Test seam: called after each row with the number of rows written.
     #[cfg(test)]
     row_hook: std::sync::Mutex<Option<RowHook>>,
+    /// Test seam: called after the rows are written and before the file is synced.
+    #[cfg(test)]
+    before_sync: std::sync::Mutex<Option<SyncHook>>,
+    /// Set only when `sync_all` actually runs, so a test can see a cancel that
+    /// arrived in the window after the last row.
+    #[cfg(test)]
+    synced: AtomicBool,
 }
 
 impl Control {
@@ -94,11 +103,16 @@ impl Control {
             rows_total: AtomicU64::new(0),
             #[cfg(test)]
             row_hook: std::sync::Mutex::new(None),
+            #[cfg(test)]
+            before_sync: std::sync::Mutex::new(None),
+            #[cfg(test)]
+            synced: AtomicBool::new(false),
         }
     }
 
-    /// Ask the export to stop. It checks before every row and before the
-    /// final rename; an export that has already renamed its file is done.
+    /// Ask the export to stop. It checks before every row, before the file is
+    /// synced, and again before the rename. An export that has already renamed
+    /// its file is done.
     pub fn cancel(&self) {
         self.cancelled.store(true, Ordering::Release);
     }
@@ -111,6 +125,25 @@ impl Control {
     #[cfg(test)]
     pub(crate) fn on_row(&self, hook: impl Fn(u64, &Control) + Send + 'static) {
         *self.row_hook.lock().unwrap() = Some(Box::new(hook));
+    }
+
+    /// Test seam: run `hook` after the last row and before `sync_all`.
+    #[cfg(test)]
+    pub(crate) fn before_sync(&self, hook: impl Fn(&Control) + Send + 'static) {
+        *self.before_sync.lock().unwrap() = Some(Box::new(hook));
+    }
+
+    /// Whether `sync_all` ran. A cancelled export must leave this false.
+    #[cfg(test)]
+    pub(crate) fn did_sync(&self) -> bool {
+        self.synced.load(Ordering::Relaxed)
+    }
+
+    #[cfg(test)]
+    fn run_before_sync(&self) {
+        if let Some(hook) = self.before_sync.lock().unwrap().as_ref() {
+            hook(self);
+        }
     }
 
     /// Rows written so far, refreshed every few thousand rows and at the end.
@@ -484,11 +517,19 @@ pub fn export_file(tree: &Tree, root: usize, dest: &Path, ctl: &Control) -> Resu
         what: "Could not write the CSV".into(),
         source: e.into_error(),
     })?;
+    // A stop that arrived after the last row must not wait out a sync of a
+    // file that will be discarded. A stop that arrives during the sync still
+    // wins before the rename. One after the rename is too late.
+    #[cfg(test)]
+    ctl.run_before_sync();
+    if ctl.is_cancelled() {
+        return Err(Error::Cancelled);
+    }
+    #[cfg(test)]
+    ctl.synced.store(true, Ordering::Relaxed);
     file.sync_all()
         .map_err(io_error("Could not write the CSV"))?;
     drop(file);
-    // A stop that arrives while the file is being finished still wins; one
-    // after the rename is too late, and the export is done.
     if ctl.is_cancelled() {
         return Err(Error::Cancelled);
     }
