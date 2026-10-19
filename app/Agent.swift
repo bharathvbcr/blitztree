@@ -59,6 +59,9 @@ nonisolated struct AgentEnvironment: Sendable {
     /// The ways MANVI can run right now, in the order a run tries them
     /// (Settings' choice: local, then the cloud, in automatic mode).
     var manviRoutes: [Manvi.Route] = []
+    /// Absolute path to `anthropic-account`, which MANVI's Claude API route
+    /// starts through (`Manvi.Account`); nil when it isn't installed.
+    var accountLauncher: String?
 
     var ready: [InstalledAgent] { agents.filter(\.signedIn) }
 }
@@ -90,9 +93,11 @@ nonisolated enum AgentLocator {
             return env
         }
         let shell = ProcessInfo.processInfo.environment["SHELL"] ?? "/bin/zsh"
-        let lookups = AgentKind.allCases.map { "command -v \($0.rawValue)" }.joined(separator: "; ")
+        let launcher = Manvi.Account.launcherName
+        let lookups = (AgentKind.allCases.map(\.rawValue) + [launcher]).map { "command -v \($0)" }.joined(separator: "; ")
         let text = run(shell, ["-lic", "echo \"BZPATH=$PATH\"; \(lookups); \(Manvi.shellProbe)"]).out
         var fromShell: [AgentKind: String] = [:]
+        var launcherFromShell: String?
         for line in text.split(separator: "\n").map(String.init) {
             if line.hasPrefix("BZPATH=") { env.path = String(line.dropFirst(7)) }
             if line.hasPrefix("BZENV_"), let eq = line.firstIndex(of: "=") {
@@ -102,6 +107,7 @@ nonisolated enum AgentLocator {
                 continue
             }
             guard line.hasPrefix("/") else { continue }
+            if line.hasSuffix("/\(launcher)") { launcherFromShell = launcherFromShell ?? line; continue }
             for kind in AgentKind.allCases where line.hasSuffix("/\(kind.rawValue)") {
                 fromShell[kind] = fromShell[kind] ?? line
             }
@@ -126,6 +132,11 @@ nonisolated enum AgentLocator {
             else { return nil }
             return (kind, path)
         }
+        // Where MANVI's `go install` and its release install put the launcher.
+        let launcherCandidates = [launcherFromShell].compactMap { $0 }
+            + ["\(home)/.local/bin/\(launcher)", "\(home)/go/bin/\(launcher)", "/opt/homebrew/bin/\(launcher)",
+               "/usr/local/bin/\(launcher)"]
+        env.accountLauncher = launcherCandidates.first { FileManager.default.isExecutableFile(atPath: $0) }
         // All checks at once; each takes a fraction of a second. MANVI is
         // ready when at least one of its routes is.
         // The probes share one lock-guarded result. The lock is a Sendable
@@ -136,7 +147,7 @@ nonisolated enum AgentLocator {
         DispatchQueue.concurrentPerform(iterations: found.count) { i in
             let (kind, path) = found[i]
             let ready = kind == .manvi
-                ? Manvi.readyRoutes(path: path, envPath: probe.path, shell: probe.shell) : []
+                ? Manvi.readyRoutes(path: path, envPath: probe.path, shell: probe.shell, launcher: probe.accountLauncher) : []
             let ok = kind == .manvi ? !ready.isEmpty : isSignedIn(kind, path: path, envPath: probe.path)
             results.withLock { state in
                 state.signedIn[i] = ok
@@ -153,7 +164,7 @@ nonisolated enum AgentLocator {
 
     /// Signed in, or for MANVI: a route it can run now (`Manvi.readyRoutes`).
     static func isSignedIn(_ kind: AgentKind, path: String, envPath: String,
-                           shell: [String: String] = [:]) -> Bool {
+                           shell: [String: String] = [:], launcher: String? = nil) -> Bool {
         switch kind {
         case .claude:
             let r = run(path, ["auth", "status"], envPath: envPath)
@@ -161,7 +172,7 @@ nonisolated enum AgentLocator {
         case .codex:
             return run(path, ["login", "status"], envPath: envPath).status == 0
         case .manvi:
-            return !Manvi.readyRoutes(path: path, envPath: envPath, shell: shell).isEmpty
+            return !Manvi.readyRoutes(path: path, envPath: envPath, shell: shell, launcher: launcher).isEmpty
         }
     }
 
@@ -773,6 +784,7 @@ final class AgentRun {
         // An empty working folder: no project settings, hooks or memory load.
         var directory = folder
         var environment = Subprocess.environment(path: env.path)
+        var executable = agent.path
         let arguments: [String]
 
         switch agent.kind {
@@ -792,9 +804,19 @@ final class AgentRun {
         case .manvi:
             // `manvi serve` never calls a model; `run --json` streams the
             // turn as NDJSON events. Strict posture, empty folder, pinned
-            // environment: see Manvi.environment.
+            // environment: see Manvi.environment. The Claude API route starts
+            // through anthropic-account, given the scanned folder so a marker
+            // there can pin the account; it sets the key, BlitzTree never does.
             guard let route else { return }
-            arguments = Manvi.runArguments(fallbackAfter: routeIndex + 1 < routes.count)
+            guard let launch = Manvi.launch(route: route, manvi: agent.path, launcher: env.accountLauncher,
+                                            repo: scanRoot,
+                                            arguments: Manvi.runArguments(fallbackAfter: routeIndex + 1 < routes.count))
+            else {
+                phase = .failed(String(localized: "anthropic-account isn't installed. The Claude API route needs it in ~/.local/bin."))
+                return
+            }
+            executable = launch.executable
+            arguments = launch.arguments
             directory = Manvi.prepared().work
             environment = Manvi.environment(base: ProcessInfo.processInfo.environment,
                                             path: env.path, shell: env.shell, route: route)
@@ -804,7 +826,7 @@ final class AgentRun {
         // Codex is spoken to over stdin for the whole run; the others get the
         // prompt once and then end of input.
         let prompt = Data((agent.kind == .manvi ? input + Manvi.promptSuffix : input).utf8)
-        let spec = Subprocess.Spec(agent.path, arguments, environment: environment, directory: directory.path,
+        let spec = Subprocess.Spec(executable, arguments, environment: environment, directory: directory.path,
                                    input: agent.kind == .codex ? .open : .data(prompt))
 
         // The reader writes back through the job it is read from.
@@ -1180,7 +1202,15 @@ nonisolated final class ErrTail: @unchecked Sendable {
     }
     var last: String {
         lock.lock(); defer { lock.unlock() }
-        return text.split(separator: "\n").map(String.init)
+        let lines = text.split(separator: "\n").map(String.init)
+        // anthropic-account refused to start MANVI: its first line says why,
+        // and the lines after it are how to fix that. Its warnings come from
+        // runs it did start, so they never stand for the failure.
+        let launcher = "\(Manvi.Account.launcherName): "
+        if let refusal = lines.first(where: { $0.hasPrefix(launcher) && !$0.hasPrefix(launcher + "warning:") }) {
+            return refusal
+        }
+        return lines
             .last(where: { line in
                 // Codex's MCP client noise, and MANVI's "session <id> saved"
                 // notes, which it prints on every run, failed or not.

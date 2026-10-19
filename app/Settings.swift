@@ -59,8 +59,9 @@ struct ProvidersView: View {
 
 /// Where MANVI runs: a local model, a cloud provider of the user's choosing,
 /// or local first with the cloud taking over when the local model gives no
-/// plan. A cloud key comes from the login shell's export or a Keychain item;
-/// Claude models are listed live from Anthropic for the key in use.
+/// plan. A Gemini or xAI key comes from the login shell's export; the Claude
+/// API runs on the account `anthropic-account` picks (Settings can name one),
+/// and its models are listed live from Anthropic for that account.
 struct ManviSettingsView: View {
     @State private var env: AgentEnvironment?
     @State private var mode = "auto"
@@ -72,8 +73,11 @@ struct ManviSettingsView: View {
     @State private var ready: [Manvi.Route]?
     /// Which cloud providers have a key, looked up off the main thread.
     @State private var keyed: [String: Bool] = [:]
-    @State private var keychainItem = ""
-    @State private var workspace = ""
+    /// The accounts `anthropic-account list` names, the default first.
+    @State private var accounts: [String] = []
+    /// Settings' account; empty leaves the pick to the launcher.
+    @State private var account = ""
+    @State private var accountStatus: Manvi.Account.Status?
     @State private var claudeModels: [Manvi.CloudModel] = []
     @State private var fetching = false
     @State private var modelError: String?
@@ -106,18 +110,22 @@ struct ManviSettingsView: View {
         }
         .task {
             let found = await AgentLocator.find()
-            let (saved, keys) = await AgentLocator.onBackgroundThread {
-                (Manvi.Choice.load(shell: found.shell),
-                 Dictionary(uniqueKeysWithValues: Manvi.cloudProviders.map { ($0, Manvi.hasKey($0, shell: found.shell)) }))
+            let (saved, status, listed) = await AgentLocator.onBackgroundThread {
+                let status = Manvi.Account.status(launcher: found.accountLauncher, envPath: found.path)
+                return (Manvi.Choice.load(shell: found.shell, anthropicReady: { status.isReady }), status,
+                        Manvi.Account.list(launcher: found.accountLauncher, envPath: found.path))
             }
             stored = saved
             mode = saved.mode
             localModel = saved.localModel ?? ""
             cloud = saved.cloud
             cloudModel = saved.cloudModel ?? ""
-            keyed = keys
-            keychainItem = Manvi.keychainItem(saved.cloud)
-            workspace = Manvi.workspace(shell: found.shell) ?? ""
+            accounts = listed
+            account = Manvi.Account.setting() ?? ""
+            accountStatus = status
+            keyed = Dictionary(uniqueKeysWithValues: Manvi.cloudProviders.map {
+                ($0, Manvi.hasKey($0, shell: found.shell, anthropicReady: { status.isReady }))
+            })
             env = found
             ready = found.manviRoutes
             await scanModels()
@@ -173,13 +181,20 @@ struct ManviSettingsView: View {
         }
         .frame(width: 380)
         .onChange(of: cloud) {
-            keychainItem = Manvi.keychainItem(cloud)
             claudeModels = []
             modelError = nil
             save()
             Task { await fetchClaudeModels() }
         }
         if cloud == "anthropic" {
+            Picker("Anthropic account", selection: $account) {
+                Text(accounts.first.map { String(localized: "Default (\($0))") } ?? String(localized: "Default")).tag("")
+                ForEach(accounts, id: \.self) { Text(verbatim: $0).tag($0) }
+                if !account.isEmpty && !accounts.contains(account) { Text(verbatim: account).tag(account) }
+            }
+            .frame(width: 380)
+            .onChange(of: account) { saveAccount() }
+            accountNote
             HStack {
                 Picker("Claude model", selection: $cloudModel) {
                     Text("MANVI's default").tag("")
@@ -197,27 +212,39 @@ struct ManviSettingsView: View {
                 Text(String(localized: "Couldn't list Claude models: \(modelError)"))
                     .font(.caption).foregroundStyle(.orange)
             }
-            TextField("Workspace ID", text: $workspace, prompt: Text("wrkspc_…"))
-                .frame(width: 380)
-                .onSubmit { saveKeySource() }
-            Text("Only for a key that isn't scoped to one workspace. Press Return to save.")
-                .font(.caption).foregroundStyle(.secondary)
         } else {
             TextField("Cloud model", text: $cloudModel, prompt: Text("MANVI's default"))
                 .frame(width: 380)
                 .onSubmit { save() }
+            let names = (Manvi.credentials[cloud] ?? []).joined(separator: " or ")
+            Text(Manvi.shellKey(cloud, shell: env.shell) != nil
+                 ? String(localized: "Uses the \(names) your shell exports.")
+                 : String(localized: "No key found. Export \(names) in your shell profile."))
+                .font(.caption).foregroundStyle(keyed[cloud] == false ? Color.orange : Color.secondary)
+                .fixedSize(horizontal: false, vertical: true)
         }
-        TextField("Keychain item", text: $keychainItem, prompt: Text(Manvi.keychainItem(cloud, defaults: UserDefaults())))
-            .frame(width: 380)
-            .onSubmit { saveKeySource() }
-        let names = (Manvi.credentials[cloud] ?? []).joined(separator: " or ")
-        Text(Manvi.shellKey(cloud, shell: env.shell) != nil
-             ? String(localized: "Uses the \(names) your shell exports.")
-             : keyed[cloud] == true
-                ? String(localized: "Uses the key in your Keychain item “\(Manvi.keychainItem(cloud))”.")
-                : String(localized: "No key found. Export \(names) in your shell profile, or save the key in your Keychain as “\(Manvi.keychainItem(cloud))”."))
-            .font(.caption).foregroundStyle(keyed[cloud] == false ? Color.orange : Color.secondary)
-            .fixedSize(horizontal: false, vertical: true)
+    }
+
+    /// Which organisation a Claude run bills, or why it can't start; the
+    /// launcher's own refusal is shown as it wrote it.
+    @ViewBuilder private var accountNote: some View {
+        switch accountStatus {
+        case .ready(let pick)?:
+            Text("Runs on the \(pick.account) account. anthropic-account reads its key from your Keychain; BlitzTree never sees it.")
+                .font(.caption).foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+        case .refused(let why)?:
+            Text(verbatim: why)
+                .font(.caption).foregroundStyle(.orange)
+                .textSelection(.enabled)
+                .fixedSize(horizontal: false, vertical: true)
+        case .missing?:
+            Text("anthropic-account isn't installed. The Claude API route needs it in ~/.local/bin.")
+                .font(.caption).foregroundStyle(.orange)
+                .fixedSize(horizontal: false, vertical: true)
+        case nil:
+            EmptyView()
+        }
     }
 
     private func scanModels() async {
@@ -227,42 +254,36 @@ struct ManviSettingsView: View {
         scanning = false
     }
 
-    /// Anthropic's own list for the key in use; the Keychain is read here,
-    /// off the main thread, and the key goes only to Anthropic.
+    /// Anthropic's own list for the chosen account. The request runs as a
+    /// child of anthropic-account, so the key never reaches BlitzTree.
     private func fetchClaudeModels() async {
         guard let env, cloud == "anthropic", mode != "local" else { return }
-        fetching = true
-        defer { fetching = false }
-        let shell = env.shell
-        guard let key = await AgentLocator.onBackgroundThread({ Manvi.key("anthropic", shell: shell) }) else {
+        guard let launcher = env.accountLauncher, case .ready(let pick)? = accountStatus else {
             modelError = String(localized: "no key")
             return
         }
+        fetching = true
+        defer { fetching = false }
         do {
-            claudeModels = try await Manvi.claudeModels(key: key, workspace: Manvi.workspace(shell: shell),
-                                                        baseURL: shell["ANTHROPIC_BASE_URL"])
+            claudeModels = try await Manvi.claudeModels(launcher: launcher, pick: pick, envPath: env.path,
+                                                        baseURL: env.shell["ANTHROPIC_BASE_URL"])
             modelError = nil
         } catch {
             modelError = error.localizedDescription
         }
     }
 
-    /// The Keychain item name and workspace, then everything that depends on them.
-    private func saveKeySource() {
-        guard let env else { return }
-        let item = keychainItem.trimmingCharacters(in: .whitespacesAndNewlines)
-        let itemKey = "bz.manviKeychain.\(cloud)"
-        if item.isEmpty || item == "\(cloud)-api-key" {
-            UserDefaults.standard.removeObject(forKey: itemKey)
-        } else {
-            UserDefaults.standard.set(item, forKey: itemKey)
-        }
-        let space = workspace.trimmingCharacters(in: .whitespacesAndNewlines)
-        if space.isEmpty { UserDefaults.standard.removeObject(forKey: Manvi.workspaceKey) }
-        else { UserDefaults.standard.set(space, forKey: Manvi.workspaceKey) }
-        let provider = cloud, shell = env.shell
+    /// The account, then everything that depends on it.
+    private func saveAccount() {
+        guard let env, account != (Manvi.Account.setting() ?? "") else { return }
+        Manvi.Account.save(account)
+        claudeModels = []
+        modelError = nil
+        let launcher = env.accountLauncher, path = env.path
         Task {
-            keyed[provider] = await AgentLocator.onBackgroundThread { Manvi.hasKey(provider, shell: shell) }
+            let status = await AgentLocator.onBackgroundThread { Manvi.Account.status(launcher: launcher, envPath: path) }
+            accountStatus = status
+            keyed["anthropic"] = status.isReady
             announce()
             await fetchClaudeModels()
         }
@@ -282,9 +303,9 @@ struct ManviSettingsView: View {
         guard let env, let manvi else { return }
         NotificationCenter.default.post(name: Manvi.settingsChanged, object: nil)
         Task {
-            let path = manvi.path, envPath = env.path, shell = env.shell
+            let path = manvi.path, envPath = env.path, shell = env.shell, launcher = env.accountLauncher
             ready = await AgentLocator.onBackgroundThread {
-                Manvi.readyRoutes(path: path, envPath: envPath, shell: shell)
+                Manvi.readyRoutes(path: path, envPath: envPath, shell: shell, launcher: launcher)
             }
             if mode != "cloud", models.isEmpty { await scanModels() }
         }

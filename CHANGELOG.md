@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- **MANVI on the Claude API through `anthropic-account`:** BlitzTree no longer reads an Anthropic key or workspace. The Claude route starts `anthropic-account exec --repo <scanned folder> [--account <name>] -- manvi run …`, so the launcher picks the Console account (Settings' choice, `ANTHROPIC_ACCOUNT`, a `.anthropic-account` marker, or the first line of `~/.anthropic-accounts`) and sets its key and workspace in MANVI's environment only. Settings → Model Providers replaces the Keychain item and Workspace ID fields with an account picker fed by `anthropic-account list`; readiness asks `which` and `doctor`, which read no secret; Claude models are listed by curl started through the launcher. The old `bz.manviKeychain.*` and `bz.manviAnthropicWorkspace` settings are removed on first launch: the stored workspace could belong to another organisation than the key (404 "Workspace not found"). Gemini and xAI now take their key from the shell's export only; the `gemini-api-key` / `xai-api-key` Keychain items are no longer read.
+
 ## 0.7.0 — 2026-10-12
 
 This release adds CSV scan export, VoiceOver navigation on the maps, MANVI as a Clean Up planner, dedicated query thread pools, scan cancellation, scratchpad cleaning for finished Claude Code sessions, and strict rule verifier enforcement at the Trash boundary for the Clean Up panel and AI agent plans.

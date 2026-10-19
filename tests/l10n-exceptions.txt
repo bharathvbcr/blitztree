@@ -11,5 +11,4 @@
 never | BlitzTree
 never | MANVI
 never | gpt-4o-mini
-never | wrkspc_…
 

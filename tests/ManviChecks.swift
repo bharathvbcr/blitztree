@@ -118,76 +118,123 @@ struct ManviChecks {
         let suite = "blitztree.manvi-checks.\(UUID().uuidString)"
         let defaults = UserDefaults(suiteName: suite)!
         defer { defaults.removePersistentDomain(forName: suite) }
-        let none: (String) -> Bool = { _ in false }
-        let noKey: (String) -> String? = { _ in nil }
+        let notReady: () -> Bool = { false }
         let base = ["HOME": "/Users/u", "MANVI_HARNESS_POSTURE": "dev", "MANVI_FETCH_HOSTS": "example.com",
                     "MANVI_MCP_ENABLED": "true", "MANVI_PROJECT_ROOT": "/Users/u/repo", "DEVHARNESS_X": "1",
-                    "ANTHROPIC_API_KEY": "ambient-key"]
+                    "ANTHROPIC_API_KEY": "ambient-key", "ANTHROPIC_WORKSPACE_ID": "wrkspc_ambient",
+                    "ANTHROPIC_AUTH_TOKEN": "ambient-token", "ANTHROPIC_API_KEY_FALLBACK": "ambient-fallback",
+                    "ANTHROPIC_WORKSPACE_ID_FALLBACK": "wrkspc_fallback"]
+        // A shell that still exports a key and a workspace, as ~/.zshrc did:
+        // BlitzTree no longer reads them, and never passes them on.
         let shell = ["MANVI_MODEL": "shell-model", "MANVI_LLM_PROVIDER_DEFAULT": "anthropic",
-                     "ANTHROPIC_API_KEY": "shell-key", "MANVI_LLM_LOCAL_BASE_URL": "http://127.0.0.1:1234/v1"]
+                     "ANTHROPIC_API_KEY": "shell-key", "ANTHROPIC_WORKSPACE_ID": "wrkspc_shell",
+                     "MANVI_LLM_LOCAL_BASE_URL": "http://127.0.0.1:1234/v1"]
+        precondition(!Manvi.shellVariables.contains { Manvi.anthropicCredentials.contains($0) },
+                     "the login shell is never asked for an Anthropic credential")
 
         // With nothing in Settings, the shell's exports decide: it names the
         // cloud side, so MANVI_MODEL is the cloud model; automatic by default.
-        var choice = Manvi.Choice.load(shell: shell, defaults: defaults, keychainHas: none)
+        var choice = Manvi.Choice.load(shell: shell, defaults: defaults, anthropicReady: notReady)
         precondition(choice == Manvi.Choice(mode: "auto", localModel: nil, cloud: "anthropic", cloudModel: "shell-model"),
                      "shell defaults: \(choice)")
         precondition(choice.routes == [Manvi.Route(provider: "local", model: nil),
                                        Manvi.Route(provider: "anthropic", model: "shell-model")], "local first, then cloud")
-        precondition(Manvi.Choice.load(shell: ["XAI_API_KEY": "k"], defaults: defaults, keychainHas: none).cloud == "xai",
+        precondition(Manvi.Choice.load(shell: ["XAI_API_KEY": "k"], defaults: defaults, anthropicReady: notReady).cloud == "xai",
                      "the first cloud provider with a key")
+        precondition(Manvi.Choice.load(shell: ["XAI_API_KEY": "k"], defaults: defaults, anthropicReady: { true }).cloud == "anthropic",
+                     "Anthropic first once anthropic-account has a key for its account")
 
         let cloud = Manvi.Route(provider: "anthropic", model: "shell-model")
-        var env = Manvi.environment(base: base, path: "/bin", shell: shell, route: cloud, defaults: defaults, keychain: noKey)
+        var env = Manvi.environment(base: base, path: "/bin", shell: shell, route: cloud)
         precondition(env["MANVI_HARNESS_POSTURE"] == "strict", "posture pinned over the ambient dev")
         precondition(env["MANVI_HARNESS_INIT_ENABLED"] == "false" && env["MANVI_MCP_ENABLED"] == "false")
         precondition(env["MANVI_FETCH_HOSTS"] == nil && env["MANVI_PROJECT_ROOT"] == nil && env["DEVHARNESS_X"] == nil,
                      "nothing ambient widens MANVI")
         precondition(env["MANVI_STATE_DIR"] == Manvi.folders.state.path && env["PATH"] == "/bin" && env["HOME"] == "/Users/u")
         precondition(env["MANVI_LLM_PROVIDER_DEFAULT"] == "anthropic" && env["MANVI_MODEL"] == "shell-model")
-        precondition(env["ANTHROPIC_API_KEY"] == "shell-key", "the login shell's key wins over the app's environment")
+        for name in Manvi.anthropicCredentials {
+            precondition(env[name] == nil, "BlitzTree puts no \(name) in a Claude run's environment: \(env[name] ?? "")")
+        }
         precondition(env["MANVI_LLM_LOCAL_BASE_URL"] == nil, "a local URL only for the local provider")
-        env = Manvi.environment(base: base, path: "/bin", shell: shell, route: Manvi.Route(provider: "local", model: nil), defaults: defaults, keychain: noKey)
+        env = Manvi.environment(base: base, path: "/bin", shell: shell, route: Manvi.Route(provider: "local", model: nil))
         precondition(env["MANVI_LLM_PROVIDER_DEFAULT"] == "local" && env["MANVI_MODEL"] == nil,
                      "no model: MANVI picks the only one the server has")
         precondition(env["MANVI_LLM_LOCAL_BASE_URL"] == "http://127.0.0.1:1234/v1")
+        precondition(Manvi.anthropicCredentials.allSatisfy { env[$0] == nil }, "a local run gets no Anthropic credential")
+
+        // Gemini and xAI run on a key the shell exports, and only then.
+        let gemini = Manvi.Route(provider: "gemini", model: nil)
+        precondition(!Manvi.hasKey("gemini", shell: [:], anthropicReady: { true }), "no shell key, no Gemini")
+        env = Manvi.environment(base: [:], path: "/bin", shell: [:], route: gemini)
+        precondition(env["GEMINI_API_KEY"] == nil && env["GOOGLE_API_KEY"] == nil, "no key appears from anywhere else")
+        precondition(Manvi.hasKey("gemini", shell: ["GEMINI_API_KEY": "g"], anthropicReady: notReady))
+        env = Manvi.environment(base: [:], path: "/bin", shell: ["GEMINI_API_KEY": "g"], route: gemini)
+        precondition(env["GEMINI_API_KEY"] == "g", "the shell's Gemini key is passed on")
+        precondition(!Manvi.hasKey("anthropic", shell: ["ANTHROPIC_API_KEY": "shell-key"], anthropicReady: notReady),
+                     "a shell-exported Anthropic key does not make the Claude route ready")
 
         // Settings win, trimmed, and each mode tries only its side.
         Manvi.Choice(mode: "cloud", localModel: "  gemma4:e4b \n", cloud: "gemini", cloudModel: "g-model").save(defaults: defaults)
-        choice = Manvi.Choice.load(shell: shell, defaults: defaults, keychainHas: none)
+        choice = Manvi.Choice.load(shell: shell, defaults: defaults, anthropicReady: notReady)
         precondition(choice.localModel == "gemma4:e4b" && choice.cloud == "gemini" && choice.cloudModel == "g-model")
         precondition(choice.routes == [Manvi.Route(provider: "gemini", model: "g-model")], "cloud only")
         choice.mode = "local"
         precondition(choice.routes == [Manvi.Route(provider: "local", model: "gemma4:e4b")], "local only")
         defaults.set("openai", forKey: Manvi.Choice.cloudKey)
         defaults.set("both", forKey: Manvi.Choice.modeKey)
-        choice = Manvi.Choice.load(shell: [:], defaults: defaults, keychainHas: none)
+        choice = Manvi.Choice.load(shell: [:], defaults: defaults, anthropicReady: notReady)
         precondition(choice.cloud == "anthropic" && choice.mode == "auto", "unknown values fall back")
         precondition(Manvi.Route(provider: "anthropic", model: "m").label == "Claude API · m")
 
-        // A key kept in the Keychain, as `security add-generic-password -s
-        // anthropic-api-key` stores it: read for a cloud route only, under
-        // the name MANVI reads, with the workspace an unscoped key needs.
-        var asked: [String] = []
-        let keychain: (String) -> String? = { item in asked.append(item); return item == "anthropic-api-key" ? "kc-key" : nil }
-        defaults.set("wrkspc_test", forKey: Manvi.workspaceKey)
-        let claude = Manvi.Route(provider: "anthropic", model: "claude-sonnet-5-5")
-        env = Manvi.environment(base: [:], path: "/bin", shell: [:], route: claude, defaults: defaults, keychain: keychain)
-        precondition(env["ANTHROPIC_API_KEY"] == "kc-key" && env["ANTHROPIC_WORKSPACE_ID"] == "wrkspc_test"
-                     && env["MANVI_MODEL"] == "claude-sonnet-5-5", "Keychain key, workspace and model")
-        precondition(asked == ["anthropic-api-key"])
-        asked = []
-        env = Manvi.environment(base: [:], path: "/bin", shell: ["ANTHROPIC_API_KEY": "shell-key"], route: claude,
-                                defaults: defaults, keychain: keychain)
-        precondition(env["ANTHROPIC_API_KEY"] == "shell-key" && asked.isEmpty, "a shell export needs no Keychain read")
-        env = Manvi.environment(base: [:], path: "/bin", shell: [:], route: Manvi.Route(provider: "local", model: "m"),
-                                defaults: defaults, keychain: keychain)
-        precondition(env["ANTHROPIC_API_KEY"] == nil && env["ANTHROPIC_WORKSPACE_ID"] == nil && asked.isEmpty,
-                     "a local run never reads a cloud key")
+        // What an older BlitzTree stored to read keys itself goes on the
+        // next load: the workspace in it belonged to another organisation.
+        defaults.set("wrkspc_01WrongOrg", forKey: "bz.manviAnthropicWorkspace")
         defaults.set("my-claude-key", forKey: "bz.manviKeychain.anthropic")
-        precondition(Manvi.keychainItem("anthropic", defaults: defaults) == "my-claude-key", "the item name is the user's")
-        precondition(Manvi.hasKey("anthropic", shell: [:], defaults: defaults, keychainHas: { $0 == "my-claude-key" }))
-        precondition(Manvi.workspace(shell: ["ANTHROPIC_WORKSPACE_ID": "wrkspc_shell"], defaults: UserDefaults(suiteName: "\(suite).empty")!)
-                     == "wrkspc_shell", "the shell's workspace when Settings has none")
+        defaults.set("my-xai-key", forKey: "bz.manviKeychain.xai")
+        _ = Manvi.Choice.load(shell: [:], defaults: defaults, anthropicReady: notReady)
+        for key in ["bz.manviAnthropicWorkspace", "bz.manviKeychain.anthropic", "bz.manviKeychain.xai"] {
+            precondition(defaults.object(forKey: key) == nil, "\(key) is removed on upgrade")
+        }
+
+        // The Claude API route starts anthropic-account, which execs the
+        // absolute manvi path with the run's own arguments after `--`.
+        let claude = Manvi.Route(provider: "anthropic", model: "claude-sonnet-5-5")
+        let runArgs = Manvi.runArguments(fallbackAfter: false)
+        var launch = Manvi.launch(route: claude, manvi: "/opt/m/manvi", launcher: "/l/anthropic-account",
+                                  repo: "/Users/u/scan", arguments: runArgs, defaults: defaults)
+        precondition(launch?.executable == "/l/anthropic-account"
+                     && launch?.arguments == ["exec", "--repo", "/Users/u/scan", "--", "/opt/m/manvi"] + runArgs,
+                     "no Settings account: the launcher picks: \(String(describing: launch))")
+        Manvi.Account.save("  personal ", defaults: defaults)
+        launch = Manvi.launch(route: claude, manvi: "/opt/m/manvi", launcher: "/l/anthropic-account",
+                              repo: "/Users/u/scan", arguments: runArgs, defaults: defaults)
+        precondition(launch?.arguments == ["exec", "--repo", "/Users/u/scan", "--account", "personal", "--", "/opt/m/manvi"] + runArgs,
+                     "Settings' account, trimmed: \(String(describing: launch))")
+        precondition(Manvi.launch(route: claude, manvi: "/opt/m/manvi", launcher: nil, repo: "/r", arguments: runArgs,
+                                  defaults: defaults) == nil, "no launcher, no Claude run")
+        for route in [Manvi.Route(provider: "local", model: "m"), gemini] {
+            let direct = Manvi.launch(route: route, manvi: "/opt/m/manvi", launcher: "/l/anthropic-account", repo: "/r",
+                                      arguments: runArgs, defaults: defaults)
+            precondition(direct?.executable == "/opt/m/manvi" && direct?.arguments == runArgs, "\(route.provider) runs MANVI directly")
+        }
+        Manvi.Account.save(nil, defaults: defaults)
+        precondition(Manvi.Account.setting(defaults) == nil, "an empty choice leaves it to the launcher")
+
+        // The models request names the key as a curl variable, never as a value.
+        let url = URL(string: "https://api.anthropic.com/v1/models?limit=100")!
+        var request = Manvi.modelRequest(url: url, workspace: false, defaults: defaults)
+        precondition(Array(request.prefix(4)) == ["exec", "--no-fallback", "--", "/usr/bin/curl"], "\(request)")
+        precondition(request.contains("x-api-key: {{ANTHROPIC_API_KEY}}") && !request.contains { $0.contains("anthropic-workspace-id") }
+                     && request.last == url.absoluteString, "\(request)")
+        Manvi.Account.save("work", defaults: defaults)
+        request = Manvi.modelRequest(url: url, workspace: true, defaults: defaults)
+        precondition(Array(request.prefix(5)) == ["exec", "--no-fallback", "--account", "work", "--"]
+                     && request.contains("anthropic-workspace-id: {{ANTHROPIC_WORKSPACE_ID}}"), "\(request)")
+        let split = Manvi.splitStatus(Data("{\"data\":[]}\n404".utf8))
+        precondition(split.status == 404 && split.body == Data("{\"data\":[]}".utf8), "the status line is curl's last line")
+        precondition(Manvi.splitStatus(Data()).status == 0)
+
+        account(defaults: defaults)
 
         // Anthropic's model list, in the shape `GET /v1/models` returns.
         let page = #"{"data":[{"type":"model","id":"claude-sonnet-5-5","display_name":"Claude Sonnet 5.5","created_at":"2026-01-01T00:00:00Z"},{"type":"model","id":"claude-haiku-5-5","display_name":"Claude Haiku 5.5"}],"has_more":true,"first_id":"claude-sonnet-5-5","last_id":"claude-haiku-5-5"}"#
@@ -203,6 +250,95 @@ struct ManviChecks {
         }
     }
 
+    nonisolated final class Calls: @unchecked Sendable {
+        private let lock = NSLock()
+        private var stored: [[String]] = []
+        func add(_ args: [String]) { lock.lock(); stored.append(args); lock.unlock() }
+        var all: [[String]] { lock.lock(); defer { lock.unlock() }; return stored }
+        func reset() { lock.lock(); stored = []; lock.unlock() }
+    }
+
+    /// What readiness and Settings ask anthropic-account: `which`, `doctor`
+    /// and `list`, none of which reads a secret.
+    static func account(defaults: UserDefaults) {
+        Manvi.Account.save(nil, defaults: defaults)
+        precondition(Manvi.Account.status(launcher: nil, envPath: "/bin", defaults: defaults) == .missing)
+        typealias Reply = (out: String, err: String, status: Int32)
+        let calls = Calls()
+        func probe(which: Reply, doctor: Reply) -> Manvi.Account.Probe {
+            { args in
+                calls.add(args)
+                return args.first == "which" ? which : args.first == "doctor" ? doctor : (out: "", err: "", status: 2)
+            }
+        }
+        let which: Reply = (out: #"{"account":"work","source":"default","registry":"/h/.anthropic-accounts","fallback":{"name":"personal"},"workspace":"wrkspc_1"}"#,
+                            err: "", status: 0)
+        let healthy: Reply = (out: "registry  /h/.anthropic-accounts (2 accounts)\nok    work  anthropic-api-key-work\nok    personal  anthropic-api-key-personal\n",
+                              err: "", status: 0)
+        var status = Manvi.Account.status(launcher: "/l", envPath: "/bin", defaults: defaults, probe: probe(which: which, doctor: healthy))
+        precondition(status == .ready(Manvi.Account.Pick(account: "work", workspace: "wrkspc_1")), "\(status)")
+        precondition(calls.all == [["which", "--json"], ["doctor"]], "\(calls.all)")
+
+        calls.reset()
+        Manvi.Account.save("personal", defaults: defaults)
+        _ = Manvi.Account.status(launcher: "/l", envPath: "/bin", defaults: defaults, probe: probe(which: which, doctor: healthy))
+        precondition(calls.all.first == ["which", "--json", "--account", "personal"], "Settings' account is asked about: \(calls.all)")
+        Manvi.Account.save(nil, defaults: defaults)
+
+        let noRegistry: Reply = (out: "", err: "anthropic-account: no account registry at /h/.anthropic-accounts.\nFor each Console organisation, store its key under a name\n",
+                                 status: 1)
+        status = Manvi.Account.status(launcher: "/l", envPath: "/bin", defaults: defaults, probe: probe(which: noRegistry, doctor: healthy))
+        guard case .refused(let why) = status else { preconditionFailure("no registry is a refusal: \(status)") }
+        precondition(why.hasPrefix("anthropic-account: no account registry") && why.contains("store its key"), why)
+
+        // doctor's exit fails for a missing fallback key too; only the
+        // chosen account's row decides.
+        let fallbackMissing: Reply = (out: "registry  /h/.anthropic-accounts (2 accounts)\nok    work  anthropic-api-key-work\nFAIL  personal  no Keychain item anthropic-api-key-personal\n",
+                                      err: "anthropic-account: 1 of 2 accounts have no usable Keychain item\n", status: 1)
+        status = Manvi.Account.status(launcher: "/l", envPath: "/bin", defaults: defaults, probe: probe(which: which, doctor: fallbackMissing))
+        precondition(status.isReady, "a missing fallback key does not stop the run: \(status)")
+        let chosenMissing: Reply = (out: "registry  /h/.anthropic-accounts (1 accounts)\nFAIL  work  no Keychain item anthropic-api-key-work\n",
+                                    err: "anthropic-account: 1 of 1 accounts have no usable Keychain item\n", status: 1)
+        status = Manvi.Account.status(launcher: "/l", envPath: "/bin", defaults: defaults, probe: probe(which: which, doctor: chosenMissing))
+        precondition(status == .refused("FAIL work no Keychain item anthropic-api-key-work"), "\(status)")
+        status = Manvi.Account.status(launcher: "/l", envPath: "/bin", defaults: defaults,
+                                      probe: probe(which: (out: "not json", err: "", status: 0), doctor: healthy))
+        precondition(status == .refused("anthropic-account exited with status 0"), "\(status)")
+        precondition(Manvi.Account.parseList(#"[{"name":"work","workspace":"wrkspc_1"},{"name":"personal"}]"#) == ["work", "personal"])
+        precondition(Manvi.Account.parseList("anthropic-account: no account registry").isEmpty)
+
+        // The same questions through a real process: stdout and stderr both come back.
+        let fm = FileManager.default
+        let dir = fm.temporaryDirectory.appendingPathComponent("blitztree-account-\(UUID().uuidString)")
+        defer { try? fm.removeItem(at: dir) }
+        try! fm.createDirectory(at: dir, withIntermediateDirectories: true)
+        let script = dir.appendingPathComponent("anthropic-account")
+        try! Data("""
+        #!/bin/sh
+        case "$1" in
+        which) echo '{"account":"work","source":"default","registry":"/h/.anthropic-accounts","fallback":null}' ;;
+        doctor) printf 'registry  /h/.anthropic-accounts (1 accounts)\\nok    work  anthropic-api-key-work\\n' ;;
+        list) echo '[{"name":"work"}]' ;;
+        *) echo "anthropic-account: unknown command" >&2; exit 2 ;;
+        esac
+
+        """.utf8).write(to: script)
+        try! fm.setAttributes([.posixPermissions: 0o755], ofItemAtPath: script.path)
+        status = Manvi.Account.status(launcher: script.path, envPath: "/usr/bin:/bin", defaults: defaults)
+        precondition(status == .ready(Manvi.Account.Pick(account: "work", workspace: nil)), "a real launcher: \(status)")
+        precondition(Manvi.Account.list(launcher: script.path, envPath: "/usr/bin:/bin") == ["work"])
+        let unknown = Manvi.Account.probe(script.path, envPath: "/usr/bin:/bin")(["bogus"])
+        precondition(unknown.status == 2 && unknown.err.hasPrefix("anthropic-account: unknown command"), "\(unknown)")
+
+        // A launcher refusal is the line a failed run shows; its warnings never are.
+        let tail = ErrTail()
+        tail.feed(Data("anthropic-account: no account registry at /h/.anthropic-accounts.\nFor each Console organisation, store its key under a name (security prompts for it):\n  echo '<name>' >> /h/.anthropic-accounts\n".utf8))
+        precondition(tail.last == "anthropic-account: no account registry at /h/.anthropic-accounts.", tail.last)
+        let warned = ErrTail()
+        warned.feed(Data("anthropic-account: warning: no fallback key, continuing on work alone: missing\nmanvi: the turn failed: HTTP 529\n".utf8))
+        precondition(warned.last == "manvi: the turn failed: HTTP 529", warned.last)
+    }
+
     /// The probe runs in the user's own shell; each one must print the set
     /// variable and an empty value for the unset ones, never a parse error.
     static func shellProbe() {
@@ -213,7 +349,7 @@ struct ManviChecks {
             let out = AgentLocator.run(shell, ["-c", "echo BZPATH=x; " + Manvi.shellProbe], environment: env).out
             let lines = out.split(separator: "\n").map(String.init)
             precondition(lines.contains("BZENV_XAI_API_KEY=probe value"), "\(shell): the set variable: \(out)")
-            precondition(lines.contains("BZENV_ANTHROPIC_API_KEY="), "\(shell): an unset one prints empty: \(out)")
+            precondition(lines.contains("BZENV_ANTHROPIC_BASE_URL="), "\(shell): an unset one prints empty: \(out)")
             precondition(lines.filter { $0.hasPrefix("BZENV_") }.count == Manvi.shellVariables.count, "\(shell): \(out)")
         }
         if fish == nil { print("SKIP fish shell probe (fish not installed)") }
@@ -238,7 +374,7 @@ struct ManviChecks {
         #!/bin/sh
         cat >/dev/null
         d="$BZ_FAKE_DIR/$MANVI_LLM_PROVIDER_DEFAULT"
-        echo "$MANVI_LLM_PROVIDER_DEFAULT $MANVI_HARNESS_POSTURE $MANVI_MODEL" >> "$BZ_FAKE_DIR/log"
+        echo "$MANVI_LLM_PROVIDER_DEFAULT $MANVI_HARNESS_POSTURE $MANVI_MODEL ${ANTHROPIC_API_KEY:-nokey}" >> "$BZ_FAKE_DIR/log"
         sleep "$(cat "$d.sleep" 2>/dev/null || echo 0)"
         cat "$d.ndjson"
         cat "$d.stderr" >&2 2>/dev/null
@@ -274,13 +410,36 @@ struct ManviChecks {
         }
         guard let tree = Tree(handle: handle) else { fatalError("tree") }
         let agent = InstalledAgent(kind: .manvi, path: script.path, signedIn: true)
-        // A shell key, so no route here ever reads the real Keychain.
-        let env = AgentEnvironment(agents: [agent], path: "/usr/bin:/bin", loaded: true,
-                                   shell: ["ANTHROPIC_API_KEY": "test-key"])
+        // A stand-in anthropic-account: it logs what it was asked, then does
+        // what exec does, the key set in the command's environment only.
+        let launcher = fake.appendingPathComponent("anthropic-account")
+        try! Data("""
+        #!/bin/sh
+        echo "$*" >> "$BZ_FAKE_DIR/launcher.log"
+        if [ -e "$BZ_FAKE_DIR/refuse" ]; then
+          echo "anthropic-account: no account registry at /h/.anthropic-accounts." >&2
+          echo "For each Console organisation, store its key under a name" >&2
+          exit 1
+        fi
+        [ "$1" = exec ] || exit 2
+        while [ "$#" -gt 0 ] && [ "$1" != "--" ]; do shift; done
+        shift
+        ANTHROPIC_API_KEY=launcher-key exec "$@"
+
+        """.utf8).write(to: launcher)
+        try! fm.setAttributes([.posixPermissions: 0o755], ofItemAtPath: launcher.path)
+        func launches() -> [String] {
+            (try? String(contentsOf: fake.appendingPathComponent("launcher.log"), encoding: .utf8))?
+                .split(separator: "\n").map(String.init) ?? []
+        }
+        // No shell key: the only key any run sees is the one the launcher sets.
+        var env = AgentEnvironment(agents: [agent], path: "/usr/bin:/bin", loaded: true, shell: [:])
+        env.accountLauncher = launcher.path
         let local = Manvi.Route(provider: "local", model: "gemma4:e4b")
         let claude = Manvi.Route(provider: "anthropic", model: "claude-sonnet-5-5")
         func run(_ routes: [Manvi.Route], until stop: @MainActor (AgentRun) -> Bool) async -> AgentRun {
             try? fm.removeItem(at: fake.appendingPathComponent("log"))
+            try? fm.removeItem(at: fake.appendingPathComponent("launcher.log"))
             let run = AgentRun(agent: agent, env: env, tree: tree, scanRoot: tree.path(0), known: [], routes: routes) {}
             let start = Date()
             while !stop(run), Date().timeIntervalSince(start) < 60 {
@@ -293,7 +452,10 @@ struct ManviChecks {
         // Automatic: local fails before any card, the cloud answers.
         var r = await run([local, claude]) { $0.phase != .thinking }
         precondition(r.phase == .planned && r.items.count == 1 && r.summary == "Some can go.", "\(r.phase) \(r.steps)")
-        precondition(log() == ["local strict gemma4:e4b", "anthropic strict claude-sonnet-5-5"], "\(log())")
+        precondition(log() == ["local strict gemma4:e4b nokey", "anthropic strict claude-sonnet-5-5 launcher-key"], "\(log())")
+        let expected = (["exec", "--repo", tree.path(0), "--", script.path] + Manvi.runArguments(fallbackAfter: false))
+            .joined(separator: " ")
+        precondition(launches() == [expected], "only the Claude run goes through the launcher: \(launches())")
         precondition(r.steps.contains("Using Local · gemma4:e4b")
                      && r.steps.contains("Local · gemma4:e4b gave no plan; switching to Claude API · claude-sonnet-5-5")
                      && r.steps.contains("Using Claude API · claude-sonnet-5-5"), "the switch is shown: \(r.steps)")
@@ -301,15 +463,32 @@ struct ManviChecks {
         // Local only (forced from the menu): no switch, MANVI's own reason.
         r = await run([local]) { $0.phase != .thinking }
         guard case .failed(let why) = r.phase else { preconditionFailure("local only fails: \(r.phase)") }
-        precondition(why.contains("connection refused") && log() == ["local strict gemma4:e4b"], "\(why) \(log())")
+        precondition(why.contains("connection refused") && log() == ["local strict gemma4:e4b nokey"] && launches().isEmpty,
+                     "\(why) \(log())")
+
+        // The launcher refuses (no account registry): MANVI never starts, and
+        // the run says why in the launcher's first line.
+        try! Data().write(to: fake.appendingPathComponent("refuse"))
+        r = await run([claude]) { $0.phase != .thinking }
+        try! fm.removeItem(at: fake.appendingPathComponent("refuse"))
+        guard case .failed(let refused) = r.phase else { preconditionFailure("a refusal fails the run: \(r.phase)") }
+        precondition(refused.contains("anthropic-account: no account registry") && log().isEmpty && launches().count == 1,
+                     "\(refused) \(log())")
+
+        // No launcher installed: the Claude route fails before anything starts.
+        env.accountLauncher = nil
+        r = await run([claude]) { $0.phase != .thinking }
+        guard case .failed(let missing) = r.phase else { preconditionFailure("no launcher fails the run: \(r.phase)") }
+        precondition(missing.contains("anthropic-account isn't installed") && log().isEmpty && launches().isEmpty, missing)
+        env.accountLauncher = launcher.path
 
         // Cancelled while local runs: the cloud is never started.
         answer("local", [["kind": "session.start", "posture": "strict"]], exit: 1, sleep: 2)
-        r = await run([local, claude]) { _ in log() == ["local strict gemma4:e4b"] }
+        r = await run([local, claude]) { _ in log() == ["local strict gemma4:e4b nokey"] }
         r.cancel()
         let until = Date().addingTimeInterval(3)
         while Date() < until { pump(); try? await Task.sleep(for: .milliseconds(5)) }
-        precondition(log() == ["local strict gemma4:e4b"] && !r.steps.contains { $0.contains("switching") },
+        precondition(log() == ["local strict gemma4:e4b nokey"] && launches().isEmpty && !r.steps.contains { $0.contains("switching") },
                      "a cancelled run never switches: \(log())")
     }
 

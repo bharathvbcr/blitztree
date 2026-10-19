@@ -564,8 +564,12 @@ struct CleanupIntegrationChecks {
             "Couldn't list Claude models: %@",
             "no key",
             "Uses the %@ your shell exports.",
-            "Uses the key in your Keychain item “%@”.",
-            "No key found. Export %@ in your shell profile, or save the key in your Keychain as “%@”.",
+            "No key found. Export %@ in your shell profile.",
+            "Anthropic account",
+            "Default (%@)",
+            "Default",
+            "Runs on the %@ account. anthropic-account reads its key from your Keychain; BlitzTree never sees it.",
+            "anthropic-account isn't installed. The Claude API route needs it in ~/.local/bin.",
             "Ready: %@",
 
             /* Directory list: Files column, several items to the Trash */

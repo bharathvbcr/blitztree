@@ -12,20 +12,29 @@ nonisolated enum Manvi {
     /// llama.cpp, MLX, Jan) or a hosted API.
     static let providers = ["local", "anthropic", "gemini", "xai"]
 
-    /// Each hosted provider's credential variables, in MANVI's order.
+    /// The shell-exported credential variables of the hosted providers whose
+    /// key BlitzTree passes on, in MANVI's order. Anthropic is not one: its
+    /// key and organisation are `anthropic-account`'s to choose (`Account`).
     static let credentials: [String: [String]] = [
-        "anthropic": ["ANTHROPIC_API_KEY"],
         "gemini": ["GEMINI_API_KEY", "GOOGLE_API_KEY"],
         "xai": ["XAI_API_KEY", "GROK_API_KEY"],
+    ]
+
+    /// Anthropic credentials no MANVI process gets from BlitzTree, whatever
+    /// its own environment or the shell holds: the Claude API route has them
+    /// set by `anthropic-account`, and every other route goes without.
+    static let anthropicCredentials = [
+        "ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_WORKSPACE_ID",
+        "ANTHROPIC_API_KEY_FALLBACK", "ANTHROPIC_WORKSPACE_ID_FALLBACK",
     ]
 
     /// Read from the user's login shell along with its PATH: MANVI takes
     /// credentials and model choices only from its environment, and an app
     /// started from the Dock has none of the shell's exports.
     static let shellVariables = [
-        "ANTHROPIC_API_KEY", "ANTHROPIC_BASE_URL", "GEMINI_API_KEY", "GOOGLE_API_KEY",
+        "ANTHROPIC_BASE_URL", "GEMINI_API_KEY", "GOOGLE_API_KEY",
         "XAI_API_KEY", "GROK_API_KEY", "LOCAL_API_KEY", "OPENAI_API_KEY",
-        "ANTHROPIC_WORKSPACE_ID", "MANVI_LLM_PROVIDER_DEFAULT", "MANVI_MODEL", "MANVI_LLM_LOCAL_BASE_URL",
+        "MANVI_LLM_PROVIDER_DEFAULT", "MANVI_MODEL", "MANVI_LLM_LOCAL_BASE_URL",
     ]
 
     /// A shell snippet printing `BZENV_<name>=<value>` for each variable, one
@@ -87,9 +96,11 @@ nonisolated enum Manvi {
 
         /// Settings first; else what the shell exports for MANVI
         /// (MANVI_LLM_PROVIDER_DEFAULT names the side MANVI_MODEL is for);
-        /// else automatic, and the first cloud provider with a key.
+        /// else automatic, and the first cloud provider with a key. Settings
+        /// an older BlitzTree kept for picking a key are dropped here.
         static func load(shell: [String: String], defaults: UserDefaults = .standard,
-                         keychainHas: (String) -> Bool = Keychain.has) -> Choice {
+                         anthropicReady: () -> Bool) -> Choice {
+            Account.retire(defaults)
             func setting(_ key: String) -> String? {
                 defaults.string(forKey: key).map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
                     .flatMap { $0.isEmpty ? nil : $0 }
@@ -99,7 +110,7 @@ nonisolated enum Manvi {
             let shellCloud = cloudProviders.contains(shellProvider) ? shellProvider : nil
             // Only looked up when nothing else names the cloud provider.
             let cloud = setting(cloudKey).flatMap { cloudProviders.contains($0) ? $0 : nil } ?? shellCloud
-                ?? cloudProviders.first { hasKey($0, shell: shell, defaults: defaults, keychainHas: keychainHas) }
+                ?? cloudProviders.first { hasKey($0, shell: shell, anthropicReady: anthropicReady) }
                 ?? "anthropic"
             return Choice(
                 mode: setting(modeKey).flatMap { modes.contains($0) ? $0 : nil } ?? "auto",
@@ -128,54 +139,141 @@ nonisolated enum Manvi {
         }
     }
 
-    /// A cloud provider BlitzTree has a key for: exported by the shell, or a
-    /// Keychain item (checked without reading the secret).
-    static func hasKey(_ provider: String, shell: [String: String], defaults: UserDefaults = .standard,
-                       keychainHas: (String) -> Bool = Keychain.has) -> Bool {
-        shellKey(provider, shell: shell) != nil || keychainHas(keychainItem(provider, defaults: defaults))
+    /// A cloud provider BlitzTree can run: Gemini and xAI on a key the shell
+    /// exports; Anthropic when `anthropic-account` has a key for the account
+    /// it would pick (asked without reading the secret).
+    static func hasKey(_ provider: String, shell: [String: String], anthropicReady: () -> Bool) -> Bool {
+        provider == "anthropic" ? anthropicReady() : shellKey(provider, shell: shell) != nil
     }
 
     static func shellKey(_ provider: String, shell: [String: String]) -> String? {
         (credentials[provider] ?? []).lazy.compactMap { shell[$0] }.first { !$0.isEmpty }
     }
 
-    /// Where a cloud key may live besides the shell: a generic-password item
-    /// for this user, `<provider>-api-key` unless Settings names another
-    /// (the convention `security add-generic-password -s anthropic-api-key`).
-    static func keychainItem(_ provider: String, defaults: UserDefaults = .standard) -> String {
-        defaults.string(forKey: "bz.manviKeychain.\(provider)")
-            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }.flatMap { $0.isEmpty ? nil : $0 }
-            ?? "\(provider)-api-key"
-    }
+    /// The Claude API route's key and organisation are chosen by
+    /// `anthropic-account` (MANVI's cmd/anthropic-account), the one launcher
+    /// every host starts MANVI through for Anthropic. It picks the account
+    /// (Settings' choice as --account, else ANTHROPIC_ACCOUNT, else a
+    /// `.anthropic-account` marker at or above the scanned folder, else the
+    /// first line of ~/.anthropic-accounts), reads that account's Keychain
+    /// item, and execs MANVI with the key and the account's workspace set.
+    /// BlitzTree only asks it questions that read no secret.
+    enum Account {
+        static let launcherName = "anthropic-account"
+        /// Settings' account; none leaves the choice to the launcher.
+        static let settingKey = "bz.manviAnthropicAccount"
+        /// What BlitzTree stored when it read keys itself. The workspace
+        /// could name another organisation than the key's, which Anthropic
+        /// answers with 404 "Workspace not found".
+        static let retiredKeys = ["bz.manviKeychain.anthropic", "bz.manviKeychain.gemini", "bz.manviKeychain.xai",
+                                  "bz.manviAnthropicWorkspace"]
 
-    /// Anthropic keys not scoped to a workspace need its id on every
-    /// request; MANVI sends ANTHROPIC_WORKSPACE_ID as that header.
-    static let workspaceKey = "bz.manviAnthropicWorkspace"
-    static func workspace(shell: [String: String], defaults: UserDefaults = .standard) -> String? {
-        defaults.string(forKey: workspaceKey).map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
-            .flatMap { $0.isEmpty ? nil : $0 } ?? shell["ANTHROPIC_WORKSPACE_ID"].flatMap { $0.isEmpty ? nil : $0 }
-    }
-
-    /// The key for a cloud route: the shell's export, else the Keychain
-    /// item. Read only when a run starts or models are listed.
-    static func key(_ provider: String, shell: [String: String], defaults: UserDefaults = .standard,
-                    keychain: (String) -> String? = Keychain.read) -> String? {
-        shellKey(provider, shell: shell) ?? keychain(keychainItem(provider, defaults: defaults))
-    }
-
-    /// The login keychain through `/usr/bin/security`, as a shell wrapper
-    /// around `manvi` would read it: an item `security add-generic-password`
-    /// made trusts that tool, so no prompt appears.
-    enum Keychain {
-        static func has(_ item: String) -> Bool {
-            AgentLocator.run("/usr/bin/security", ["find-generic-password", "-a", NSUserName(), "-s", item]).status == 0
+        static func retire(_ defaults: UserDefaults) {
+            for key in retiredKeys where defaults.object(forKey: key) != nil { defaults.removeObject(forKey: key) }
         }
 
-        static func read(_ item: String) -> String? {
-            let r = AgentLocator.run("/usr/bin/security", ["find-generic-password", "-a", NSUserName(), "-s", item, "-w"])
-            let value = r.out.trimmingCharacters(in: .whitespacesAndNewlines)
-            return r.status == 0 && !value.isEmpty ? value : nil
+        static func setting(_ defaults: UserDefaults = .standard) -> String? {
+            defaults.string(forKey: settingKey).map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+                .flatMap { $0.isEmpty ? nil : $0 }
         }
+
+        static func save(_ name: String?, defaults: UserDefaults = .standard) {
+            if let name, !name.isEmpty { defaults.set(name, forKey: settingKey) } else { defaults.removeObject(forKey: settingKey) }
+        }
+
+        /// `--account <name>` when Settings names one.
+        static func selector(_ defaults: UserDefaults = .standard) -> [String] {
+            setting(defaults).map { ["--account", $0] } ?? []
+        }
+
+        /// The account a launch would bill and its workspace, from `which --json`.
+        struct Pick: Sendable, Equatable {
+            let account: String
+            let workspace: String?
+        }
+
+        enum Status: Sendable, Equatable {
+            /// No `anthropic-account` on this Mac.
+            case missing
+            /// It would refuse to launch; its own words.
+            case refused(String)
+            case ready(Pick)
+
+            var isReady: Bool { if case .ready = self { return true }; return false }
+        }
+
+        /// One launcher call: stdout, stderr, exit status.
+        typealias Probe = @Sendable (_ arguments: [String]) -> (out: String, err: String, status: Int32)
+
+        static func probe(_ launcher: String, envPath: String) -> Probe {
+            { arguments in
+                let spec = Subprocess.Spec(launcher, arguments, environment: Subprocess.environment(path: envPath))
+                let outcome = Subprocess.runBlocking(spec, stdout: .capture(cap: 1 << 20), stderr: .capture(cap: 64 << 10),
+                                                     timeout: 10)
+                guard outcome.finished else { return ("", "\(launcherName) did not answer", -1) }
+                return (outcome.output, String(decoding: outcome.stderr, as: UTF8.self), outcome.status)
+            }
+        }
+
+        /// Ready when `which` names an account and `doctor` finds its
+        /// Keychain item. Neither reads a secret, and doctor's exit status
+        /// is not used: it also fails for a missing fallback key, which
+        /// costs a run its failover, not the run.
+        static func status(launcher: String?, envPath: String, defaults: UserDefaults = .standard,
+                           probe: Probe? = nil) -> Status {
+            guard let launcher else { return .missing }
+            let run = probe ?? Self.probe(launcher, envPath: envPath)
+            let which = run(["which", "--json"] + selector(defaults))
+            guard which.status == 0, let pick = parseWhich(which.out) else {
+                return .refused(refusal(which.err, status: which.status))
+            }
+            let doctor = run(["doctor"])
+            let rows = doctor.out.split(separator: "\n").map { $0.split(whereSeparator: \.isWhitespace).map(String.init) }
+            if rows.contains(where: { $0.count >= 2 && $0[0] == "ok" && $0[1] == pick.account }) { return .ready(pick) }
+            if let row = rows.first(where: { $0.count >= 2 && $0[1] == pick.account }) {
+                return .refused(row.joined(separator: " "))
+            }
+            return .refused(refusal(doctor.err, status: doctor.status))
+        }
+
+        /// The launcher's own message, or its exit status when it said nothing.
+        static func refusal(_ stderr: String, status: Int32) -> String {
+            let text = stderr.trimmingCharacters(in: .whitespacesAndNewlines)
+            return text.isEmpty ? "\(launcherName) exited with status \(status)" : String(text.prefix(1500))
+        }
+
+        static func parseWhich(_ out: String) -> Pick? {
+            guard let obj = (try? JSONSerialization.jsonObject(with: Data(out.utf8))) as? [String: Any],
+                  let account = obj["account"] as? String, !account.isEmpty else { return nil }
+            let workspace = (obj["workspace"] as? String).flatMap { $0.isEmpty ? nil : $0 }
+            return Pick(account: account, workspace: workspace)
+        }
+
+        /// The account names `list --json` reports, the default first.
+        static func list(launcher: String?, envPath: String, probe: Probe? = nil) -> [String] {
+            guard let launcher else { return [] }
+            let listed = (probe ?? Self.probe(launcher, envPath: envPath))(["list", "--json"])
+            return listed.status == 0 ? parseList(listed.out) : []
+        }
+
+        static func parseList(_ out: String) -> [String] {
+            let entries = (try? JSONSerialization.jsonObject(with: Data(out.utf8))) as? [[String: Any]] ?? []
+            return entries.compactMap { $0["name"] as? String }
+        }
+    }
+
+    /// The program and arguments that start one MANVI run. The Claude API
+    /// route starts through `anthropic-account exec`, nil when it is not
+    /// installed; `--repo` lets a marker above the scanned folder pin the
+    /// account. exec replaces itself with MANVI, so the process BlitzTree
+    /// holds, streams and stops is MANVI's. `manvi` is an absolute path: the
+    /// launcher looks a bare name up on the PATH it was given.
+    static func launch(route: Route, manvi: String, launcher: String?, repo: String?, arguments: [String],
+                       defaults: UserDefaults = .standard) -> (executable: String, arguments: [String])? {
+        guard route.provider == "anthropic" else { return (manvi, arguments) }
+        guard let launcher else { return nil }
+        let repoFlag = repo.map { ["--repo", $0] } ?? []
+        return (launcher, ["exec"] + repoFlag + Account.selector(defaults) + ["--", manvi] + arguments)
     }
 
     /// A model a cloud provider offers: its id and the name to show.
@@ -184,10 +282,11 @@ nonisolated enum Manvi {
         let name: String
     }
 
-    /// Claude models this key may use, newest first, from Anthropic's
-    /// `GET /v1/models` (paged by `after_id`). Throws with Anthropic's own
-    /// message when the request is refused.
-    static func claudeModels(key: String, workspace: String?, baseURL: String?) async throws -> [CloudModel] {
+    /// Claude models the chosen account may use, newest first, from
+    /// Anthropic's `GET /v1/models` (paged by `after_id`). Throws with
+    /// Anthropic's, curl's or the launcher's own message when refused.
+    static func claudeModels(launcher: String, pick: Account.Pick, envPath: String, baseURL: String?,
+                             defaults: UserDefaults = .standard) async throws -> [CloudModel] {
         var base = (baseURL ?? "https://api.anthropic.com").trimmingCharacters(in: CharacterSet(charactersIn: "/"))
         // The key goes in a header of every request below, so the shell's
         // ANTHROPIC_BASE_URL gets the same https-or-loopback rule as a
@@ -203,17 +302,43 @@ nonisolated enum Manvi {
             components?.queryItems = [URLQueryItem(name: "limit", value: "100")]
                 + (after.map { [URLQueryItem(name: "after_id", value: $0)] } ?? [])
             guard let url = components?.url else { throw CocoaError(.fileReadInvalidFileName) }
-            var request = URLRequest(url: url, timeoutInterval: 20)
-            request.setValue(key, forHTTPHeaderField: "x-api-key")
-            request.setValue("2023-06-01", forHTTPHeaderField: "anthropic-version")
-            if let workspace { request.setValue(workspace, forHTTPHeaderField: "anthropic-workspace-id") }
-            let (data, response) = try await ProviderHTTP.data(for: request)
-            let page = try parseClaudeModels(data, status: (response as? HTTPURLResponse)?.statusCode ?? 0)
+            let spec = Subprocess.Spec(launcher, modelRequest(url: url, workspace: pick.workspace != nil, defaults: defaults),
+                                       environment: Subprocess.environment(path: envPath))
+            let outcome = await Subprocess.run(spec, stderr: .capture(cap: 64 << 10), timeout: 30)
+            guard outcome.finished, outcome.status == 0 else {
+                let said = String(decoding: outcome.stderr, as: UTF8.self)
+                throw ModelListError(message: outcome.timedOut ? "timed out" : Account.refusal(said, status: outcome.status))
+            }
+            let reply = splitStatus(outcome.stdout)
+            let page = try parseClaudeModels(reply.body, status: reply.status)
             models += page.models
             guard page.more, let last = page.models.last?.id else { break }
             after = last
         }
         return models
+    }
+
+    /// One models request: curl, started by `anthropic-account` the way a
+    /// run is, so the key is only ever in curl's environment. curl's
+    /// arguments name it as a variable (`--variable %NAME`, curl 8.3+); the
+    /// workspace header is sent only when the account has one, because
+    /// curl refuses a variable its environment lacks.
+    static func modelRequest(url: URL, workspace: Bool, defaults: UserDefaults = .standard) -> [String] {
+        ["exec", "--no-fallback"] + Account.selector(defaults) + [
+            "--", "/usr/bin/curl", "--silent", "--show-error", "--max-time", "20",
+            "--variable", "%ANTHROPIC_API_KEY", "--expand-header", "x-api-key: {{ANTHROPIC_API_KEY}}",
+            "--header", "anthropic-version: 2023-06-01",
+        ] + (workspace ? ["--variable", "%ANTHROPIC_WORKSPACE_ID",
+                          "--expand-header", "anthropic-workspace-id: {{ANTHROPIC_WORKSPACE_ID}}"] : [])
+            + ["--write-out", "\\n%{http_code}", url.absoluteString]
+    }
+
+    /// curl's body and the HTTP status `--write-out` put on the last line.
+    static func splitStatus(_ out: Data) -> (body: Data, status: Int) {
+        guard let newline = out.lastIndex(of: UInt8(ascii: "\n")) else { return (out, 0) }
+        let code = Int(String(decoding: out[out.index(after: newline)...], as: UTF8.self)
+            .trimmingCharacters(in: .whitespacesAndNewlines)) ?? 0
+        return (Data(out[..<newline]), code)
     }
 
     struct ModelListError: LocalizedError {
@@ -248,23 +373,15 @@ nonisolated enum Manvi {
     /// The whole environment of every MANVI process BlitzTree starts. Every
     /// MANVI_ and stale DEVHARNESS_ variable from outside is dropped, so
     /// nothing ambient can loosen the posture, enable MCP or the fetch tool,
-    /// or point MANVI at a project; only the settings below are set.
+    /// or point MANVI at a project; only the settings below are set. No
+    /// Anthropic credential is ever in it (see `anthropicCredentials`).
     static func environment(base: [String: String], path: String, shell: [String: String],
-                            route: Route, defaults: UserDefaults = .standard,
-                            keychain: (String) -> String? = Keychain.read) -> [String: String] {
-        var env = base.filter { !$0.key.hasPrefix("MANVI_") && !$0.key.hasPrefix("DEVHARNESS_") }
+                            route: Route) -> [String: String] {
+        var env = base.filter {
+            !$0.key.hasPrefix("MANVI_") && !$0.key.hasPrefix("DEVHARNESS_") && !anthropicCredentials.contains($0.key)
+        }
         for name in shellVariables where !name.hasPrefix("MANVI_") {
             if let value = shell[name] { env[name] = value }
-        }
-        // A cloud route's key under the name MANVI reads, from the Keychain
-        // when the shell has none; a local route never touches the Keychain.
-        if !route.isLocal, shellKey(route.provider, shell: shell) == nil,
-           let name = credentials[route.provider]?.first,
-           let key = keychain(keychainItem(route.provider, defaults: defaults)) {
-            env[name] = key
-        }
-        if route.provider == "anthropic", let workspace = workspace(shell: shell, defaults: defaults) {
-            env["ANTHROPIC_WORKSPACE_ID"] = workspace
         }
         env["PATH"] = path
         env["NO_COLOR"] = "1"
@@ -279,12 +396,18 @@ nonisolated enum Manvi {
     }
 
     /// The routes the saved choice can run now, in the order to try them: a
-    /// cloud provider needs its credential; a local server must serve the
+    /// cloud provider needs its credential (for Anthropic, the launcher and
+    /// a key for its account, asked once); a local server must serve the
     /// model a run would use (`manvi local --resolve` exits 0 only then).
-    static func readyRoutes(path: String, envPath: String, shell: [String: String],
+    static func readyRoutes(path: String, envPath: String, shell: [String: String], launcher: String?,
                             defaults: UserDefaults = .standard) -> [Route] {
-        Choice.load(shell: shell, defaults: defaults).routes.filter { route in
-            guard route.isLocal else { return hasKey(route.provider, shell: shell, defaults: defaults) }
+        var asked: Bool?
+        let anthropicReady = {
+            if asked == nil { asked = Account.status(launcher: launcher, envPath: envPath, defaults: defaults).isReady }
+            return asked ?? false
+        }
+        return Choice.load(shell: shell, defaults: defaults, anthropicReady: anthropicReady).routes.filter { route in
+            guard route.isLocal else { return hasKey(route.provider, shell: shell, anthropicReady: anthropicReady) }
             let env = environment(base: ProcessInfo.processInfo.environment, path: envPath, shell: shell, route: route)
             return AgentLocator.run(path, ["local", "--resolve"], environment: env, directory: prepared().work).status == 0
         }
