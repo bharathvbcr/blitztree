@@ -4,6 +4,9 @@
 
 A fast, native disk-space treemap for macOS, in the spirit of WizTree. It scans a whole Mac (3.6M files) in about 14 seconds.
 
+> [!NOTE]
+> Originally created by **[Ahmed Khaleel](https://github.com/ahmedkhaleel2004)** and **[Emircan ERKUL](https://github.com/emircanerkul)** ([upstream repository](https://github.com/ahmedkhaleel2004/blitztree)).
+
 <p>
   <img src="assets/screenshot.png" width="49%" alt="BlitzTree treemap view of /Applications">
   <img src="assets/screenshot-rings.png" width="49%" alt="BlitzTree rings view of /Applications">
@@ -114,9 +117,37 @@ a promise of reclaimable space. None of them modifies the scanned files;
 The CLI is built from source separately from the app. Its JSON dependency is
 only compiled with the `cli` feature. See [the CLI contract and tests](docs/AGENT_API.md).
 
+## Changes & Fixes in this Fork
+
+This fork builds upon upstream [BlitzTree](https://github.com/ahmedkhaleel2004/blitztree) with significant architectural enhancements, safety guardrails, accessibility support, and developer tooling:
+
+### 1. Safety & Boundary Enforcement
+- **Universal Clean Up Verifier at the Trash Boundary:** Enforces strict safety rules (validating `CACHEDIR.TAG`, checking git worktree states, inspecting recent-use session logs, and guarding user project boundaries) at the actual filesystem boundary for both GUI Clean Up selections and AI-generated plans before any file or directory is moved to Trash.
+- **Git Worktree Protection:** Recursively checks whole Trash contents before declaring a worktree removed, inspects untracked/ignored entries (`--ignored=matching`) so uncommitted edits, `.env` files, or local SQLite databases are never deleted, and refuses worktrees carrying dedicated internal refs (`refs/worktree/*`, `refs/bisect/*`).
+- **Subprocess & Path Hardening:** Hardened process runner with SIGPIPE isolation, automatic tree termination on cancellation/timeout, HTTPS-only provider endpoints, and strict rejection of sensitive system and user directory targets.
+
+### 2. MANVI & AI Cleanup Architecture
+- **MANVI Integration:** Integrates [MANVI](https://github.com/bharathvbcr/Manvi) as a native Clean Up planner alongside Claude Code and Codex, supporting local models (Ollama, LM Studio, vLLM) and hosted cloud APIs with automatic fallback.
+- **Zero-Secret `anthropic-account` Launcher:** Claude route executes through `anthropic-account exec`, pulling credentials directly from macOS Keychain/console accounts without BlitzTree ever holding or persisting raw Anthropic API keys or workspace IDs.
+- **Temporary Scratchpad Cleanup:** Safely detects and cleans build artifacts from finished Claude Code temporary sessions (`/private/tmp/claude-<uid>/...`).
+
+### 3. CSV Export & CLI Tooling
+- **Streaming CSV Export:** Added `File > Export as CSV...` and `blitztree export-csv` CLI command to stream full disk walks or subdirectories to CSV format atomically without unbounded memory growth, preserving original file permissions on replacement.
+- **Robust CLI Support:** Extended standalone JSON CLI (`scan`, `quick-wins`, `export-csv`) compiled with `--features cli` to share identical safety verifiers with the GUI app.
+
+### 4. Concurrency, Performance & Resilience
+- **Dedicated QoS Thread Pools:** Heavy scans and UI queries run on independent `USER_INITIATED` pools, ensuring live search, folder drill-downs, and type breakdowns remain smooth and are never starved by background disk walks.
+- **In-Flight Scan Cancellation:** Scans can be cancelled immediately without UI hangs or leaking memory; incomplete walk trees are safely discarded rather than displayed as complete scans.
+- **Engine FFI Robustness:** Rust engine FFI entry points catch panics across worker threads, validate offset ranges and input boundaries, and cleanly reclaim scan buffers on interruption.
+- **Fixed-Width Digit Layouts:** Prevents number jitter during live byte counting and scanning.
+
+### 5. Accessibility & Localization
+- **Apple VoiceOver Support:** Full accessibility auditing and VoiceOver tree navigation for both cushion treemap and ring views (announcing node paths, hierarchical depth, and byte allocations).
+- **Comprehensive Multilingual UI:** Complete string table parity and verification across 7 languages (English, German, Spanish, French, Japanese, Turkish, and Simplified Chinese).
+
 ## License & Acknowledgements
 
 [MIT](LICENSE).
 
-- Forked from **[BlitzTree](https://github.com/ahmedkhaleel2004/blitztree)** by **[Ahmed Khaleel](https://github.com/ahmedkhaleel2004)** and **Emircan ERKUL** (© 2026 Ahmed Khaleel, Emircan ERKUL).
+- Forked from **[BlitzTree](https://github.com/ahmedkhaleel2004/blitztree)** by original authors **[Ahmed Khaleel](https://github.com/ahmedkhaleel2004)** and **[Emircan ERKUL](https://github.com/emircanerkul)** (© 2026 Ahmed Khaleel, Emircan ERKUL).
 - Disk-space treemap design inspired by **WizTree** (Antibody Software).
