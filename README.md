@@ -114,6 +114,9 @@ a promise of reclaimable space. None of them modifies the scanned files;
 The CLI is built from source separately from the app. Its JSON dependency is
 only compiled with the `cli` feature. See [the CLI contract and tests](docs/AGENT_API.md).
 
-## License
+## License & Acknowledgements
 
-MIT
+[MIT](LICENSE).
+
+- Forked from **[BlitzTree](https://github.com/ahmedkhaleel2004/blitztree)** by **[Ahmed Khaleel](https://github.com/ahmedkhaleel2004)** and **Emircan ERKUL** (© 2026 Ahmed Khaleel, Emircan ERKUL).
+- Disk-space treemap design inspired by **WizTree** (Antibody Software).
