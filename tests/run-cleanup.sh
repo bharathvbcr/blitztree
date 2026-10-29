@@ -150,4 +150,7 @@ swiftc "${SOURCES[@]}" tests/AccessibilityChecks.swift "${FLAGS[@]}" \
   -import-objc-header app/bz.h -L target/release -lblitztree \
   -framework AppKit -framework SwiftUI -o "$CLEANUP_TEST_TMP/accessibility"
 "$CLEANUP_TEST_TMP/accessibility"
+# The Swift agent front on the Rust engine: argument checks, a fake engine,
+# and one real scan, candidate list and CSV export.
+zsh tests/run-cli-anything.sh
 

@@ -106,6 +106,24 @@ for LPROJ in app/*.lproj; do
     cp -R "$LPROJ" "$APP/Contents/Resources/"
 done
 
+# The GUI executable stays linked to the library built without `cli`.
+# This second invocation compiles only the JSON engine. The Swift front
+# passes that engine's stdout through and finds it beside itself.
+echo "==> Agent CLI"
+cargo build --locked --release --features cli --bin blitztree
+# Not `blitztree`. The default APFS volume is case-insensitive, so that name
+# is the GUI executable `BlitzTree` and the copy would replace the app.
+cp -f target/release/blitztree "$APP/Contents/MacOS/blitztree-engine"
+swiftc cli/Harness.swift cli/main.swift app/Subprocess.swift \
+    -O -parse-as-library -swift-version 6 -default-isolation MainActor \
+    -target arm64-apple-macos$MIN_MACOS \
+    -o "$APP/Contents/MacOS/cli-anything-blitztree"
+cp skills/cli-anything-blitztree/SKILL.md "$APP/Contents/Resources/cli-anything-blitztree-SKILL.md"
+[[ "$(stat -f '%i' "$APP/Contents/MacOS/BlitzTree")" != "$(stat -f '%i' "$APP/Contents/MacOS/blitztree-engine")" ]] || {
+    echo "error: blitztree-engine and BlitzTree are the same file" >&2
+    exit 1
+}
+
 # Prefer a real identity: stable code requirement -> TCC/FDA grants survive
 # rebuilds. Developer ID (paid program) with the hardened runtime and a secure
 # timestamp is what notarization needs; Apple Development is the fallback.
@@ -143,6 +161,8 @@ fi
 "${SIGN[@]}" "$SPARKLE_IN_APP/Versions/B/Autoupdate"
 "${SIGN[@]}" "$SPARKLE_IN_APP/Versions/B/Updater.app"
 "${SIGN[@]}" "$SPARKLE_IN_APP"
+"${SIGN[@]}" "$APP/Contents/MacOS/blitztree-engine"
+"${SIGN[@]}" "$APP/Contents/MacOS/cli-anything-blitztree"
 "${SIGN[@]}" "$APP"
 codesign --verify --deep --strict "$APP"
 echo "==> Built and verified $APP"

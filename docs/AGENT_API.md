@@ -16,9 +16,22 @@ cargo build --locked --release --features cli --bin blitztree
 ./target/release/blitztree --help
 ```
 
-This optional binary is built from source on macOS; it is not included in the
-app bundle or DMG. The default GUI build does not enable `cli` or compile its
-JSON dependencies. For an optional installation into Cargo's bin directory:
+`./build.sh` links the GUI against the library built without the `cli` feature,
+then builds this binary and installs it at
+`BlitzTree.app/Contents/MacOS/blitztree-engine`. The same build installs
+`cli-anything-blitztree` beside it. That Swift front is a command-group shell
+(`scan`, `cleanup list`, `export csv`, a session file, a REPL). With `--json`,
+its stdout is this binary's stdout bytes. It adds a newline only when the
+engine omitted one. It does not parse and re-encode a successful report.
+A harness error is a different object: `tool` is `cli-anything-blitztree`.
+See [cli/README.md](../cli/README.md).
+
+The front finds the engine in `BLITZTREE_BIN` if that is set, otherwise beside
+itself, otherwise on an absolute `PATH` entry. A relative `PATH` entry is
+ignored. The Clean Up planner inside the app is a separate path: it is given
+the scan the window already finished and does not call this CLI.
+
+For an optional installation of the engine into Cargo's bin directory:
 
 ```sh
 cargo install --locked --path . --features cli --bin blitztree
